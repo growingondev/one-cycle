@@ -99,7 +99,7 @@ export function ListScreen({
           "백엔드 연결 실패. 서버가 켜져있는지, 주소가 맞는지 확인하세요."
         );
       });
-  }, [showToast]);
+  }, []);
 
   const filtered = useMemo(() => {
     return announcements
