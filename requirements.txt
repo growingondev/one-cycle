@@ -1,0 +1,89 @@
+# ============================================================
+# DDOKBOT Python Dependencies
+# ============================================================
+#
+# This file records the package versions validated on the
+# current AWS MVP runtime.
+#
+# Frontend dependencies are managed separately by:
+#   frontend/user/package.json
+#
+# llama.cpp and the Qwen GGUF model are installed separately
+# and are not Python package dependencies.
+#
+# GPU-related packages at the bottom are environment-sensitive.
+# When migrating to another server, verify the NVIDIA driver,
+# CUDA runtime, and PyTorch compatibility before reinstalling
+# the exact GPU stack.
+# ============================================================
+
+
+# ------------------------------------------------------------
+# Backend / API
+# ------------------------------------------------------------
+
+fastapi==0.141.1
+pydantic-settings==2.14.2
+uvicorn==0.51.0
+
+
+# ------------------------------------------------------------
+# Database / Migration
+# ------------------------------------------------------------
+
+sqlalchemy==2.0.51
+psycopg[binary]==3.3.4
+alembic==1.19.0
+pgvector==0.5.0
+
+
+# ------------------------------------------------------------
+# HWP / HWPX Parser
+# ------------------------------------------------------------
+
+JPype1==1.7.1
+
+
+# ------------------------------------------------------------
+# RAG / Embedding / Transformers
+# ------------------------------------------------------------
+
+FlagEmbedding==1.4.0
+numpy==2.5.1
+
+transformers==4.57.1
+tokenizers==0.22.2
+huggingface-hub==0.36.2
+accelerate==1.14.0
+safetensors==0.8.0
+tqdm==4.70.0
+sentencepiece==0.2.2
+
+
+# ------------------------------------------------------------
+# GPU / PyTorch Runtime
+# ------------------------------------------------------------
+#
+# These versions match the validated AWS NVIDIA L4 environment.
+# Do not assume that the same versions are appropriate for a
+# different GPU, CUDA driver, or operating system.
+
+torch==2.13.0
+triton==3.7.1
+cuda-toolkit==13.0.3.0
+
+
+# ------------------------------------------------------------
+# Notes
+# ------------------------------------------------------------
+#
+# - tkinter is used by some development/parser utilities but is
+#   normally provided by the OS Python installation rather than pip.
+#
+# - Standard-library modules such as argparse, pathlib, json,
+#   urllib, subprocess, xml, zipfile, etc. must not be added here.
+#
+# - llama.cpp is built/installed separately.
+#
+# - The Qwen GGUF model is stored outside the project source tree.
+#

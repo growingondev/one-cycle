@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+venvs/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# AI / Model files
+models/
+*.gguf
+*.pt
+*.pth
+*.bin
+*.safetensors
+
+# Pipeline outputs / runtime artifacts
+outputs/
+logs/
+
+# Frontend
+node_modules/
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# Cache
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+tmp/
+temp/
+*.tmp

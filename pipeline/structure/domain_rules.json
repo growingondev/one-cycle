@@ -1,0 +1,377 @@
+{
+  "schema_version": "1.0",
+  "weights": {
+    "title": 5,
+    "parent_title": 1,
+    "table_header": 3,
+    "content": 1,
+    "negative": -3,
+    "exact_title_bonus": 2,
+    "composite_bonus": 3
+  },
+  "low_confidence_threshold": 0.65,
+  "max_content_chars": 1200,
+  "rules": [
+    {
+      "category": "facility",
+      "topic": "accessibility_facilities",
+      "priority": 101,
+      "threshold": 4,
+      "title_keywords": [
+        "장애인 편의증진시설",
+        "장애인 편의시설",
+        "편의증진시설",
+        "장애인 시설",
+        "주거약자 편의시설",
+        "주거약자용 편의시설",
+        "무장애 시설",
+        "배리어프리",
+        "접근성 시설",
+        "약자 편의설비",
+        "장애인 세대 편의설비"
+      ],
+      "content_keywords": [
+        "안전손잡이",
+        "단차 제거",
+        "휠체어",
+        "높이 조절",
+        "높낮이 조절",
+        "점자",
+        "미끄럼 방지",
+        "비상호출",
+        "욕실 손잡이",
+        "현관 단차",
+        "주거약자",
+        "장애인 세대",
+        "무장애",
+        "배리어프리"
+      ],
+      "negative_keywords": []
+    },
+    {
+      "category": "supply",
+      "topic": "supply_target",
+      "priority": 100,
+      "threshold": 5,
+      "title_keywords": [
+        "공급대상",
+        "공급내역",
+        "공급세대",
+        "공급호수",
+        "공급주택",
+        "주택공급내역",
+        "주택형별공급",
+        "공급세대수"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "supply",
+      "topic": "supply_scale",
+      "priority": 99,
+      "threshold": 5,
+      "title_keywords": [
+        "공급규모",
+        "건설규모",
+        "주택규모",
+        "사업규모"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "price",
+      "topic": "housing_price",
+      "priority": 98,
+      "threshold": 5,
+      "title_keywords": [
+        "주택분양가격",
+        "분양가격",
+        "공급금액",
+        "분양금액",
+        "주택가격",
+        "분양대금",
+        "공급가격"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "option",
+      "topic": "balcony_extension",
+      "priority": 97,
+      "threshold": 5,
+      "title_keywords": [
+        "발코니확장",
+        "발코니확장금액",
+        "확장비용",
+        "확장공사"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "option",
+      "topic": "additional_options",
+      "priority": 96,
+      "threshold": 5,
+      "title_keywords": [
+        "추가선택품목",
+        "선택품목",
+        "유상옵션",
+        "공간선택",
+        "선택옵션",
+        "마이너스옵션",
+        "플러스옵션"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "eligibility",
+      "topic": "application_eligibility",
+      "priority": 95,
+      "threshold": 5,
+      "title_keywords": [
+        "신청자격",
+        "청약자격",
+        "입주자격",
+        "자격요건",
+        "신청대상",
+        "공급신청자격",
+        "입주자격요건"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "schedule",
+      "topic": "application_schedule",
+      "priority": 94,
+      "threshold": 5,
+      "title_keywords": [
+        "신청일정",
+        "청약일정",
+        "모집일정",
+        "접수일정",
+        "일정및장소",
+        "신청및접수",
+        "신청장소"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "schedule",
+      "topic": "move_in_schedule",
+      "priority": 93,
+      "threshold": 5,
+      "title_keywords": [
+        "입주예정",
+        "입주일정",
+        "입주기간",
+        "입주시기",
+        "입주지정기간"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "contract",
+      "topic": "contract_process",
+      "priority": 92,
+      "threshold": 5,
+      "title_keywords": [
+        "계약체결",
+        "계약절차",
+        "계약일정",
+        "계약안내",
+        "동호지정",
+        "동호수지정",
+        "계약장소"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "documents",
+      "topic": "required_documents",
+      "priority": 91,
+      "threshold": 5,
+      "title_keywords": [
+        "구비서류",
+        "제출서류",
+        "신청서류",
+        "계약서류",
+        "서류제출",
+        "필요서류",
+        "증빙서류"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "payment",
+      "topic": "payment_schedule",
+      "priority": 90,
+      "threshold": 5,
+      "title_keywords": [
+        "입주금납부",
+        "대금납부",
+        "납부일정",
+        "납부방법",
+        "계약금",
+        "중도금",
+        "잔금",
+        "분양대금납부"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "restriction",
+      "topic": "restrictions_and_penalties",
+      "priority": 89,
+      "threshold": 5,
+      "title_keywords": [
+        "재당첨제한",
+        "전매제한",
+        "거주의무",
+        "벌칙",
+        "부적격",
+        "당첨취소",
+        "제한사항"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "notice",
+      "topic": "important_notices",
+      "priority": 88,
+      "threshold": 5,
+      "title_keywords": [
+        "유의사항",
+        "주의사항",
+        "확인사항",
+        "안내사항",
+        "기타사항"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "location",
+      "topic": "complex_and_district",
+      "priority": 87,
+      "threshold": 5,
+      "title_keywords": [
+        "단지여건",
+        "지구여건",
+        "입지여건",
+        "단지환경",
+        "사업지구",
+        "주택위치",
+        "공급위치",
+        "교통여건"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "management",
+      "topic": "management_and_occupancy",
+      "priority": 86,
+      "threshold": 5,
+      "title_keywords": [
+        "주택관리",
+        "관리사항",
+        "입주관리",
+        "관리비"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "organization",
+      "topic": "project_parties",
+      "priority": 85,
+      "threshold": 5,
+      "title_keywords": [
+        "사업주체",
+        "시공업체",
+        "시공사",
+        "감리회사",
+        "사업시행자",
+        "사업주체및시공업체"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "contact",
+      "topic": "contact_information",
+      "priority": 84,
+      "threshold": 5,
+      "title_keywords": [
+        "문의처",
+        "연락처",
+        "전화번호",
+        "홈페이지",
+        "견본주택",
+        "주택전시관",
+        "사이버모델하우스"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    },
+    {
+      "category": "overview",
+      "topic": "notice_overview",
+      "priority": 50,
+      "threshold": 5,
+      "title_keywords": [
+        "모집공고",
+        "공고개요",
+        "공고내용",
+        "주요내용",
+        "개요"
+      ],
+      "content_keywords": [],
+      "negative_keywords": []
+    }
+  ],
+  "composite_rules": [
+    {
+      "category": "supply",
+      "topic": "supply_price_overview",
+      "required_keywords": [
+        "공급",
+        "가격"
+      ],
+      "matched_keyword": "공급+가격",
+      "threshold": 6
+    },
+    {
+      "category": "application",
+      "topic": "eligibility_and_application_overview",
+      "required_keywords": [
+        "신청자격",
+        "확인사항"
+      ],
+      "matched_keyword": "신청자격+확인사항",
+      "threshold": 6
+    },
+    {
+      "category": "contract",
+      "topic": "document_and_contract_overview",
+      "required_keywords": [
+        "서류",
+        "계약"
+      ],
+      "matched_keyword": "서류+계약",
+      "threshold": 6
+    }
+  ]
+}
