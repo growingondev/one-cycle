@@ -19,7 +19,6 @@ from backend.app.schemas.admin import (
     ErrorStatusUpdateRequest,
 )
 from backend.app.services.admin_service import (
-    ErrorStatusPersistenceUnavailable,
     get_admin_announcement,
     get_admin_document,
     get_admin_error,
@@ -110,6 +109,13 @@ def run_collection():
         result = collect_announcements()
     except PipelineUnavailableError as exc:
         raise HTTPException(503, str(exc)) from exc
+
+    if result.get("status") == "failed":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="공고 수집에 실패했습니다.",
+        )
+
     return ActionAcceptedResponse(
         accepted=True,
         message="공고 수집 실행 요청을 전달했습니다.",
@@ -275,7 +281,7 @@ def admin_errors(
     response_model=AdminErrorDetail,
 )
 def admin_error_detail(
-    error_id: str,
+    error_id: int,
     db: Session = Depends(get_db),
 ):
     try:
@@ -293,22 +299,27 @@ def admin_error_detail(
     response_model=AdminErrorDetail,
 )
 def change_error_status(
-    error_id: str,
+    error_id: int,
     payload: ErrorStatusUpdateRequest,
     db: Session = Depends(get_db),
 ):
     try:
-        return update_error_status(
+        result = update_error_status(
             db=db,
             error_id=error_id,
             status_value=payload.status,
             resolution=payload.resolution,
         )
-    except ErrorStatusPersistenceUnavailable as exc:
+    except SQLAlchemyError as exc:
+        db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=str(exc),
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="오류 상태를 변경하지 못했습니다.",
         ) from exc
+
+    if result is None:
+        raise HTTPException(404, "오류를 찾을 수 없습니다.")
+    return result
 
 
 @router.post(
@@ -317,7 +328,7 @@ def change_error_status(
     status_code=status.HTTP_201_CREATED,
 )
 def run_error_retry(
-    error_id: str,
+    error_id: int,
     db: Session = Depends(get_db),
 ):
     try:

@@ -119,14 +119,14 @@ class AdminProcessingRunListResponse(BaseModel):
 
 
 class AdminErrorDetail(BaseModel):
-    id: str
-    announcement_id: int
-    announcement_title: str
-    document_id: int
-    document_name: str
+    id: int
+    announcement_id: int | None = None
+    announcement_title: str | None = None
+    document_id: int | None = None
+    document_name: str | None = None
     error_type: str
     error_code: str | None = None
-    stage: str | None = None
+    stage: str
     message: str
     status: str
     resolution: str | None = None
@@ -143,5 +143,5 @@ class AdminErrorListResponse(BaseModel):
 
 
 class ErrorStatusUpdateRequest(BaseModel):
-    status: str = Field(pattern="^(open|in_progress|resolved)$")
+    status: str = Field(pattern="^(unresolved|in_progress|resolved)$")
     resolution: str | None = Field(default=None, max_length=2000)

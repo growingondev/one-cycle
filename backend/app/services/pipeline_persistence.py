@@ -32,8 +32,14 @@ def load_json(path: Path):
     return data
 
 
-def find_bundle(announcement_key: str):
+def find_bundle(
+    announcement_key: str,
+    document_id: int | None = None,
+):
     root = OUTPUT_ROOT / announcement_key
+
+    if document_id is not None:
+        root = root / f"document_{document_id}"
 
     for document_format in ("hwpx", "hwp"):
         bundle = {
@@ -87,8 +93,21 @@ def find_bundle(announcement_key: str):
     )
 
 
-def validate_outputs(announcement_key: str):
-    bundle = find_bundle(announcement_key)
+def validate_outputs(
+    announcement_key: str,
+    document_id: int | None = None,
+    announcement_db_id: int | None = None,
+):
+    bundle = find_bundle(
+        announcement_key,
+        document_id=document_id,
+    )
+
+    expected_announcement_id = (
+        str(announcement_db_id)
+        if announcement_db_id is not None
+        else announcement_key
+    )
 
     document_format = bundle["format"]
 
@@ -123,8 +142,12 @@ def validate_outputs(announcement_key: str):
     chunk_document = chunks_payload.get("document") or {}
     chunks = chunks_payload.get("chunks") or []
 
-    if chunk_document.get("announcement_id") != announcement_key:
-        raise RuntimeError("Chunk announcement_id가 다릅니다.")
+    if str(chunk_document.get("announcement_id")) != expected_announcement_id:
+        raise RuntimeError(
+            "Chunk announcement_id가 다릅니다. "
+            f"expected={expected_announcement_id}, "
+            f"actual={chunk_document.get('announcement_id')}"
+        )
 
     if (
         str(chunk_document.get("source_format") or "").lower()
@@ -159,8 +182,12 @@ def validate_outputs(announcement_key: str):
     if model.get("normalized") is not True:
         raise RuntimeError("Embedding normalized가 True가 아닙니다.")
 
-    if source.get("announcement_id") != announcement_key:
-        raise RuntimeError("Embedding announcement_id가 다릅니다.")
+    if str(source.get("announcement_id")) != expected_announcement_id:
+        raise RuntimeError(
+            "Embedding announcement_id가 다릅니다. "
+            f"expected={expected_announcement_id}, "
+            f"actual={source.get('announcement_id')}"
+        )
 
     if int(source.get("chunk_count") or -1) != len(chunks):
         raise RuntimeError("Embedding chunk_count가 다릅니다.")
@@ -225,6 +252,65 @@ def validate_outputs(announcement_key: str):
         "norm_min": float(norms.min()),
         "norm_max": float(norms.max()),
     }
+
+
+def get_registered_document_context(document_id: int):
+    with SessionLocal() as db:
+        row = db.execute(
+            select(Announcement, Document)
+            .join(
+                Document,
+                Document.announcement_id == Announcement.id,
+            )
+            .where(
+                Document.id == document_id,
+                Document.download_status == "completed",
+            )
+        ).one_or_none()
+
+        if row is None:
+            raise RuntimeError(
+                "completed 상태의 Document를 찾을 수 없습니다. "
+                f"document_id={document_id}"
+            )
+
+        announcement, document = row
+
+        return {
+            "announcement_key": announcement.source_announcement_id,
+            "announcement_db_id": announcement.id,
+            "document_db_id": document.id,
+            "filename": document.original_filename,
+            "format": document.document_format,
+        }
+
+
+def validate_document_outputs(document_id: int):
+    context = get_registered_document_context(document_id)
+
+    summary = validate_outputs(
+        context["announcement_key"],
+        document_id=context["document_db_id"],
+        announcement_db_id=context["announcement_db_id"],
+    )
+
+    if summary["filename"] != context["filename"]:
+        raise RuntimeError(
+            "Structure filename과 DB Document가 다릅니다. "
+            f"db={context['filename']}, "
+            f"output={summary['filename']}"
+        )
+
+    if summary["format"] != context["format"]:
+        raise RuntimeError(
+            "Structure format과 DB Document가 다릅니다. "
+            f"db={context['format']}, "
+            f"output={summary['format']}"
+        )
+
+    result = dict(summary)
+    result.update(context)
+    return result
 
 
 def validate_registered_document(summary):
@@ -319,9 +405,20 @@ def build_source_table_id(source):
     return f"table:{table_index}"
 
 
-def persist_outputs(announcement_key):
-    summary = validate_outputs(announcement_key)
-    bundle = find_bundle(announcement_key)
+def persist_outputs(
+    announcement_key,
+    document_id: int | None = None,
+    announcement_db_id: int | None = None,
+):
+    summary = validate_outputs(
+        announcement_key,
+        document_id=document_id,
+        announcement_db_id=announcement_db_id,
+    )
+    bundle = find_bundle(
+        announcement_key,
+        document_id=document_id,
+    )
 
     structure = load_json(bundle["structure"])
     chunks_payload = load_json(bundle["chunks"])
@@ -352,13 +449,18 @@ def persist_outputs(announcement_key):
                 Document.document_format
                 == summary["format"],
                 Document.download_status == "completed",
+                *(
+                    [Document.id == document_id]
+                    if document_id is not None
+                    else []
+                ),
             )
         ).all()
 
         if len(rows) != 1:
             raise RuntimeError(
                 "등록된 Document가 정확히 1건이어야 합니다. "
-                f"actual={len(rows)}"
+                f"actual={len(rows)}, document_id={document_id}"
             )
 
         announcement, document = rows[0]
@@ -587,6 +689,20 @@ def persist_outputs(announcement_key):
 
 
 
+
+
+def persist_document_outputs(document_id: int):
+    context = get_registered_document_context(document_id)
+
+    result = persist_outputs(
+        context["announcement_key"],
+        document_id=context["document_db_id"],
+        announcement_db_id=context["announcement_db_id"],
+    )
+
+    result["announcement_db_id"] = context["announcement_db_id"]
+    result["document_db_id"] = context["document_db_id"]
+    return result
 
 
 def activate_processing_run(processing_run_id):
