@@ -1,1814 +1,1400 @@
-# DDOKBOT Backend
+# Backend / DB 코드 가이드 및 기능별 인수인계
 
-> 이 문서는 DDOKBOT Backend의 구조와 연결 관계를 설명합니다.
+> 기준 시점: 2026-08-16  
+> 목적: **Backend / DB에서 구현한 코드의 역할을 설명하고, 다른 기능 담당자가 어떤 파일을 읽고 어디에 자기 기능을 연결해야 하는지 안내**
 >
-> 새로운 개발자 또는 AI가 다음 내용을 이해할 수 있도록 작성되었습니다.
->
-> - FastAPI Application이 어디서 시작되는지
-> - API Router가 어떻게 등록되는지
-> - Route, Schema, Service의 역할이 어떻게 분리되는지
-> - DB와 RAG, Pipeline이 Backend와 어디에서 연결되는지
-> - 관리자 인증이 어디에서 처리되는지
-> - 환경변수는 어디에서 사용되는지
-> - 4xx/5xx 오류가 발생했을 때 어느 계층을 먼저 확인해야 하는지
+> 이 문서는 Git 작업 이력이 아니라 **현재 최종 코드의 역할, 사용 방법, 연동 지점**을 설명한다.
 
 ---
 
-# 1. Backend Stack
+# 1. Backend / DB가 담당하는 역할
 
-현재 Backend 주요 기술:
+Backend / DB 코드는 Crawler, Parser, Chunking, Embedding 같은 알고리즘을 직접 구현하지 않는다.
 
-```text
-FastAPI
-Pydantic
-Pydantic Settings
-SQLAlchemy
-PostgreSQL
-pgvector
-Alembic
-```
+대신 다음을 책임진다.
 
-Application Root:
+- 어떤 데이터를 DB에 저장할지 정의
+- 저장 전 어떤 조건을 검증할지 정의
+- 현재 서비스에서 사용할 정상 데이터(active)를 결정
+- 사용자 / 관리자 API 제공
+- 관리자 인증 및 세션 관리
+- 다른 기능을 호출할 수 있는 Gateway 제공
+- 기능 사이의 입력 / 출력 계약 제공
+- Crawler / 문서 처리 / AI 결과를 DB에 저장
 
-```text
-backend/app/
-```
-
----
-
-# 2. Backend Entry Point
-
-FastAPI Application 진입점:
+전체 역할은 다음과 같다.
 
 ```text
-backend/app/main.py
-```
-
-개념:
-
-```text
-main.py
-  ↓
-create_app()
-  ↓
-FastAPI(...)
-  ↓
-api_router 등록
-  ↓
-app
-```
-
-실제 실행 target:
-
-```text
-backend.app.main:app
+외부 기능에서 결과 생성
+        ↓
+Backend Service
+        ↓
+DB 검증 / 저장 / 상태 관리
+        ↓
+Backend API
+        ↓
+Frontend / RAG / 관리자 기능
 ```
 
 ---
 
-# 3. Backend 실행
+# 2. 기능 영역 경계
 
-프로젝트 Root:
+통합 시 역할이 섞이지 않도록 아래 기준을 사용한다.
 
-```bash
-cd /home/ubuntu/ddokbot/one-cycle
-```
-
-프로젝트 Python:
+## Backend / DB
 
 ```text
-/home/ubuntu/ddokbot/venvs/one-cycle-backend/bin/python
+API 서버
+DB 모델
+DB 조회 / 저장
+Persistence
+관리자 인증 / 세션
+Collection 관리
+ErrorLog 관리
+외부 기능 호출 Gateway
 ```
 
-실행 예:
-
-```bash
-PYTHONPATH=. \
-/home/ubuntu/ddokbot/venvs/one-cycle-backend/bin/python \
--m uvicorn backend.app.main:app \
---host 127.0.0.1 \
---port 8000
-```
-
-정상 실행 후 Backend는 개발 환경 기준:
+## Crawler
 
 ```text
-127.0.0.1:8000
+공고 수집
+상세 페이지 접근
+첨부파일 다운로드
+Pagination
+Selenium 처리
+수집 실패 정보 생성
 ```
 
-에서 동작합니다.
-
----
-
-# 4. Backend 전체 구조
+## 문서 처리
 
 ```text
-backend/app/
-├── __init__.py
-├── main.py
-│
-├── api/
-│   ├── __init__.py
-│   ├── dependencies.py
-│   ├── router.py
-│   └── routes/
-│       ├── admin.py
-│       ├── admin_auth.py
-│       ├── announcements.py
-│       ├── chat.py
-│       └── health.py
-│
-├── core/
-│   ├── __init__.py
-│   └── config.py
-│
-├── db/
-│   ├── __init__.py
-│   ├── base.py
-│   └── session.py
-│
-├── models/
-├── schemas/
-└── services/
+HWP/HWPX Parsing
+Normalizer
+Structure
+Verification
+핵심정보 추출
+```
+
+## AI / RAG
+
+```text
+Chunking
+Embedding
+Vector Search
+Retrieval
+Prompt
+LLM Response
+```
+
+## Frontend
+
+```text
+사용자 UI
+관리자 UI
+Backend API 호출
+세션 Cookie 사용
 ```
 
 ---
 
-# 5. Backend Layering
+# 3. 기능별 필독 Backend 파일
 
-기본 계층 구조:
+전체 코드를 처음부터 읽을 필요는 없다.
+
+| 기능 영역 | 우선 확인할 파일 | 확인 목적 |
+|---|---|---|
+| Crawler | `collection_service.py` → `collection_run.py` → `announcement.py` → `document.py` → `pipeline_gateway.py` | 어떤 결과를 반환하고 DB에 어떻게 저장되는지 확인 |
+| 문서 처리 | `document.py` → `processing_run.py` → `document_structure.py` → `pipeline_persistence.py` → `pipeline_gateway.py` | `document_id` 기반 처리와 Structure / Verification 결과 연결 방식 확인 |
+| AI / RAG | `chunk_set.py` → `chunk.py` → `embedding.py` → `system_state.py` → `pipeline_persistence.py` → `collection_publish_service.py` | Chunk / Embedding 저장과 active Collection 기준 확인 |
+| 핵심정보 추출 | `key_information.py` → `key_information_service.py` | 추출 결과 저장 필드와 upsert 방식 확인 |
+| Frontend | `admin.py` → `schemas/admin.py` | API Endpoint와 Request / Response 계약 확인 |
+
+---
+
+# 4. DB Model 코드 설명
+
+DB 관계는 다음과 같다.
 
 ```text
-HTTP Request
+CollectionRun
     ↓
-Route
+Announcement
     ↓
-Pydantic Schema
+Document
     ↓
-Service
+ProcessingRun
+    ├──────────────→ DocumentStructure
     ↓
-DB / RAG / Pipeline
+ChunkSet
     ↓
-Response
-```
-
-원칙:
-
-```text
-Route
-→ HTTP 처리
-
-Schema
-→ 입력/출력 계약
-
-Service
-→ Application Logic
-
-DB Model
-→ Persistence Structure
-```
-
-복잡한 로직을 Route에 직접 넣지 않습니다.
-
----
-
-# 6. main.py
-
-파일:
-
-```text
-backend/app/main.py
-```
-
-역할:
-
-```text
-FastAPI Application 생성
-       ↓
-Application metadata 설정
-       ↓
-api_router 등록
-       ↓
-app 생성
-```
-
-현재 Application 설명:
-
-```text
-LH 공고문 기반 AI 질의응답 서비스 API
-```
-
-API 자체가 열리지 않는 경우 가장 먼저 확인할 파일 중 하나입니다.
-
----
-
-# 7. API Router
-
-파일:
-
-```text
-backend/app/api/router.py
-```
-
-전체 API prefix:
-
-```text
-/api
-```
-
-현재 등록되는 Router:
-
-```text
-health_router
-announcement_router
-chat_router
-admin_auth_router
-admin_router
-```
-
-구조:
-
-```text
-FastAPI App
+Chunk
     ↓
-api_router
+Embedding
+
+Announcement
     ↓
-/api
-    ├── health
-    ├── announcements
-    ├── chat
-    ├── admin/auth
-    └── admin
+KeyInformation
+
+SystemState
+    ↓
+현재 active CollectionRun
+
+ErrorLog
+    ↓
+처리 실패 기록
 ```
 
 ---
 
-# 8. Route Layer
+## 4.1 `backend/app/models/collection_run.py`
 
-위치:
+### 역할
 
-```text
-backend/app/api/routes/
-```
-
-현재 주요 Route:
+**공고 수집 1회를 하나의 실행 단위로 기록**한다.
 
 ```text
-health.py
-announcements.py
-chat.py
-admin_auth.py
-admin.py
+관리자 '공고 수집' 1회
+→ CollectionRun 1개
 ```
+
+주요 상태:
+
+```text
+running
+success
+partial
+failed
+```
+
+주요 카운트:
+
+```text
+total_announcement_count
+successful_announcement_count
+failed_announcement_count
+```
+
+### 연동 시 알아야 할 점
+
+- Crawler 결과를 저장할 때 가장 먼저 생성되는 상위 레코드다.
+- Collection publish도 `collection_run_id`를 기준으로 수행한다.
 
 ---
 
-# 9. Health API
+## 4.2 `backend/app/models/announcement.py`
 
-파일:
+### 역할
 
-```text
-backend/app/api/routes/health.py
-```
+LH의 **공고 1건**을 저장한다.
 
-확인된 Endpoint:
+주요 데이터:
 
 ```text
-GET /api/health
-GET /api/health/db
+source_announcement_id
+title
+region
+announcement_date
+publication_status
+detail_url
+collection_run_id
 ```
 
-목적:
+### 관계
 
 ```text
-Application 상태 확인
-DB 연결 상태 확인
+CollectionRun 1
+    ↓
+Announcement N
 ```
 
-Backend 전체가 이상할 때 Chat API부터 테스트하지 말고 Health부터 확인하는 것이 좋습니다.
+### 연동 시 알아야 할 점
 
-예:
+같은 LH 공고라도 CollectionRun이 다르면 새 수집 스냅샷으로 존재할 수 있다.
 
-```bash
-curl -i \
-http://127.0.0.1:8000/api/health
-```
-
-DB:
-
-```bash
-curl -i \
-http://127.0.0.1:8000/api/health/db
-```
+사용자 서비스에서는 모든 Announcement가 아니라 **active Collection에 포함된 Announcement**를 사용한다.
 
 ---
 
-# 10. Announcement API
+## 4.3 `backend/app/models/document.py`
 
-파일:
+### 역할
 
-```text
-backend/app/api/routes/announcements.py
-```
+공고에 포함된 **HWP/HWPX 첨부문서 1개**를 저장한다.
 
-주요 Endpoint:
-
-```text
-GET /api/announcements
-
-GET /api/announcements/{id}
-```
-
-연결:
-
-```text
-Frontend
-   ↓
-announcements.py
-   ↓
-announcement_service.py
-   ↓
-Database
-```
-
----
-
-# 11. Announcement Service
-
-파일:
-
-```text
-backend/app/services/announcement_service.py
-```
-
-역할:
-
-```text
-공고 목록 조회
-공고 상세 조회
-DB 결과 가공
-```
-
-Frontend 목록 문제라면:
-
-```text
-ListScreen.tsx
-↓
-announcements.py
-↓
-announcement_service.py
-↓
-DB
-```
-
-순서로 확인합니다.
-
----
-
-# 12. Chat API
-
-파일:
-
-```text
-backend/app/api/routes/chat.py
-```
-
-Endpoint:
-
-```text
-POST /api/chat
-```
-
-Request:
-
-```json
-{
-  "announcementId": 1,
-  "question": "신청 일정은 언제인가?"
-}
-```
-
-Route 내부 역할:
-
-```text
-ChatRequest
-   ↓
-answer_question_via_rag()
-   ↓
-ChatResponse
-```
-
-Route는 RAG 내부 Retrieval/Generation 구현을 직접 알지 않습니다.
-
----
-
-# 13. Chat Schema
-
-파일:
-
-```text
-backend/app/schemas/chat.py
-```
-
-현재 주요 Schema:
-
-```text
-ChatRequest
-EvidenceItem
-ChatResponse
-```
-
----
-
-## ChatRequest
-
-개념:
-
-```text
-announcementId
-question
-```
-
-Frontend JSON:
-
-```json
-{
-  "announcementId": 1,
-  "question": "질문"
-}
-```
-
-내부 Python:
+주요 데이터:
 
 ```text
 announcement_id
-question
+original_filename
+document_format
+storage_path
+file_size_bytes
+checksum_sha256
+download_status
+error_message
+```
+
+### 관계
+
+```text
+Announcement 1
+    ↓
+Document N
+```
+
+### 연동 시 알아야 할 점
+
+- 문서 처리 기능의 기본 입력 키는 `document_id`다.
+- `storage_path`는 실제 다운로드된 HWP/HWPX 파일 위치를 가리킨다.
+
+---
+
+## 4.4 `backend/app/models/processing_run.py`
+
+### 역할
+
+Document를 **한 번 처리한 실행 기록**으로 저장한다.
+
+같은 Document를 재처리할 수 있기 때문에 Document와 분리되어 있다.
+
+```text
+Document 4
+├─ ProcessingRun 10 : 성공
+└─ ProcessingRun 11 : 재처리 실패
+```
+
+### 핵심 개념: `is_active`
+
+서비스가 현재 신뢰하고 사용하는 처리 결과를 나타낸다.
+
+```text
+기존 정상 실행
+is_active = true
+
+새 실행
+검증 전 / 실패
+is_active = false
+```
+
+새 실행이 실패해도 기존 정상 데이터를 유지하기 위한 구조다.
+
+### 정상 사용 조건
+
+```text
+execution_status = succeeded
+verification_status = pass
+is_active = true
 ```
 
 ---
 
-## EvidenceItem
+## 4.5 `backend/app/models/processing_artifact.py`
 
-주요 Field:
+### 역할
+
+ProcessingRun에서 생성되는 **산출물 파일의 위치와 메타데이터를 추적**한다.
+
+알고리즘을 저장하는 테이블이 아니라:
 
 ```text
-chunkId
-sectionTitle
+어떤 실행에서
+어떤 산출물이
+어디에 생성되었는가
+```
+
+를 관리하는 DB 구조다.
+
+---
+
+## 4.6 `backend/app/models/document_structure.py`
+
+### 역할
+
+특정 ProcessingRun의 **구조화 문서 결과**를 저장한다.
+
+```text
+ProcessingRun
+    ↓
+DocumentStructure
+```
+
+### 연동 시 알아야 할 점
+
+문서 처리 기능은 이 테이블에 직접 임의 INSERT하기보다 `pipeline_persistence.py`가 읽을 수 있는 산출물을 생성하는 것을 기본 연결 방식으로 사용한다.
+
+---
+
+## 4.7 `backend/app/models/chunk_set.py`
+
+### 역할
+
+특정 ProcessingRun에서 생성된 **Chunk 결과 한 묶음**을 버전 단위로 관리한다.
+
+```text
+ProcessingRun
+    ↓
+ChunkSet
+    ↓
+Chunk N
+```
+
+주요 데이터:
+
+```text
+chunker_version
+strategy
+chunking_config
+status
+is_active
+chunk_count
+```
+
+### 연동 시 알아야 할 점
+
+ChunkSet 자체가 Chunking 기준을 결정하는 것이 아니라, **특정 Chunking 실행 결과를 하나의 버전으로 묶어 관리**한다.
+
+새 ChunkSet 검증이 끝나기 전까지 기존 active ChunkSet을 유지할 수 있다.
+
+---
+
+## 4.8 `backend/app/models/chunk.py`
+
+### 역할
+
+RAG 검색에서 사용하는 **실제 검색 단위**를 저장한다.
+
+주요 데이터:
+
+```text
 content
-score
+embedding_text
+section 정보
+source 정보
+metadata
+announcement_id
+chunk_set_id
+```
+
+### `announcement_id`를 직접 저장하는 이유
+
+원래 관계는 다음과 같다.
+
+```text
+Chunk
+→ ChunkSet
+→ ProcessingRun
+→ Document
+→ Announcement
+```
+
+하지만 RAG에서는 선택된 공고 범위만 빠르게 검색해야 하므로 Chunk에 `announcement_id`를 직접 저장한다.
+
+### 연동 시 알아야 할 점
+
+RAG 검색은 반드시:
+
+```text
+active Collection
++
+선택 Announcement
+```
+
+범위로 제한해야 한다.
+
+---
+
+## 4.9 `backend/app/models/embedding.py`
+
+### 역할
+
+Chunk의 **Vector 결과**를 저장한다.
+
+```text
+Chunk text
+   ↓
+Embedding model
+   ↓
+Embedding
+```
+
+주요 데이터:
+
+```text
+model_name
+dimension
+normalized
+status
+embedding vector
+```
+
+현재 검증된 기준:
+
+```text
+model = BAAI/bge-m3
+dimension = 1024
+```
+
+### 연동 시 알아야 할 점
+
+Collection publish 전에 모든 Chunk에 정상 Embedding이 존재해야 한다.
+
+---
+
+## 4.10 `backend/app/models/key_information.py`
+
+### 역할
+
+사용자 공고 상세 화면의 **핵심정보 카드 데이터**를 저장한다.
+
+RAG 데이터와 목적이 다르다.
+
+```text
+KeyInformation
+→ 핵심정보 카드
+
+Chunk + Embedding
+→ RAG 검색 / 답변
+```
+
+주요 영역:
+
+```text
+application_period
+eligibility
+supply_information
+income_asset_criteria
+required_documents
+winner_announcement
+contact_information
+```
+
+### 연동 시 알아야 할 점
+
+핵심정보 추출 결과는 테이블에 직접 INSERT하기보다:
+
+```python
+upsert_key_information(...)
+```
+
+을 사용한다.
+
+---
+
+## 4.11 `backend/app/models/error_log.py`
+
+### 역할
+
+Crawler / 문서 처리 / AI 처리 등에서 발생한 **운영 오류 기록**을 저장한다.
+
+관리자 Error API가 이 데이터를 조회한다.
+
+### 외부 기능에서 전달해야 할 최소 정보
+
+```text
+error_type
+stage
+message
+관련 document / announcement
+필요 시 error_code
 ```
 
 ---
 
-## ChatResponse
+## 4.12 `backend/app/models/system_state.py`
 
-주요 Field:
+### 역할
+
+사용자 서비스에서 현재 사용할 **active CollectionRun**을 관리한다.
+
+핵심 값:
 
 ```text
-answer
-grounded
-evidence
+active_collection_run_id
 ```
 
-이 Schema는 Frontend와 RAG 사이의 핵심 HTTP Contract입니다.
+### 필요한 이유
+
+```text
+수집 완료
+≠
+서비스 준비 완료
+```
+
+새 Collection이 수집됐다고 바로 사용자에게 노출하지 않고, 문서 처리와 AI 결과까지 준비된 Collection만 publish하여 active로 전환한다.
 
 ---
 
-# 14. Chat Service
+# 5. Backend Service 코드 설명
 
-파일:
+---
 
-```text
-backend/app/services/chat_service.py
+## 5.1 `backend/app/services/collection_service.py`
+
+### 한 줄 설명
+
+**Crawler 반환값을 검증하고 `CollectionRun → Announcement → Document`로 DB에 저장하는 서비스**
+
+### 주요 함수
+
+```python
+persist_collection_result(result)
+collect_and_persist()
 ```
 
-Backend와 RAG 사이의 Adapter입니다.
+### `persist_collection_result(...)`
 
-흐름:
+입력:
 
 ```text
-chat.py
-  ↓
-answer_question_via_rag()
-  ↓
-_load_answer_question()
-  ↓
-RAG_ANSWER_FUNCTION
-  ↓
-rag.service:answer_question
+Crawler가 반환한 dict
+```
+
+처리:
+
+```text
+반환 구조 검증
+   ↓
+CollectionRun INSERT
+   ↓
+Announcement INSERT
+   ↓
+HWP/HWPX Document INSERT
+   ↓
+생성 ID 반환
+```
+
+MVP 분석 대상 형식:
+
+```text
+hwp
+hwpx
+```
+
+### `collect_and_persist()`
+
+```text
+Crawler 실행
+   ↓
+Crawler Result
+   ↓
+persist_collection_result(...)
+```
+
+Crawler 호출과 DB 저장을 연결한다.
+
+### Crawler 기능에서 해야 할 일
+
+`collection_service.py`를 수정하기보다 **정해진 반환 형식을 맞추는 것**이 기본 원칙이다.
+
+필수 상위 구조:
+
+```text
+execution_id
+execution_status
+total_count
+success_count
+failed_count
+fatal_error
+data
 ```
 
 ---
 
-# 15. RAG Dynamic Import
+## 5.2 `backend/app/services/pipeline_persistence.py`
 
-환경변수:
+### 한 줄 설명
 
-```text
-RAG_ANSWER_FUNCTION
-```
+**문서 처리 / AI Pipeline 산출물을 검증한 뒤 서비스 DB에 저장하는 핵심 Persistence 계층**
 
-현재 값:
+이 파일은 Parser / Chunking / Embedding 알고리즘을 실행하는 파일이 아니다.
 
 ```text
-rag.service:answer_question
+Pipeline outputs
+   ↓
+정합성 검증
+   ↓
+PostgreSQL 저장
 ```
 
-형식:
+### 읽는 대표 산출물
+
+```text
+step4-1_value_normalized.json
+step4-3_verification.json
+chunks.json
+metadata.json
+embeddings.npy
+```
+
+### 저장 대상
+
+```text
+ProcessingRun
+DocumentStructure
+ChunkSet
+Chunk
+Embedding
+```
+
+### 주요 검증
+
+```text
+Structure verification = pass
+Structure filename / format 확인
+Chunk 존재
+Chunk ID 중복 여부
+Embedding model 확인
+Embedding dimension = 1024
+normalized = true
+Chunk 수 = Embedding 수
+metadata와 Chunk ID 일치
+NaN / Inf 방지
+Vector normalization
+```
+
+### Activation
+
+새 결과가 검증에 성공했을 때만 새 ProcessingRun / ChunkSet을 active로 전환한다.
+
+### 다른 기능이 사용하는 방법
+
+문서 처리와 AI / RAG 기능은 각각 자기 산출물을 생성한 뒤, **최종 산출물이 모두 준비된 시점에 `pipeline_persistence.py`의 저장 진입점을 통해 DB에 반영**한다.
+
+각 기능에서 ORM 테이블에 직접 임의 INSERT하지 않는다.
+
+---
+
+## 5.3 `backend/app/services/key_information_service.py`
+
+### 한 줄 설명
+
+**핵심정보 추출 결과를 Announcement 단위로 INSERT / UPDATE하는 저장 서비스**
+
+### 주요 함수
+
+```python
+upsert_key_information(...)
+```
+
+### 처리 흐름
+
+```text
+Announcement 존재 확인
+   ↓
+source_processing_run_id 검증
+   ↓
+기존 KeyInformation 조회
+   ↓
+없음 → INSERT
+있음 → UPDATE
+   ↓
+추출 상태 / 검증 상태 저장
+```
+
+### 보호 로직
+
+`source_processing_run_id`가 전달되면 해당 ProcessingRun이 실제로 같은 Announcement 소속인지 검증한다.
+
+### 핵심정보 추출 기능에서 해야 할 일
+
+```text
+핵심정보 생성
+   ↓
+upsert_key_information(...)
+```
+
+을 호출한다.
+
+DB 모델에 직접 INSERT하지 않는다.
+
+---
+
+## 5.4 `backend/app/services/collection_publish_service.py`
+
+### 한 줄 설명
+
+**새 Collection이 사용자 서비스에서 사용 가능한 상태인지 최종 검증하고 active Collection으로 전환하는 서비스**
+
+### 주요 함수
+
+```python
+validate_collection_run_for_publish(collection_run_id)
+publish_collection_run(collection_run_id)
+```
+
+### `validate_collection_run_for_publish(...)`
+
+DB를 변경하지 않고 publish 가능 여부를 검사한다.
+
+검증 조건:
+
+```text
+CollectionRun success
+Announcement 존재
+실패 공고 없음
+Document 존재
+Document download completed
+active ProcessingRun 존재
+ProcessingRun succeeded / verification pass
+active ChunkSet completed
+실제 Chunk 수 일치
+모든 Chunk에 completed Embedding 존재
+dimension = 1024
+normalized = true
+RAG Embedding model 일치
+```
+
+현재 검증 모델:
+
+```text
+BAAI/bge-m3
+```
+
+### `publish_collection_run(...)`
+
+검증 통과 후:
+
+```text
+system_state.active_collection_run_id
+```
+
+를 해당 CollectionRun으로 변경한다.
+
+이미 같은 Collection이 active면 중복 변경하지 않는다.
+
+### 중요한 점
+
+이 함수는:
+
+```text
+전체 Document 처리가 끝났다고 판단할 수 있는 주체
+```
+
+가 호출해야 한다.
+
+수집 직후 Backend가 임의로 호출하면 안 된다.
+
+---
+
+## 5.5 `backend/app/services/pipeline_gateway.py`
+
+### 한 줄 설명
+
+**Backend API와 외부 실행 코드 사이의 경계를 만드는 callable Gateway**
+
+Backend API에 Crawler / Parser / AI 실행 로직을 직접 넣지 않기 위해 사용한다.
+
+### 주요 함수
+
+```python
+_load_callable(env_name)
+collect_announcements()
+recollect_announcement(announcement_id)
+reprocess_document(document_id)
+retry_error(error_id, document_id, stage)
+```
+
+### `_load_callable(...)`
+
+환경변수에 다음 형식으로 등록된 함수를 import한다.
 
 ```text
 module.path:function_name
 ```
 
-즉:
+사용하는 환경변수 계약:
 
 ```text
-rag.service
+COLLECTION_RUNNER
+ANNOUNCEMENT_RECOLLECTOR
+DOCUMENT_REPROCESSOR
+ERROR_RETRY_RUNNER
 ```
 
-모듈에서:
+### 외부 기능이 제공할 callable 형태
 
-```text
-answer_question
-```
-
-함수를 동적으로 import합니다.
-
----
-
-# 16. 왜 Dynamic Import를 사용하는가
-
-Backend가 특정 RAG 구현 파일에 강하게 결합되는 것을 줄이기 위한 구조입니다.
-
-예:
-
-```text
-현재:
-rag.service:answer_question
-
-향후:
-new_rag.service:answer_question
-```
-
-으로 변경하더라도 Backend Route 자체는 유지할 수 있습니다.
-
-단 함수 입력/출력 Contract는 유지해야 합니다.
-
----
-
-# 17. RAG Function Contract
-
-Backend가 기대하는 개념적 입력:
+#### 수집
 
 ```python
-answer_question(
-    announcement_id=...,
-    question=...,
-)
+def collect():
+    ...
 ```
 
-반환은 다음과 호환되어야 합니다.
-
-```text
-ChatResponse
-또는
-ChatResponse로 validate 가능한 dict
-```
-
-예:
+#### 재수집
 
 ```python
-{
-    "answer": "...",
-    "grounded": True,
-    "evidence": [],
-}
+def recollect(announcement_id: int):
+    ...
+```
+
+#### 문서 재처리
+
+```python
+def reprocess(document_id: int):
+    ...
+```
+
+#### 오류 재시도
+
+```python
+def retry(
+    error_id,
+    document_id,
+    start_stage,
+):
+    ...
+```
+
+### 중요한 점
+
+다른 기능 담당자가 Backend API 코드를 직접 수정하지 않고:
+
+```text
+자기 실행 함수 구현
+   ↓
+환경변수에 함수 경로 등록
+   ↓
+pipeline_gateway.py에서 호출
+```
+
+하도록 만든 경계다.
+
+---
+
+## 5.6 `backend/app/services/admin_service.py`
+
+### 한 줄 설명
+
+**관리자 화면에 필요한 DB 데이터를 조회하고 API Response 형태로 가공하는 Service**
+
+주요 역할:
+
+```text
+공고 목록 / 상세 조회
+문서 목록 / 상세 조회
+ProcessingRun 조회
+ErrorLog 조회
+Error 상태 관리
+```
+
+예를 들어 관리자 공고 목록에서는:
+
+```text
+Announcement
++
+CollectionRun 상태
++
+KeyInformation 일부 값
+```
+
+등을 조합해 Response로 변환한다.
+
+### Frontend에서 알아야 할 점
+
+Frontend가 DB 구조를 직접 알 필요 없이 API Response만 사용하도록 중간 계층 역할을 한다.
+
+---
+
+# 6. API / Schema 코드 설명
+
+## 6.1 `backend/app/api/routes/admin.py`
+
+### 역할
+
+HTTP Request를 받아 Service 또는 Gateway로 전달한다.
+
+```text
+Frontend Request
+   ↓
+FastAPI Route
+   ↓
+Service / Gateway
+   ↓
+Response Schema
+```
+
+DB 쿼리나 Pipeline 알고리즘을 Route에 직접 넣지 않는 것이 기본 원칙이다.
+
+### 주요 API
+
+```text
+공고
+GET    /api/admin/announcements
+POST   /api/admin/announcements/collect
+GET    /api/admin/announcements/{id}
+POST   /api/admin/announcements/{id}/recollect
+
+문서
+GET    /api/admin/documents
+GET    /api/admin/documents/{id}
+GET    /api/admin/documents/{id}/download
+POST   /api/admin/documents/{id}/reprocess
+
+처리 상태
+GET    /api/admin/processing-runs
+
+오류
+GET    /api/admin/errors
+GET    /api/admin/errors/{id}
+PATCH  /api/admin/errors/{id}/status
+POST   /api/admin/errors/{id}/retry
 ```
 
 ---
 
-# 18. RAG 반환 형식 오류
+## 6.2 `backend/app/schemas/admin.py`
 
-`chat_service.py`는 RAG 결과가:
+### 역할
 
-```text
-ChatResponse
-```
+관리자 API의 **Request / Response 계약**이다.
 
-또는:
+Frontend 담당자가 가장 먼저 참고해야 하는 Backend 파일 중 하나다.
 
-```text
-dict
-```
-
-가 아니면 오류를 발생시킵니다.
-
-따라서 RAG를 새로 구현할 때 임의 객체를 그대로 반환하면 안 됩니다.
-
-최종 Backend Contract:
+정의 대상:
 
 ```text
-answer
-grounded
-evidence
+Announcement List / Detail
+Document List / Detail
+ProcessingRun
+Structure 요약
+Chunking 요약
+Embedding 요약
+Error List / Detail
+Error status update request
 ```
 
-를 유지해야 합니다.
+### Frontend에서 알아야 할 점
+
+화면에 필요한 값이 있다고 DB부터 수정하지 말고, 먼저 이 Schema와 기존 API Response를 확인한다.
+
+API 계약 변경이 필요할 경우 Frontend / Backend가 이 파일을 기준으로 맞춘다.
 
 ---
 
-# 19. RAG Service Error와 HTTP
+# 7. 인증 / 세션
 
-현재 Chat Route는:
-
-```text
-RagServiceUnavailableError
-```
-
-를 처리하여:
+관리자 인증 흐름:
 
 ```text
-503 Service Unavailable
+POST /api/admin/auth/login
+   ↓
+인증 성공
+   ↓
+HttpOnly Cookie 발급
+   ↓
+GET /api/admin/auth/me
+   ↓
+세션 확인
+   ↓
+POST /api/admin/auth/logout
+   ↓
+Cookie 제거
 ```
 
-로 변환할 수 있습니다.
+AWS 실검증:
 
-즉 RAG function 자체를 import하지 못하거나
-Backend Adapter 계층에서 사용할 수 없는 경우 503 계열 문제를 확인합니다.
+```text
+LOGIN = 200
+AUTH ME BEFORE LOGOUT = 200
+LOGOUT = 200
+AUTH ME AFTER LOGOUT = 401
+SESSION MANAGEMENT = PASS
+```
+
+Frontend는 별도 sessionStorage 인증이 아니라 Backend 인증 API와 Cookie 계약을 사용해야 한다.
 
 ---
 
-# 20. RAG 내부 예외와 500
+# 8. 기능별 실제 연결 방법
 
-RAG 내부에서 처리되지 않은 예외가 Backend까지 올라오면:
-
-```text
-500 Internal Server Error
-```
-
-가 발생할 수 있습니다.
-
-과거 실제 사례:
+## 8.1 Crawler → Backend
 
 ```text
-GenerationError
-→ RAGServiceError
-→ FastAPI 500
+Crawler
+   ↓ 결과 dict
+collection_service.persist_collection_result(...)
+   ↓
+CollectionRun
+Announcement
+Document
 ```
 
-처럼 Generation 문제로 Chat Endpoint 자체가 500을 반환한 적이 있습니다.
+Crawler 기능은 Backend DB 코드를 수정하기보다 **반환 구조를 맞추는 것**이 우선이다.
 
-이후 Fallback 처리를 추가하여 HTTP 200으로 변경된 상태가 있었습니다.
+---
+
+## 8.2 문서 처리 → Backend
+
+문서 처리 담당 범위:
+
+```text
+HWP/HWPX Parsing
+→ Normalizer
+→ Structure
+→ Verification
+→ 핵심정보 추출
+```
+
+연결 흐름:
+
+```text
+Document ID
+   ↓
+문서 처리
+   ↓
+Structure / Verification 산출물
+   ↓
+pipeline_persistence.py에서 사용할 산출물
+```
+
+문서 처리 기능은 Chunking / Embedding / RAG 로직까지 직접 담당하지 않는다.
+
+---
+
+## 8.3 AI / RAG → Backend / DB
+
+AI / RAG 담당 범위:
+
+```text
+Chunking
+→ Embedding
+→ Vector Search
+→ Retrieval
+→ Prompt
+→ LLM Response
+```
+
+DB 연결:
+
+```text
+Chunk / Embedding 산출물
+   ↓
+pipeline_persistence.py
+   ↓
+Chunk / Embedding DB
+```
+
+RAG 검색:
+
+```text
+active Collection
++
+선택 Announcement
+   ↓
+Vector Search
+   ↓
+RAG
+```
+
+---
+
+## 8.4 핵심정보 추출 → Backend
+
+```text
+핵심정보 추출 결과
+   ↓
+upsert_key_information(...)
+   ↓
+KeyInformation
+   ↓
+GET /api/announcements/{id}
+   ↓
+사용자 핵심정보 카드
+```
+
+---
+
+## 8.5 전체 처리 완료 → Publish
+
+```text
+모든 Document 처리 완료
+   ↓
+validate_collection_run_for_publish(...)
+   ↓
+통과
+   ↓
+publish_collection_run(...)
+   ↓
+SystemState.active_collection_run_id 변경
+```
+
+---
+
+# 9. 구현 상태와 연동 상태
+
+`완료`라는 표현이 혼동되지 않도록 아래처럼 구분한다.
+
+- **구현 완료**: Backend 코드 자체가 준비됨
+- **AWS 검증 완료**: 실제 AWS 환경에서 동작 확인
+- **외부 연동 대기**: 상대 기능의 callable 또는 결과 연결 필요
+
+| 파일 / 기능 | Backend 구현 | AWS 검증 | 외부 연동 상태 |
+|---|---|---|---|
+| `collection_service.py` | ✅ | ✅ | Crawler 결과 계약 유지 |
+| `pipeline_persistence.py` | ✅ | ✅ 기존 정상 데이터 기준 | 문서 처리 / AI 산출물 연결 필요 |
+| `key_information_service.py` | ✅ | 저장 로직 준비 | 핵심정보 추출 호출 필요 |
+| `collection_publish_service.py` | ✅ | ✅ CollectionRun 5 validation | 호출 주체 / 시점 결정 필요 |
+| `pipeline_gateway.py` | ✅ | Gateway 동작 확인 | Reprocess / Retry Runner 필요 |
+| 관리자 인증 / 세션 | ✅ | ✅ | Frontend Cookie 연결 |
+| 사용자 / 관리자 조회 API | ✅ | ✅ | Frontend 실제 화면 연결 |
+
+---
+
+# 10. 현재 AWS 실검증 상태
+
+## Backend / DB
+
+```text
+GET /api/health
+→ 200
+
+GET /api/health/db
+→ 200
+```
+
+## 사용자 API
+
+```text
+GET /api/announcements
+→ 200
+
+GET /api/announcements/2
+→ 200
+```
+
+## 관리자 인증 / 세션
+
+```text
+LOGIN
+→ 200
+
+AUTH ME BEFORE LOGOUT
+→ 200
+
+LOGOUT
+→ 200
+
+AUTH ME AFTER LOGOUT
+→ 401
+
+SESSION MANAGEMENT
+→ PASS
+```
+
+## 관리자 조회 API
+
+```text
+ANNOUNCEMENTS
+→ 200
+
+DOCUMENTS
+→ 200
+
+PROCESSING RUNS
+→ 200
+
+ERRORS
+→ 200
+```
+
+검증 당시:
+
+```text
+Announcement       3건
+Document           5건
+ProcessingRun      7건
+ErrorLog           0건
+```
+
+---
+
+# 11. 실제 수집 상태
+
+관리자 공고 수집 실행 결과:
+
+```text
+CollectionRun 6
+status = success
+
+Announcement 3
+
+Document 4
+Document 5
+download_status = completed
+```
+
+현재 실제 자동 연결:
+
+```text
+관리자 공고 수집
+   ↓
+Crawler
+   ↓
+CollectionRun
+   ↓
+Announcement
+   ↓
+Document
+```
+
+신규 Document 4, 5에는 ProcessingRun이 없다.
 
 따라서:
 
 ```text
-HTTP 500
+Document
+   ↓
+문서 처리
+   ↓
+AI / RAG 처리
+   ↓
+Publish
 ```
 
-이면 반드시 Server Traceback을 확인합니다.
+구간은 아직 공통 통합 대상이다.
 
 ---
 
-# 21. Pipeline Gateway
+# 12. Publish 가능한 기존 정상 Collection
 
-파일:
+CollectionRun 5:
 
 ```text
-backend/app/services/pipeline_gateway.py
+Announcement        1
+Document            2
+Chunk               181
+Embedding           181
+Embedding model     BAAI/bge-m3
 ```
 
-Backend와 Pipeline 기능 사이의 Adapter/Gateway입니다.
+`validate_collection_run_for_publish(5)` 검증 통과.
 
-환경변수 기반으로 외부 Pipeline 함수를 연결하는 패턴을 사용할 수 있습니다.
-
-즉:
+현재:
 
 ```text
-Backend
-  ↓
-Pipeline Gateway
-  ↓
-Pipeline Function
-```
-
-형태로 책임을 분리합니다.
-
----
-
-# 22. Pipeline Persistence
-
-파일:
-
-```text
-backend/app/services/pipeline_persistence.py
-```
-
-Pipeline과 Database 사이의 핵심 연결점입니다.
-
-흐름:
-
-```text
-Pipeline Outputs
-      ↓
-Validation
-      ↓
-ProcessingRun
-      ↓
-DocumentStructure
-      ↓
-ChunkSet
-      ↓
-Chunks
-      ↓
-Embeddings
-      ↓
-Database
-```
-
-이 파일은 일반 Runtime Chat Service가 아니라
-문서 Ingestion/Persistence 기능에 속합니다.
-
----
-
-# 23. Admin Authentication Route
-
-파일:
-
-```text
-backend/app/api/routes/admin_auth.py
-```
-
-관리자 인증 관련 Endpoint가 위치합니다.
-
-현재 Route 목록에서 확인된 기능:
-
-```text
-POST
-GET
-POST
-```
-
-형태의 Login/현재 사용자/Logout 계열 Endpoint가 존재합니다.
-
-정확한 URL은 실제 `admin_auth.py`를 Source of Truth로 확인합니다.
-
----
-
-# 24. Admin Authentication Service
-
-파일:
-
-```text
-backend/app/services/admin_auth_service.py
-```
-
-현재 코드에서 확인된 주요 환경변수:
-
-```text
-ADMIN_ID
-ADMIN_PASSWORD
-ADMIN_JWT_SECRET
-ADMIN_JWT_EXPIRE_SECONDS
-
-ADMIN_COOKIE_SECURE
-ADMIN_COOKIE_NAME
-ADMIN_COOKIE_SAMESITE
+system_state.active_collection_run_id = 5
 ```
 
 ---
 
-# 25. 관리자 인증 흐름
+# 13. 다른 기능 담당자가 지켜야 할 연결 원칙
 
-개념:
+## Crawler
 
-```text
-Admin Login Form
-      ↓
-Admin Auth API
-      ↓
-admin_auth_service.py
-      ↓
-Credential Validation
-      ↓
-JWT
-      ↓
-Cookie
-      ↓
-Admin API
-```
+`collection_service.py`의 DB 저장 구조를 임의로 바꾸기보다 **반환 계약을 맞춘다.**
 
-Frontend:
+## 문서 처리
 
-```text
-frontend/admin/js/auth.js
-```
+DB에 직접 임의 INSERT하지 않고 Structure / Verification 산출물을 생성한다.
 
-와 연결됩니다.
+## AI / RAG
 
----
+Chunk / Embedding을 직접 테이블에 임의 INSERT하기보다 `pipeline_persistence.py`의 검증 / 저장 흐름을 사용한다.
 
-# 26. 관리자 Secret 관리
+## 핵심정보 추출
 
-다음 값은 Source Code에 하드코딩하지 않습니다.
-
-```text
-ADMIN_PASSWORD
-ADMIN_JWT_SECRET
-```
-
-실제 값:
-
-```text
-.env
-```
-
-예제 변수명:
-
-```text
-.env.example
-```
-
-에 관리합니다.
-
----
-
-# 27. Admin API
-
-파일:
-
-```text
-backend/app/api/routes/admin.py
-```
-
-현재 다수의 관리자 Endpoint가 존재합니다.
-
-기능 영역은 현재 코드 구조상 다음과 관련됩니다.
-
-```text
-공고 관리
-문서 관리
-Pipeline 처리 상태
-파일 Download
-오류 관리
-상태 변경
-재처리 기능
-```
-
-정확한 Endpoint URL과 HTTP Method는:
-
-```text
-backend/app/api/routes/admin.py
-```
-
-를 확인합니다.
-
----
-
-# 28. Admin Service
-
-파일:
-
-```text
-backend/app/services/admin_service.py
-```
-
-관리자 Route의 실제 Application Logic을 담당합니다.
-
-개념:
-
-```text
-Admin Route
-    ↓
-Admin Service
-    ↓
-Database / Pipeline
-```
-
-관리자 화면 문제를 Route 하나만 보고 수정하지 않고 Service까지 확인합니다.
-
----
-
-# 29. Backend Core Config
-
-파일:
-
-```text
-backend/app/core/config.py
-```
-
-Pydantic Settings 기반 Application Configuration입니다.
-
-현재 `.env` 로딩 경로:
-
-```text
-PROJECT_ROOT / ".env"
-```
-
-개념:
-
-```text
-.env
- ↓
-Settings
- ↓
-Backend
-```
-
-DB/Application 기본 설정 관련 문제는 이 파일을 확인합니다.
-
----
-
-# 30. Environment Variable 직접 접근
-
-현재 일부 Service에서는 Pydantic Settings 대신:
+`key_information` 테이블에 직접 INSERT하지 않고:
 
 ```python
-os.getenv(...)
+upsert_key_information(...)
 ```
 
-를 직접 사용합니다.
+을 사용한다.
 
-확인된 영역:
+## Frontend
 
-```text
-chat_service.py
-admin_auth_service.py
-pipeline_gateway.py
-rag/db_pipeline.py
-rag/service.py
-```
-
-따라서 환경변수를 변경할 경우 `core/config.py`만 확인해서는 안 됩니다.
+DB 구조를 직접 사용하지 않고 API / Schema를 기준으로 연결한다.
 
 ---
 
-# 31. 주요 Backend/RAG 환경변수
+# 14. 기능별 남은 작업
 
-현재 코드에서 확인된 주요 변수:
+## Backend / DB
 
-```text
-RAG_ANSWER_FUNCTION
-MVP_ANNOUNCEMENT_ID
-RAG_DB_TOP_K
-MVP_DOCUMENT_FORMAT
-```
+기능 구현과 AWS 검증은 완료 상태다.
 
-관리자:
+남은 작업:
 
-```text
-ADMIN_ID
-ADMIN_PASSWORD
-ADMIN_JWT_SECRET
-ADMIN_JWT_EXPIRE_SECONDS
-ADMIN_COOKIE_SECURE
-ADMIN_COOKIE_NAME
-ADMIN_COOKIE_SAMESITE
-```
-
-정확한 전체 목록은 실제 코드와 `.env.example`을 기준으로 확인합니다.
+- 외부 기능에 Backend 계약 공유
+- 통합 과정에서 API / DB 계약 지원
+- 최종 PR 정리
 
 ---
 
-# 32. Database Session
+## Crawler
 
-파일:
-
-```text
-backend/app/db/session.py
-```
-
-역할:
-
-```text
-Database Engine
-SessionLocal
-```
-
-Backend Service와 RAG DB Pipeline에서 공통으로 사용합니다.
-
-DB 관련 코드에서 별도 Engine을 중복 생성하지 않는 것이 좋습니다.
+- 수집 결과 계약 유지
+- 재수집 callable 제공
+- Pagination
+- 다운로드 완료 처리
+- 실패 정보 전달
 
 ---
 
-# 33. ORM Models
+## 문서 처리
 
-위치:
-
-```text
-backend/app/models/
-```
-
-주요 Model:
-
-```text
-Announcement
-Document
-DocumentStructure
-ProcessingRun
-ProcessingArtifact
-ChunkSet
-Chunk
-Embedding
-CollectionRun
-SystemState
-KeyInformation
-Admin
-ErrorLog
-```
-
-자세한 관계:
-
-```text
-docs/DATABASE.md
-```
-
-를 참고합니다.
+- `document_id` 기반 실행 callable 제공
+- HWP/HWPX Parsing
+- Normalizer / Structure / Verification
+- 핵심정보 추출
+- 실패 stage / message 전달
 
 ---
 
-# 34. Schemas
+## AI / RAG
 
-위치:
-
-```text
-backend/app/schemas/
-```
-
-Schema와 ORM Model은 같은 개념이 아닙니다.
-
-```text
-ORM Model
-→ Database 구조
-
-Pydantic Schema
-→ API Request/Response 구조
-```
-
-예:
-
-```text
-backend/app/models/announcement.py
-```
-
-와:
-
-```text
-backend/app/schemas/announcement.py
-```
-
-는 역할이 다릅니다.
+- Chunk 생성
+- BAAI/bge-m3 Embedding 생성
+- Vector Search
+- active Collection 기준 Retrieval
+- Prompt / LLM Response
+- 실패 정보 전달
 
 ---
 
-# 35. Announcement Schema
+## 핵심정보 추출 연동
 
-파일:
-
-```text
-backend/app/schemas/announcement.py
-```
-
-Frontend 공고 목록/상세가 사용하는 JSON 구조와 관련됩니다.
-
-현재 확인된 주요 상세 영역:
-
-```text
-applicationPeriod
-eligibility
-supplyInformation
-incomeAssetCriteria
-requiredDocuments
-winnerAnnouncement
-contactInformation
-documents
-```
-
-Frontend가 사용하는 Field와 이 Schema가 맞아야 합니다.
+- 추출 결과 생성
+- `upsert_key_information(...)` 호출
+- ProcessingRun 출처 연결
+- 사용자 상세 API에서 실제 값 검증
 
 ---
 
-# 36. Common Schema
+## Frontend
 
-파일:
-
-```text
-backend/app/schemas/common.py
-```
-
-Pagination 등의 공통 API Schema를 정의합니다.
-
-확인된 주요 Field:
-
-```text
-page
-size
-total
-total_pages
-```
+- 관리자 Document 실제 API 연결
+- 관리자 Error 실제 API 연결
+- Error status PATCH 연결
+- Recollect / Reprocess / Retry API 연결
+- Backend Cookie 기반 세션 사용
+- 실제 KeyInformation 표시 검증
 
 ---
 
-# 37. Backend ↔ Frontend 연결
+# 15. 통합 단계에서 팀이 결정해야 할 항목
 
-User Frontend API Base:
+다음은 특정 기능 하나가 단독으로 결정하지 않는다.
 
-```text
-/api
-```
-
-Frontend:
-
-```text
-frontend/user/src/config.ts
-```
-
-Backend:
-
-```text
-backend/app/api/router.py
-```
-
-둘이 다음처럼 연결됩니다.
-
-```text
-Frontend API_BASE_URL
-        │
-        ▼
-       /api
-        │
-        ▼
-FastAPI api_router
-```
+1. **신규 Document 처리를 누가 시작하는가**
+2. **모든 Document 처리가 완료됐음을 누가 판단하는가**
+3. **`publish_collection_run()`을 누가 언제 호출하는가**
+4. **Crawler / 문서 처리 / AI 오류를 ErrorLog에 어떤 방식으로 전달하는가**
 
 ---
 
-# 38. User Frontend API 호출
+# 16. 가장 중요한 연결 지점 요약
 
-공고 목록:
-
-```text
-ListScreen.tsx
-    ↓
-GET /api/announcements
-```
-
-공고 상세:
-
-```text
-DetailScreen.tsx
-    ↓
-GET /api/announcements/{id}
-```
-
-Chat:
-
-```text
-DetailScreen.tsx
-    ↓
-POST /api/chat
-```
-
----
-
-# 39. Backend Port와 Frontend Proxy
-
-Backend 개발 포트:
-
-```text
-8000
-```
-
-User Frontend는 `/api`를 사용하므로
-Vite 개발 서버가 Backend로 Proxy해야 합니다.
-
-관련 파일:
-
-```text
-frontend/user/vite.config.ts
-```
-
-개념:
-
-```text
-Browser
-  ↓
-Vite :5173
-  ↓
-/api
-  ↓
-FastAPI :8000
-```
-
----
-
-# 40. API가 안 될 때 Browser보다 curl을 먼저 사용
-
-Frontend에서 문제가 생기면 Backend API를 직접 확인합니다.
-
-Health:
-
-```bash
-curl -i \
-http://127.0.0.1:8000/api/health
-```
-
-Announcements:
-
-```bash
-curl -i \
-http://127.0.0.1:8000/api/announcements
-```
-
-Chat:
-
-```bash
-curl -i \
--X POST \
-http://127.0.0.1:8000/api/chat \
--H 'Content-Type: application/json' \
--d '{"announcementId":1,"question":"신청 일정은 언제인가?"}'
-```
-
----
-
-# 41. HTTP Status별 진단
-
-## 200 OK
-
-HTTP 연결 자체는 정상입니다.
-
-그 다음 JSON 내용을 확인합니다.
-
----
-
-## 404 Not Found
-
-확인:
-
-```text
-URL
-/api Prefix
-Route 등록
-Frontend API Base
-Vite Proxy
-```
-
----
-
-## 422 Unprocessable Entity
-
-Pydantic Request Validation 실패 가능성이 높습니다.
-
-확인:
-
-```text
-Request JSON
-Schema
-Field alias
-Required field
-```
-
-예:
-
-```text
-announcementId
-question
-```
-
----
-
-## 500 Internal Server Error
-
-Backend 내부 예외입니다.
-
-확인:
-
-```text
-Uvicorn Traceback
-Service
-DB
-RAG
-Generation
-```
-
-HTTP Response만 보고 원인을 추측하지 않습니다.
-
----
-
-## 503 Service Unavailable
-
-현재 Chat 구조에서는 RAG Function 연결 실패 등 Backend Adapter 문제일 수 있습니다.
-
-확인:
-
-```text
-RAG_ANSWER_FUNCTION
-chat_service.py
-rag/service.py
-```
-
----
-
-# 42. Chat 문제 진단
-
-다음 순서로 확인합니다.
-
-```text
-POST /api/chat
-       ↓
-chat.py
-       ↓
-chat_service.py
-       ↓
-RAG_ANSWER_FUNCTION
-       ↓
-rag/service.py
-       ↓
-rag/db_pipeline.py
-```
-
-HTTP 500이면 Server Traceback에서 처음 발생한 Application Error를 찾습니다.
-
----
-
-# 43. 공고 목록 문제 진단
-
-```text
-GET /api/announcements
-       ↓
-announcements.py
-       ↓
-announcement_service.py
-       ↓
-DB
-```
-
-Backend curl이 정상인데 Frontend에서만 실패한다면 Backend를 수정하지 않고:
-
-```text
-config.ts
-vite.config.ts
-ListScreen.tsx
-```
-
-를 확인합니다.
-
----
-
-# 44. DB 문제 진단
-
-```text
-/api/health/db
-```
-
-부터 확인합니다.
-
-직접 DB Test:
-
-```bash
-cd /home/ubuntu/ddokbot/one-cycle
-
-PYTHONPATH=. \
-/home/ubuntu/ddokbot/venvs/one-cycle-backend/bin/python - <<'PY'
-from sqlalchemy import text
-from backend.app.db.session import engine
-
-with engine.connect() as conn:
-    value = conn.execute(
-        text("SELECT 1")
-    ).scalar_one()
-
-print(value)
-PY
-```
-
-정상:
-
-```text
-1
-```
-
----
-
-# 45. Backend를 수정할 때 API Contract 유지
-
-Backend 내부 Service 구현을 변경하더라도
-가능하면 Frontend API Contract는 유지합니다.
-
-예:
-
-```text
-Before
-
-POST /api/chat
-
-{
-  announcementId,
-  question
-}
-
-After
-
-동일 Contract 유지
-```
-
-그러면 Frontend 수정이 필요 없습니다.
-
----
-
-# 46. RAG를 교체할 때 Backend Contract 유지
-
-RAG 전체를 새로 구현하더라도:
-
-```text
-answer_question(
-    announcement_id,
-    question,
-)
-```
-
-형태와 최종:
-
-```text
-answer
-grounded
-evidence
-```
-
-를 유지하면 Backend Route와 Frontend 변경을 최소화할 수 있습니다.
-
----
-
-# 47. Database 구조 변경
-
-ORM Model을 변경하면:
-
-```text
-backend/app/models/
-```
-
-만 수정하고 끝내지 않습니다.
-
-반드시:
-
-```text
-migrations/
-```
-
-도 확인합니다.
-
-자세한 내용:
-
-```text
-docs/DATABASE.md
-```
-
----
-
-# 48. Backend 코드 추가 위치
-
-새 기능별 권장 위치:
-
-| 기능 | 위치 |
+| 목적 | 사용할 Backend 코드 |
 |---|---|
-| 새 HTTP Endpoint | `backend/app/api/routes/` |
-| Request/Response Model | `backend/app/schemas/` |
-| Application Logic | `backend/app/services/` |
-| DB ORM | `backend/app/models/` |
-| DB Migration | `migrations/versions/` |
-| DB Session | 기존 `backend/app/db/session.py` 사용 |
-| Application Config | `backend/app/core/config.py` |
-| RAG 기능 | `rag/` |
-| Pipeline 기능 | `pipeline/` |
-
----
-
-# 49. 새 Route 추가 절차
-
-개념적인 순서:
-
-```text
-1. Schema 작성
-2. Service 작성
-3. Route 작성
-4. Router 등록
-5. API 테스트
-6. Frontend 연결
-```
-
-새 Route 파일을 만들었다면:
-
-```text
-backend/app/api/router.py
-```
-
-에서 Router가 실제 등록되었는지 반드시 확인합니다.
-
----
-
-# 50. 새 DB Model 추가 절차
-
-```text
-1. backend/app/models/ 에 Model 작성
-2. models/__init__.py 연결 확인
-3. Alembic Migration 생성/작성
-4. Migration Review
-5. alembic upgrade head
-6. Service 구현
-7. API 연결
-```
-
----
-
-# 51. Backend Compile Test
-
-대규모 리팩터링 이후:
-
-```bash
-cd /home/ubuntu/ddokbot/one-cycle
-
-PYTHONPATH=. \
-/home/ubuntu/ddokbot/venvs/one-cycle-backend/bin/python \
--m compileall -q \
-backend \
-config \
-rag \
-pipeline \
-migrations \
-run_pipeline.py
-
-echo "EXIT=$?"
-```
-
-정상:
-
-```text
-EXIT=0
-```
-
----
-
-# 52. Import Test
-
-중요 Service 직접 Import:
-
-```bash
-cd /home/ubuntu/ddokbot/one-cycle
-
-PYTHONPATH=. \
-/home/ubuntu/ddokbot/venvs/one-cycle-backend/bin/python - <<'PY'
-from backend.app.main import app
-from backend.app.services.chat_service import (
-    answer_question_via_rag,
-)
-from rag.service import answer_question
-
-print("[OK] backend imports")
-PY
-```
-
----
-
-# 53. Backend Smoke Test 순서
-
-Backend를 수정한 후 최소:
-
-```text
-1. Python Compile
-2. Import
-3. /api/health
-4. /api/health/db
-5. /api/announcements
-6. /api/announcements/{id}
-7. /api/chat
-8. Frontend 확인
-```
-
-순서로 검사합니다.
-
----
-
-# 54. 관리자 기능 수정 시 확인할 영역
-
-```text
-backend/app/api/routes/admin.py
-backend/app/api/routes/admin_auth.py
-
-backend/app/schemas/admin.py
-backend/app/schemas/admin_auth.py
-
-backend/app/services/admin_service.py
-backend/app/services/admin_auth_service.py
-
-backend/app/models/admin.py
-backend/app/models/error_log.py
-
-frontend/admin/
-```
-
-관리자 UI와 Backend를 같이 변경해야 하는 경우 이 전체 Boundary를 확인합니다.
-
----
-
-# 55. Pipeline 관련 관리자 기능
-
-관리자에서 문서 재처리 또는 Pipeline 실행 기능을 제공한다면
-다음 경계를 사용해야 합니다.
-
-```text
-Admin API
-   ↓
-Admin Service
-   ↓
-Pipeline Gateway
-   ↓
-Pipeline
-```
-
-Pipeline 구현을 Admin Route 안에 직접 복사하지 않습니다.
-
----
-
-# 56. Backend Source of Truth
-
-| 영역 | Source of Truth |
-|---|---|
-| FastAPI Entry | `backend/app/main.py` |
-| API Router | `backend/app/api/router.py` |
-| HTTP Routes | `backend/app/api/routes/` |
-| Request/Response | `backend/app/schemas/` |
-| Application Logic | `backend/app/services/` |
-| Config | `backend/app/core/config.py` |
-| DB Session | `backend/app/db/session.py` |
-| ORM | `backend/app/models/` |
-| RAG Adapter | `backend/app/services/chat_service.py` |
-| RAG Entry | `rag/service.py` |
-| Pipeline Gateway | `backend/app/services/pipeline_gateway.py` |
-| Pipeline Persistence | `backend/app/services/pipeline_persistence.py` |
-| Migration | `migrations/` |
-| Environment | `.env`, `.env.example` |
-
----
-
-# 57. AI에게 Backend 작업을 맡길 때
-
-최소 제공:
-
-```text
-README.md
-docs/ARCHITECTURE.md
-docs/PROJECT_STRUCTURE.md
-docs/BACKEND.md
-docs/API.md
-
-backend/
-```
-
-DB 관련이면 추가:
-
-```text
-docs/DATABASE.md
-migrations/
-alembic.ini
-```
-
-RAG 관련이면 추가:
-
-```text
-docs/RAG.md
-rag/
-```
-
-Pipeline 관련이면 추가:
-
-```text
-docs/PIPELINE.md
-run_pipeline.py
-pipeline/
-```
-
----
-
-# 58. AI가 Backend 수정 전에 확인할 질문
-
-```text
-1. 문제가 Route인가?
-2. Schema Validation인가?
-3. Service Logic인가?
-4. DB인가?
-5. RAG인가?
-6. Pipeline인가?
-7. Frontend Proxy인가?
-8. HTTP Contract를 유지할 수 있는가?
-```
-
-문제 범위를 확인하지 않고 여러 계층을 동시에 수정하지 않습니다.
-
----
-
-# 59. 핵심 Backend 흐름
-
-사용자 공고 조회:
-
-```text
-Frontend
- ↓
-/api/announcements
- ↓
-Route
- ↓
-Announcement Service
- ↓
-Database
-```
-
-사용자 Chat:
-
-```text
-Frontend
- ↓
-/api/chat
- ↓
-Route
- ↓
-Chat Service
- ↓
-RAG Service
- ↓
-DB RAG
- ↓
-Generation
-```
-
-문서 Pipeline:
-
-```text
-Pipeline
- ↓
-Pipeline Persistence
- ↓
-Database
-```
-
-관리자:
-
-```text
-Admin Frontend
- ↓
-Admin/Auth Routes
- ↓
-Admin Services
- ↓
-Database / Pipeline
-```
-
----
-
-# 60. 핵심 요약
-
-DDOKBOT Backend의 중심 원칙은 다음입니다.
-
-```text
-Route
-→ HTTP 책임
-
-Schema
-→ API 계약
-
-Service
-→ Application Logic
-
-Model
-→ DB 구조
-
-RAG
-→ 검색/생성
-
-Pipeline
-→ 문서 처리
-```
-
-특정 문제가 발생하면 이 책임 경계를 기준으로 문제 위치를 먼저 판단합니다.
-
-예:
-
-```text
-HTTP 422
-→ Schema
-
-HTTP 500 + DB Error
-→ DB/Service
-
-HTTP 200 + 정확한 Evidence + 잘못된 Answer
-→ Generation
-
-curl 정상 + Browser 실패
-→ Frontend/Proxy
-
-Pipeline Output 정상 + Runtime 검색 실패
-→ Persistence/Activation/RAG DB Retrieval
-```
-
-Backend 내부 구현을 변경하더라도 가능하면 API Contract를 유지하여
-Frontend와 다른 계층으로 변경이 전파되지 않도록 합니다.
+| Crawler 결과 저장 | `collection_service.py` |
+| 문서 처리 / AI 산출물 저장 | `pipeline_persistence.py` |
+| 핵심정보 저장 | `key_information_service.py` |
+| 새 Collection 서비스 공개 | `collection_publish_service.py` |
+| 외부 Runner 연결 | `pipeline_gateway.py` |
+| 관리자 API | `admin.py` |
+| Frontend API 계약 | `schemas/admin.py` |
+| DB 구조 확인 | `models/*` |
+
+각 기능 담당자는 자기 로직을 Backend 내부에 새로 넣는 것이 아니라, **정해진 연결 지점에 결과 또는 callable을 맞춰 연결**하면 된다.
