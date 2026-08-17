@@ -882,6 +882,7 @@ def parse_hwpx(
     hwpx_jar_path: str | Path | None,
     hwpx_file_path: str | Path,
     *,
+    original_filename: str | None = None,
     max_nested_depth: int = 10,
     strict: bool = False,
 ) -> dict[str, Any]:
@@ -910,6 +911,9 @@ def parse_hwpx(
         engine="hwpxlib",
         jar_path=jar_path,
     )
+
+    if original_filename:
+        document["document"]["filename"] = original_filename
 
     try:
         sections = hwpx_file.sectionXMLFileList()
@@ -1105,6 +1109,11 @@ def main() -> None:
         help="생략 시 환경변수 또는 libs/hwpx의 단일 JAR를 자동 탐색합니다.",
     )
     parser.add_argument("--file_path", required=True)
+    parser.add_argument(
+        "--original-filename",
+        default=None,
+        help="JSON에 기록할 실제 원본 파일명",
+    )
     parser.add_argument("--output_path", required=True)
     parser.add_argument("--max_nested_depth", type=int, default=10)
     parser.add_argument("--strict", action="store_true")
@@ -1113,6 +1122,7 @@ def main() -> None:
     result = parse_hwpx(
         hwpx_jar_path=args.hwpx_jar_path,
         hwpx_file_path=args.file_path,
+        original_filename=args.original_filename,
         max_nested_depth=args.max_nested_depth,
         strict=args.strict,
     )
