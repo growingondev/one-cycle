@@ -332,8 +332,173 @@ def _collect_control_strings(value: Any, *, depth: int = 0) -> list[str]:
     return result
 
 
-def _extract_overlapping_number(paragraph: Any) -> tuple[str | None, list[dict[str, Any]]]:
-    """문단의 글자 겹치기 컨트롤에서 실제 입력 숫자를 추출합니다."""
+
+def _java_byte_array_to_bytes(value: Any) -> bytes:
+    """Java byte[]를 Python bytes로 안전하게 변환합니다.
+
+    JPype의 Java byte는 -128~127의 signed 값으로 보일 수 있으므로
+    ``& 0xFF``를 적용해 원래 0~255 바이트 값으로 복원합니다.
+    """
+    if value is None:
+        return b""
+
+    try:
+        return bytes(
+            int(value[index]) & 0xFF
+            for index in range(len(value))
+        )
+    except Exception:
+        pass
+
+    try:
+        size = int(value.length)
+        return bytes(
+            int(value[index]) & 0xFF
+            for index in range(size)
+        )
+    except Exception:
+        return b""
+
+
+def _extract_overlapping_letter_strings(control: Any) -> list[str]:
+    """ControlOverlappingLetter의 실제 겹침 문자열을 안전하게 읽습니다.
+
+    HWP 5.0 명세의 글자 겹침 데이터는 WCHAR array[len]입니다.
+
+    hwplib는 이 값을 여러 HWPString 객체로 나눠 보관할 수 있는데,
+    보조 평면 PUA(U+Fxxxx 등)는 UTF-16 surrogate pair 두 WCHAR를
+    사용합니다. 각 HWPString을 따로 ``toUTF16LEString()`` 하면
+    surrogate 절반만 디코딩되어 U+FFFD(�)로 깨질 수 있습니다.
+
+    따라서 모든 HWPString.getBytes()를 먼저 원래 순서대로 합친 뒤
+    UTF-16LE로 한 번에 디코딩합니다.
+    """
+    class_name = java_class_name(control)
+    lowered = class_name.lower()
+
+    if not any(
+        token in lowered
+        for token in (
+            "overlappingletter",
+            "overlapping",
+            "overlap",
+        )
+    ):
+        return []
+
+    try:
+        header = control.getHeader()
+    except Exception:
+        header = None
+
+    if header is None:
+        return []
+
+    try:
+        letter_list = header.getOverlappingLetterList()
+    except Exception:
+        letter_list = None
+
+    if letter_list is None:
+        return []
+
+    items = _iter_java_values(letter_list)
+    if not items:
+        return []
+
+    # 1순위: 모든 WCHAR의 원시 바이트를 연결한 후 한 번에 UTF-16LE 디코딩.
+    combined = bytearray()
+
+    for item in items:
+        try:
+            raw = item.getBytes()
+        except Exception:
+            raw = None
+
+        raw_bytes = _java_byte_array_to_bytes(raw)
+        if raw_bytes:
+            combined.extend(raw_bytes)
+
+    if combined:
+        try:
+            value = bytes(combined).decode(
+                "utf-16-le",
+                errors="strict",
+            )
+        except UnicodeDecodeError:
+            value = ""
+
+        # replacement character가 있으면 정상 복원으로 인정하지 않습니다.
+        if value and "\ufffd" not in value:
+            return [value]
+
+    # 2순위 fallback:
+    # 개별 HWPString이 완전한 BMP 문자/일반 숫자인 경우만 사용합니다.
+    result: list[str] = []
+
+    for item in items:
+        try:
+            raw = item.getBytes()
+        except Exception:
+            raw = None
+
+        raw_bytes = _java_byte_array_to_bytes(raw)
+        if not raw_bytes:
+            continue
+
+        try:
+            value = raw_bytes.decode(
+                "utf-16-le",
+                errors="strict",
+            )
+        except UnicodeDecodeError:
+            continue
+
+        if not value or "\ufffd" in value:
+            continue
+
+        if value not in result:
+            result.append(value)
+
+    return result
+
+
+def _raw_hwp_paragraph_text(paragraph: Any) -> str:
+    """HWP 문단의 일반 문자열을 읽고, 검증된 PUA 치환만 적용합니다."""
+    if paragraph is None:
+        return ""
+
+    try:
+        text = paragraph.getNormalString()
+        value = "" if text is None else str(text)
+    except Exception:
+        return ""
+
+    # Parser 단계에서는 PUA를 숫자로 바꾸지 않고 원문 그대로 보존합니다.
+    return value
+
+
+def _extract_overlapping_payload(
+    paragraph: Any,
+) -> tuple[str | None, str | None, list[dict[str, Any]]]:
+    """글자 겹치기 컨트롤의 실제 표시 문자열을 보존해서 추출합니다.
+
+    반환값:
+      raw_value:
+        ControlOverlappingLetter에 저장된 원래 문자열입니다.
+        숫자뿐 아니라 PUA/특수기호도 그대로 반환합니다.
+
+      numeric_value:
+        raw_value가 명확한 숫자인 경우에만 일반 숫자 문자열을 반환합니다.
+        표의 -1/-2 하위 번호 문맥 복원용 anchor로만 사용합니다.
+
+      diagnostics:
+        복원 근거 기록입니다.
+
+    중요한 원칙:
+    - PUA를 임의의 숫자로 추측하지 않습니다.
+    - HWP 원본에 실제 저장된 겹침 문자열은 손실시키지 않습니다.
+    """
     try:
         controls = paragraph.getControlList()
     except Exception:
@@ -341,91 +506,145 @@ def _extract_overlapping_number(paragraph: Any) -> tuple[str | None, list[dict[s
 
     diagnostics: list[dict[str, Any]] = []
     if controls is None:
-        return None, diagnostics
+        return None, None, diagnostics
 
     for control in _iter_java_values(controls):
         class_name = java_class_name(control)
         lowered = class_name.lower()
-        if not any(token in lowered for token in ('overlapping', 'overlap', 'compose')):
+
+        if not any(
+            token in lowered
+            for token in ("overlappingletter", "overlapping", "overlap", "compose")
+        ):
             continue
 
-        strings = _collect_control_strings(control)
-        cleaned: list[str] = []
-        for item in strings:
-            normalized = unicodedata.normalize('NFKC', str(item)).strip()
-            if normalized and normalized not in cleaned:
-                cleaned.append(normalized)
+        header_strings = _extract_overlapping_letter_strings(control)
+        fallback_strings = _collect_control_strings(control)
 
-        diagnostics.append({
-            'class_name': class_name,
-            'strings': cleaned,
-        })
+        # Header 값이 실제 겹침 글자이므로 최우선으로 사용합니다.
+        cleaned_header: list[str] = []
+        for item in header_strings:
+            value = unicodedata.normalize("NFKC", str(item))
+            if value and value not in cleaned_header:
+                cleaned_header.append(value)
 
-        # 내부 ID가 아니라 컨트롤에 저장된 문자열에서만 숫자를 선택합니다.
-        candidates: list[str] = []
-        for item in cleaned:
-            candidates.extend(re.findall(r'(?<!\d)(\d{1,3})(?!\d)', item))
+        cleaned_fallback: list[str] = []
+        for item in fallback_strings:
+            value = unicodedata.normalize("NFKC", str(item))
+            if value and value not in cleaned_fallback:
+                cleaned_fallback.append(value)
 
-        unique = []
-        for candidate in candidates:
-            normalized_number = str(int(candidate))
-            if normalized_number not in unique:
-                unique.append(normalized_number)
+        diagnostics.append(
+            {
+                "class_name": class_name,
+                "header_strings": cleaned_header,
+                "fallback_strings": cleaned_fallback,
+            }
+        )
 
-        if len(unique) == 1:
-            return unique[0], diagnostics
+        # HWP의 겹침글자는 여러 HWPString으로 분할 저장될 수 있습니다.
+        # 순서를 유지하여 그대로 이어 붙입니다.
+        if cleaned_header:
+            raw_value = "".join(cleaned_header)
+        elif cleaned_fallback:
+            # fallback은 중복/내부값 가능성이 있으므로 첫 번째 값만 보수적으로 사용
+            raw_value = cleaned_fallback[0]
+        else:
+            continue
 
-        # '1', '2'처럼 글자가 따로 저장된 경우 순서대로 결합합니다.
-        single_digits = [item for item in cleaned if re.fullmatch(r'\d', item)]
-        if 1 < len(single_digits) <= 3:
-            return ''.join(single_digits), diagnostics
+        raw_value = raw_value.strip()
+        if not raw_value:
+            continue
 
-    return None, diagnostics
+        numeric_value: str | None = None
 
+        # 실제 저장값 자체가 숫자로 명확한 경우에만 number anchor로 사용합니다.
+        if re.fullmatch(r"\d{1,3}", raw_value):
+            numeric_value = str(int(raw_value))
 
-def _raw_hwp_paragraph_text(paragraph: Any) -> str:
-    if paragraph is None:
-        return ''
-    try:
-        text = paragraph.getNormalString()
-        value = '' if text is None else str(text)
-    except Exception:
-        return ''
-    value, _ = _replace_pua_numbers(value)
-    return value
+        return raw_value, numeric_value, diagnostics
+
+    return None, None, diagnostics
 
 
 def _recover_paragraph_number(
     paragraph: Any,
     raw_text: str,
 ) -> tuple[str, dict[str, Any] | None]:
-    number, diagnostics = _extract_overlapping_number(paragraph)
-    if not number:
+    """글자 겹치기 문자열을 일반 텍스트에 다시 삽입합니다.
+
+    예:
+      ControlOverlappingLetter = "󰋗󰋣"
+      getNormalString()         = "-2 파우더장"
+
+      결과                    = "󰋗󰋣-2 파우더장"
+
+    숫자 여부와 상관없이 원문 겹침 문자열 자체를 보존합니다.
+    """
+    overlap_value, numeric_value, diagnostics = _extract_overlapping_payload(
+        paragraph
+    )
+
+    if not overlap_value:
         return raw_text, None
 
     stripped = raw_text.lstrip()
-    leading_space = raw_text[:len(raw_text) - len(stripped)]
+    leading_space = raw_text[: len(raw_text) - len(stripped)]
 
-    # 이미 같은 번호가 있으면 중복 추가하지 않습니다.
-    if re.match(rf'^{re.escape(number)}(?:-|\s|$)', stripped):
+    # getNormalString()에 이미 동일한 문자열이 들어간 경우 중복 삽입 방지
+    if stripped.startswith(overlap_value):
         return raw_text, None
 
-    # 네모 숫자 뒤에 -1, -2가 이어지는 대표적인 누락 형태입니다.
-    if re.match(r'^-\d+', stripped):
-        recovered = f'{leading_space}{number}{stripped}'
-    # 컨트롤 자리에 숫자가 통째로 빠지고 본문만 남은 경우입니다.
-    elif stripped:
-        recovered = f'{leading_space}{number} {stripped}'
+    if stripped:
+        # -1, -2처럼 바로 이어지는 하위 번호에는 공백을 넣지 않습니다.
+        if re.match(r"^-\d+", stripped):
+            recovered = f"{leading_space}{overlap_value}{stripped}"
+        else:
+            # 일반 본문 앞의 겹침 문자도 손실되지 않도록 보존합니다.
+            recovered = f"{leading_space}{overlap_value}{stripped}"
     else:
-        recovered = number
+        recovered = f"{leading_space}{overlap_value}"
 
-    return recovered, {
-        'recovered': True,
-        'method': 'overlapping_letter_control',
-        'prefix': number,
-        'confidence': 1.0,
-        'controls': diagnostics,
+    contains_pua = any(
+        (
+            0xE000 <= ord(char) <= 0xF8FF
+            or 0xF0000 <= ord(char) <= 0xFFFFD
+            or 0x100000 <= ord(char) <= 0x10FFFD
+        )
+        for char in overlap_value
+    )
+
+    recovery: dict[str, Any] = {
+        "recovered": recovered != raw_text,
+        "method": (
+            "overlapping_letter_control"
+            if numeric_value is not None
+            else "overlapping_letter_raw"
+        ),
+        # prefix는 숫자로 검증된 경우에만 설정합니다.
+        "prefix": numeric_value,
+        # 원문 문자열 존재 자체는 확정적이지만 숫자 의미는 추측하지 않습니다.
+        "confidence": 1.0,
+        "overlapping_text": overlap_value,
+        "controls": diagnostics,
     }
+
+    if contains_pua:
+        recovery["pua_characters"] = [
+            {
+                "character": char,
+                "codepoint": f"U+{ord(char):05X}",
+                "mapped_value": "",
+            }
+            for char in overlap_value
+            if (
+                0xE000 <= ord(char) <= 0xF8FF
+                or 0xF0000 <= ord(char) <= 0xFFFFD
+                or 0x100000 <= ord(char) <= 0x10FFFD
+            )
+        ]
+
+    return recovered, recovery
 
 
 def extract_hwp_paragraph_text(
@@ -443,7 +662,7 @@ def extract_hwp_paragraph_text(
     if recovery is not None and context is not None:
         context.warn(
             'HWP_OVERLAPPING_NUMBER_RECOVERED',
-            '글자 겹치기 컨트롤에 저장된 실제 숫자를 문단 텍스트에 복원했습니다.',
+            '글자 겹치기 컨트롤에 저장된 원문 문자열을 문단 텍스트에 복원했습니다.',
             source={
                 **(source or {}),
                 'raw_text': raw_text,
@@ -491,7 +710,7 @@ def extract_cell_paragraphs(
             if recovery is not None:
                 context.warn(
                     "HWP_OVERLAPPING_NUMBER_RECOVERED",
-                    "글자 겹치기 컨트롤에 저장된 실제 숫자를 셀 문단에 복원했습니다.",
+                    "글자 겹치기 컨트롤에 저장된 원문 문자열을 셀 문단에 복원했습니다.",
                     source={
                         **paragraph_source,
                         "raw_text": raw_text,
