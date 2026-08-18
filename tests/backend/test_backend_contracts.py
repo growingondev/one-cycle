@@ -14,6 +14,14 @@ from backend.app.services.pipeline_gateway import (
     collect_announcements,
 )
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+from backend.app.services.error_log_service import (
+    VALID_ERROR_TYPES,
+    _resolve_error_links,
+    _validate_error_input,
+)
 
 class CollectionContractTest(unittest.TestCase):
     def test_valid_collection_result_is_accepted(self):
@@ -170,6 +178,108 @@ class ChatContractTest(unittest.TestCase):
                     question="테스트",
                 )
 
+class ErrorLogContractTest(unittest.TestCase):
+    def test_supported_error_types_match_backend_contract(self):
+        self.assertIn("collection", VALID_ERROR_TYPES)
+        self.assertIn("parsing", VALID_ERROR_TYPES)
+        self.assertIn("embedding", VALID_ERROR_TYPES)
+        self.assertIn("rag", VALID_ERROR_TYPES)
+
+    def test_invalid_error_type_is_rejected(self):
+        with self.assertRaises(ValueError):
+            _validate_error_input(
+                error_type="invalid",
+                stage="parsing",
+                message="test error",
+            )
+
+    def test_empty_stage_is_rejected(self):
+        with self.assertRaises(ValueError):
+            _validate_error_input(
+                error_type="parsing",
+                stage=" ",
+                message="test error",
+            )
+
+    def test_empty_message_is_rejected(self):
+        with self.assertRaises(ValueError):
+            _validate_error_input(
+                error_type="parsing",
+                stage="parsing",
+                message=" ",
+            )
+
+    def test_processing_run_resolves_parent_links(self):
+        db = MagicMock()
+
+        processing_run = SimpleNamespace(
+            id=40,
+            document_id=30,
+        )
+        document = SimpleNamespace(
+            id=30,
+            announcement_id=20,
+        )
+        announcement = SimpleNamespace(
+            id=20,
+            collection_run_id=10,
+        )
+        collection_run = SimpleNamespace(
+            id=10,
+        )
+
+        def fake_get(model, object_id):
+            model_name = model.__name__
+
+            mapping = {
+                ("ProcessingRun", 40): processing_run,
+                ("Document", 30): document,
+                ("Announcement", 20): announcement,
+                ("CollectionRun", 10): collection_run,
+            }
+
+            return mapping.get(
+                (model_name, object_id)
+            )
+
+        db.get.side_effect = fake_get
+
+        result = _resolve_error_links(
+            db,
+            collection_run_id=None,
+            announcement_id=None,
+            document_id=None,
+            processing_run_id=40,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "collection_run_id": 10,
+                "announcement_id": 20,
+                "document_id": 30,
+                "processing_run_id": 40,
+            },
+        )
+
+    def test_mismatched_document_is_rejected(self):
+        db = MagicMock()
+
+        processing_run = SimpleNamespace(
+            id=40,
+            document_id=30,
+        )
+
+        db.get.return_value = processing_run
+
+        with self.assertRaises(ValueError):
+            _resolve_error_links(
+                db,
+                collection_run_id=None,
+                announcement_id=None,
+                document_id=999,
+                processing_run_id=40,
+            )
 
 if __name__ == "__main__":
     unittest.main()
