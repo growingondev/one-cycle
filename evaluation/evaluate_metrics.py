@@ -19,6 +19,10 @@ RESULTS_DIR = BASE_DIR / "results"
 DEFAULT_SHEET_NAME = "평가셋"
 DEFAULT_RECALL_THRESHOLD = 0.75
 
+# evaluate_rag.py와 같은 값으로 맞추세요.
+# 코드 수정 후 재평가할 때 001 -> 002 -> 003 으로 변경합니다.
+DEFAULT_RUN_NUMBER = "001"
+
 DEFAULT_RAGAS_BASE_URL = os.getenv(
     "RAGAS_API_BASE_URL",
     "http://127.0.0.1:8080/v1",
@@ -64,8 +68,14 @@ def normalize_dataset_name(value: str) -> str:
 def dataset_paths(dataset: str) -> tuple[Path, Path]:
     dataset = normalize_dataset_name(dataset)
 
-    input_xlsx = RESULTS_DIR / f"{dataset}_FINAL_V1_result.xlsx"
-    output_xlsx = RESULTS_DIR / f"{dataset}_FINAL_V1_scored.xlsx"
+    input_xlsx = (
+        RESULTS_DIR
+        / f"{dataset}_FINAL_V1_RUN_{DEFAULT_RUN_NUMBER}_result.xlsx"
+    )
+    output_xlsx = (
+        RESULTS_DIR
+        / f"{dataset}_FINAL_V1_RUN_{DEFAULT_RUN_NUMBER}_scored.xlsx"
+    )
 
     return input_xlsx, output_xlsx
 

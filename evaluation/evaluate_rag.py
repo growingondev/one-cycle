@@ -28,6 +28,9 @@ DEFAULT_TIMEOUT_SECONDS = int(
     os.getenv("EVAL_TIMEOUT_SECONDS", "600")
 )
 
+# 코드 수정 후 재평가할 때 이 값만 001 -> 002 -> 003 으로 변경하세요.
+DEFAULT_RUN_NUMBER = "001"
+
 
 def normalize_dataset_name(value: str) -> str:
     dataset = value.strip().upper()
@@ -54,8 +57,11 @@ def dataset_paths(dataset: str) -> tuple[Path, Path, str]:
     dataset = normalize_dataset_name(dataset)
 
     input_xlsx = DATASETS_DIR / f"{dataset}_FINAL_V1.xlsx"
-    output_xlsx = RESULTS_DIR / f"{dataset}_FINAL_V1_result.xlsx"
-    default_run_id = f"{dataset}_RUN_001"
+    output_xlsx = (
+        RESULTS_DIR
+        / f"{dataset}_FINAL_V1_RUN_{DEFAULT_RUN_NUMBER}_result.xlsx"
+    )
+    default_run_id = f"{dataset}_RUN_{DEFAULT_RUN_NUMBER}"
 
     return input_xlsx, output_xlsx, default_run_id
 
@@ -445,7 +451,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--run-id",
         default=None,
-        help="생략하면 dataset에 맞춰 GC_RUN_001 또는 HC_RUN_001 사용",
+        help=(
+            "생략하면 DEFAULT_RUN_NUMBER에 맞춰 "
+            "GC_RUN_001, HC_RUN_001 형식으로 자동 설정"
+        ),
     )
 
     parser.add_argument(
