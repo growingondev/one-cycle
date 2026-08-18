@@ -21,7 +21,7 @@ from typing import Any
 # run_pipeline.py처럼 이 파일을 직접 실행해도 config 패키지를
 # 찾을 수 있도록 프로젝트 루트를 sys.path에 추가합니다.
 # ============================================================
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -41,7 +41,6 @@ except ImportError as error:
 # Normalizer 기본 설정
 # ============================================================
 NORMALIZER_NAME = "document_normalizer"
-NORMALIZER_VERSION = "1.6"
 SUPPORTED_DOCUMENT_FORMATS = {"hwp", "hwpx"}
 
 # config.paths에서 관리하는 단계 폴더명을 사용합니다.
@@ -53,19 +52,68 @@ PARSED_STAGE_DIRECTORY_NAME = _PATH_TEMPLATE.parsed.name
 # ============================================================
 # 검증된 Private Use Area 문자 매핑
 # ============================================================
-# 실제 원본 문서에서 문자의 의미를 확인한 경우에만 추가합니다.
+# 실제 원본 HWP/HWPX 문서와 대조해 의미를 확인한 값만 등록합니다.
 #
-# 예:
-# VERIFIED_PRIVATE_USE_MAP = {
-#     "\U000F02D6": "▶",
-#     "\U000F021D": "○",
-# }
+# Parser 단계에서는 PUA/Compose/글자 겹치기 문자를 의미 해석하지 않고
+# 원문 그대로 보존합니다.
+# Normalizer 단계에서만 검증된 PUA를 일반 텍스트로 변환합니다.
+#
+# 확인된 문자:
+# - U+F0A0  -> 가운데점(·)
+# - U+F021D -> 네모 안 A -> A
+# - U+F021E -> 네모 안 B -> B
+#
+# 확인된 네모 숫자:
+# - U+F02CE ~ U+F02D6 -> 1 ~ 9
+# - U+F02D7 -> 두 자리 숫자의 십의 자리 1
+# - U+F02E0 ~ U+F02E8 -> 두 자리 숫자의 일의 자리 0 ~ 8
+#
+# 따라서 다음 조합은 10~18로 정규화됩니다.
+# - U+F02D7 + U+F02E0 -> 10
+# - U+F02D7 + U+F02E1 -> 11
+# - ...
+# - U+F02D7 + U+F02E8 -> 18
+#
+# 이 값들은 표에서 옵션 코드처럼 사용되므로 네모 모양 자체는 제거하고,
+# 검색·구조화에 사용하기 쉬운 일반 문자/숫자로 통일합니다.
 #
 # 주의:
-# - 검증되지 않은 PUA 문자를 임의로 변경하지 않습니다.
+# - 검증되지 않은 PUA 문자는 임의로 변경하지 않습니다.
 # - replacement character인 '�'도 임의로 치환하지 않습니다.
 # ============================================================
-VERIFIED_PRIVATE_USE_MAP: dict[str, str] = {}
+VERIFIED_PRIVATE_USE_MAP: dict[str, str] = {
+    # 가운데점
+    "\uF0A0": "·",
+
+    # 네모 안 영문 옵션 코드
+    "\U000F021D": "A",
+    "\U000F021E": "B",
+
+    # 네모 안 한 자리 숫자 1~9
+    "\U000F02CE": "1",
+    "\U000F02CF": "2",
+    "\U000F02D0": "3",
+    "\U000F02D1": "4",
+    "\U000F02D2": "5",
+    "\U000F02D3": "6",
+    "\U000F02D4": "7",
+    "\U000F02D5": "8",
+    "\U000F02D6": "9",
+
+    # 두 자리 숫자의 십의 자리
+    "\U000F02D7": "1",
+
+    # 두 자리 숫자의 일의 자리 0~8
+    "\U000F02E0": "0",
+    "\U000F02E1": "1",
+    "\U000F02E2": "2",
+    "\U000F02E3": "3",
+    "\U000F02E4": "4",
+    "\U000F02E5": "5",
+    "\U000F02E6": "6",
+    "\U000F02E7": "7",
+    "\U000F02E8": "8",
+}
 
 
 # ============================================================
@@ -1530,7 +1578,6 @@ def normalize_document(
         "parser": deep_copy(as_dict(document.get("parser"))),
         "normalizer": {
             "engine": NORMALIZER_NAME,
-            "version": NORMALIZER_VERSION,
         },
         "sections": [],
     }
