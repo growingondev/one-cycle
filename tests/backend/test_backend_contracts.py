@@ -1,27 +1,28 @@
 import os
 import sys
 import unittest
-from types import ModuleType
-from unittest.mock import patch
+from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from backend.app.services.chat_service import answer_question_via_rag
 from backend.app.services.collection_service import (
     VALID_DOCUMENT_FORMATS,
     _validate_collection_result,
 )
-from backend.app.services.pipeline_gateway import (
-    PipelineUnavailableError,
-    collect_announcements,
-)
-
-from types import SimpleNamespace
-from unittest.mock import MagicMock
-
 from backend.app.services.error_log_service import (
     VALID_ERROR_TYPES,
     _resolve_error_links,
     _validate_error_input,
 )
+from backend.app.services.pipeline_gateway import (
+    PipelineUnavailableError,
+    collect_announcements,
+)
+from backend.app.services.pipeline_persistence import (
+    get_registered_document_context,
+    mark_processing_run_failed,
+)
+
 
 class CollectionContractTest(unittest.TestCase):
     def test_valid_collection_result_is_accepted(self):
@@ -120,6 +121,195 @@ class PipelineGatewayContractTest(unittest.TestCase):
         )
 
 
+class PipelinePersistenceContractTest(unittest.TestCase):
+    def test_registered_document_context_includes_storage_path(self):
+        db = MagicMock()
+
+        announcement = SimpleNamespace(
+            id=20,
+            source_announcement_id="LH-TEST-001",
+        )
+        document = SimpleNamespace(
+            id=30,
+            original_filename="sample.hwp",
+            document_format="hwp",
+            storage_path="/data/documents/sample.hwp",
+        )
+
+        db.execute.return_value.one_or_none.return_value = (
+            announcement,
+            document,
+        )
+
+        with patch(
+            "backend.app.services.pipeline_persistence.SessionLocal"
+        ) as session_local:
+            session_local.return_value.__enter__.return_value = db
+
+            result = get_registered_document_context(
+                document_id=30,
+            )
+
+        self.assertEqual(
+            result["announcement_key"],
+            "LH-TEST-001",
+        )
+        self.assertEqual(
+            result["announcement_db_id"],
+            20,
+        )
+        self.assertEqual(
+            result["document_db_id"],
+            30,
+        )
+        self.assertEqual(
+            result["filename"],
+            "sample.hwp",
+        )
+        self.assertEqual(
+            result["format"],
+            "hwp",
+        )
+        self.assertEqual(
+            result["storage_path"],
+            "/data/documents/sample.hwp",
+        )
+
+    def test_mark_processing_run_failed_preserves_verification(self):
+        db = MagicMock()
+
+        processing_run = SimpleNamespace(
+            id=40,
+            document_id=30,
+            execution_status="succeeded",
+            verification_status="pass",
+            current_stage="embedding",
+            error_stage=None,
+            error_code=None,
+            error_message=None,
+            exit_code=0,
+            finished_at=None,
+            is_active=False,
+        )
+
+        db.get.return_value = processing_run
+
+        with patch(
+            "backend.app.services.pipeline_persistence.SessionLocal"
+        ) as session_local:
+            session_local.begin.return_value.__enter__.return_value = db
+
+            result = mark_processing_run_failed(
+                40,
+                stage="key_information",
+                error_code="KEY_INFORMATION_EXTRACTION_FAILED",
+                error_message="핵심정보 추출 실패",
+                exit_code=1,
+            )
+
+        self.assertEqual(
+            processing_run.execution_status,
+            "failed",
+        )
+        self.assertEqual(
+            processing_run.current_stage,
+            "key_information",
+        )
+        self.assertEqual(
+            processing_run.error_stage,
+            "key_information",
+        )
+        self.assertEqual(
+            processing_run.error_code,
+            "KEY_INFORMATION_EXTRACTION_FAILED",
+        )
+        self.assertEqual(
+            processing_run.error_message,
+            "핵심정보 추출 실패",
+        )
+        self.assertEqual(
+            processing_run.exit_code,
+            1,
+        )
+        self.assertIsNotNone(
+            processing_run.finished_at,
+        )
+        self.assertFalse(
+            processing_run.is_active,
+        )
+
+        # Verification 단계가 이미 pass였다면 그대로 유지되어야 한다.
+        self.assertEqual(
+            processing_run.verification_status,
+            "pass",
+        )
+
+        self.assertEqual(
+            result["execution_status"],
+            "failed",
+        )
+        self.assertEqual(
+            result["verification_status"],
+            "pass",
+        )
+        self.assertEqual(
+            result["current_stage"],
+            "key_information",
+        )
+        self.assertFalse(
+            result["is_active"],
+        )
+
+        db.flush.assert_called_once()
+
+    def test_active_processing_run_cannot_be_marked_failed(self):
+        db = MagicMock()
+
+        processing_run = SimpleNamespace(
+            id=40,
+            document_id=30,
+            execution_status="succeeded",
+            verification_status="pass",
+            current_stage="embedding",
+            error_stage=None,
+            error_code=None,
+            error_message=None,
+            exit_code=0,
+            finished_at=None,
+            is_active=True,
+        )
+
+        db.get.return_value = processing_run
+
+        with patch(
+            "backend.app.services.pipeline_persistence.SessionLocal"
+        ) as session_local:
+            session_local.begin.return_value.__enter__.return_value = db
+
+            with self.assertRaises(RuntimeError):
+                mark_processing_run_failed(
+                    40,
+                    stage="key_information",
+                    error_code="KEY_INFORMATION_EXTRACTION_FAILED",
+                    error_message="핵심정보 추출 실패",
+                )
+
+        # 기존 active ProcessingRun은 변경되지 않아야 한다.
+        self.assertEqual(
+            processing_run.execution_status,
+            "succeeded",
+        )
+        self.assertEqual(
+            processing_run.verification_status,
+            "pass",
+        )
+        self.assertTrue(
+            processing_run.is_active,
+        )
+
+        db.flush.assert_not_called()
+
+
 class ChatContractTest(unittest.TestCase):
     def test_rag_dict_is_converted_to_chat_response(self):
         def fake_answer_question(
@@ -177,6 +367,7 @@ class ChatContractTest(unittest.TestCase):
                     announcement_id=10,
                     question="테스트",
                 )
+
 
 class ErrorLogContractTest(unittest.TestCase):
     def test_supported_error_types_match_backend_contract(self):
@@ -280,6 +471,7 @@ class ErrorLogContractTest(unittest.TestCase):
                 document_id=999,
                 processing_run_id=40,
             )
+
 
 if __name__ == "__main__":
     unittest.main()
