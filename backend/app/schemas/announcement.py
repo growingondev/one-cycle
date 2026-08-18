@@ -10,6 +10,7 @@ class AnnouncementListItem(BaseModel):
     region: str | None = None
     announcementDate: date | None = None
     publicationStatus: str | None = None
+    deadlineDate: str | None = None
 
 
 class AnnouncementListResponse(BaseModel):
