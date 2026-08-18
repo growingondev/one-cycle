@@ -413,25 +413,43 @@ export function DetailScreen({
   ========================= */
   const scheduleData: [string, string][] = [
     ["게시일", displayAnnouncementDate],
-    ["마감일", toDisplayText(currentNotice.deadline_date, "-")],
-    ["운영 시간", toDisplayText(applicationPeriod.operating_hours, "공고문 참조")],
-    ["종료 조건", toDisplayText(applicationPeriod.end_condition, "공고문 참조")],
+    [
+      "신청 기간",
+      toDisplayText(
+        applicationPeriod.start && applicationPeriod.end
+          ? `${applicationPeriod.start} ~ ${applicationPeriod.end}`
+          : applicationPeriod.text,
+        "공고문 참조"
+      ),
+    ],
+    [
+      "마감일",
+      toDisplayText(
+        currentNotice.deadline_date ?? applicationPeriod.end,
+        "-"
+      ),
+    ],
   ];
 
 
   /* =========================
      공급 정보
   ========================= */
-  const currentSupplyUnits = supplyInformation.current_supply_units;
-  const contractDeposit = supplyInformation.contract_deposit;
-  const priceUnit = supplyInformation.price_unit ?? "";
-
   const supplyData: [string, string][] = [
-    ["공급 위치", toDisplayText(supplyInformation.block ?? currentNotice.region, "공고문 참조")],
-    ["공고 유형", toDisplayText(currentNotice.notice_type || supplyInformation.housing_category, "공고문 참조")],
-    ["공급 세대", typeof currentSupplyUnits === "number" ? `${currentSupplyUnits.toLocaleString()}세대` : toDisplayText(currentSupplyUnits, "공고문 참조")],
-    ["입주 예정", toDisplayText(supplyInformation.move_in_expected, "공고문 참조")],
-    ["계약금", typeof contractDeposit === "number" ? `${contractDeposit.toLocaleString()}${priceUnit}` : toDisplayText(contractDeposit, "공고문 참조")],
+    [
+      "공급 위치",
+      toDisplayText(
+        supplyInformation.block ?? currentNotice.region,
+        "공고문 참조"
+      ),
+    ],
+    [
+      "공급 내용",
+      toDisplayText(
+        supplyInformation.summary ?? supplyInformation.text,
+        "공고문 참조"
+      ),
+    ],
   ];
 
 
@@ -439,8 +457,20 @@ export function DetailScreen({
      신청 자격
   ========================= */
   const eligibilityData: [string, string][] = [
-    ["신청 자격", toDisplayText(eligibility.summary, "공고문 세부 요건 참조")],
-    ["소득/자산", toDisplayText(incomeAssetCriteria.summary, "공고문 세부 요건 참조")],
+    [
+      "신청 자격",
+      toDisplayText(
+        eligibility.summary ?? eligibility.text,
+        "공고문 세부 요건 참조"
+      ),
+    ],
+    [
+      "소득/자산",
+      toDisplayText(
+        incomeAssetCriteria.summary ?? incomeAssetCriteria.text,
+        "공고문 세부 요건 참조"
+      ),
+    ],
   ];
 
 
@@ -455,10 +485,13 @@ export function DetailScreen({
 
   const docsData: string[] = personalContractExamples.length > 0
     ? [...personalContractExamples, ...(proxyContractNote ? [`대리계약: ${toDisplayText(proxyContractNote, "")}`] : [])]
-    : [toDisplayText(requiredDocuments.summary, "제출 서류 정보가 없습니다. 상세 공고문을 확인하세요.")];
+    : [toDisplayText(requiredDocuments.summary ?? requiredDocuments.text, "제출 서류 정보가 없습니다. 상세 공고문을 확인하세요.")];
 
   // 💡 원본 근거 텍스트 (백엔드 구조에 맞춰 수정 가능. 현재는 fallback 제공)
-  const docsEvidenceText = requiredDocuments.evidence_text || "원본 HWP 발췌: 본 공고문에 안내된 필수 제출 서류는 공고일 이후 발급된 서류에 한하며, 자세한 내용은 원본 문서를 참조하시기 바랍니다.";
+  const docsEvidenceText =
+    requiredDocuments.evidence_text ??
+    requiredDocuments.text ??
+    "추출된 근거 정보가 없습니다."
 
 
   /* =========================
