@@ -61,6 +61,16 @@ sentencepiece==0.2.2
 
 
 # ------------------------------------------------------------
+# Evaluation
+# ------------------------------------------------------------
+
+ragas==0.4.3
+openai==2.54.0
+sentence-transformers==5.7.0
+openpyxl==3.1.5
+
+
+# ------------------------------------------------------------
 # GPU / PyTorch Runtime
 # ------------------------------------------------------------
 #
@@ -86,4 +96,3 @@ cuda-toolkit==13.0.3.0
 # - llama.cpp is built/installed separately.
 #
 # - The Qwen GGUF model is stored outside the project source tree.
-#
