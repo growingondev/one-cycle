@@ -21,6 +21,7 @@ def list_active_announcements(
     search: str | None,
     region: str | None,
     status_filter: str | None,
+    sort_order: str = "latest",
 ) -> AnnouncementListResponse:
     conditions = [
         "a.collection_run_id = ss.active_collection_run_id",
@@ -37,10 +38,32 @@ def list_active_announcements(
         conditions.append("a.region = :region")
         params["region"] = region
     if status_filter:
-        conditions.append("a.publication_status = :status")
-        params["status"] = status_filter
+        if status_filter == "상태 미확인":
+            conditions.append(
+                "("
+                "a.publication_status IS NULL "
+                "OR a.publication_status = '' "
+                "OR a.publication_status = 'fixture'"
+                ")"
+            )
+        else:
+            conditions.append(
+                "a.publication_status = :status"
+            )
+            params["status"] = status_filter
 
     where = " AND ".join(conditions)
+
+    if sort_order == "oldest":
+        order_by = (
+            "a.announcement_date ASC NULLS LAST, "
+            "a.id ASC"
+        )
+    else:
+        order_by = (
+            "a.announcement_date DESC NULLS LAST, "
+            "a.id DESC"
+        )
 
     total = db.execute(
         text(
@@ -63,12 +86,15 @@ def list_active_announcements(
                 a.title,
                 a.region,
                 a.announcement_date,
-                a.publication_status
+                a.publication_status,
+                ki.application_period ->> 'end' AS deadline_date
             FROM system_state ss
             JOIN announcements a
               ON a.collection_run_id = ss.active_collection_run_id
+            LEFT JOIN key_information ki
+              ON ki.announcement_id = a.id
             WHERE {where}
-            ORDER BY a.announcement_date DESC NULLS LAST, a.id DESC
+            ORDER BY {order_by}
             OFFSET :offset
             LIMIT :limit
             """
@@ -84,6 +110,7 @@ def list_active_announcements(
                 region=row["region"],
                 announcementDate=row["announcement_date"],
                 publicationStatus=row["publication_status"],
+                deadlineDate=row["deadline_date"],
             )
             for row in rows
         ],

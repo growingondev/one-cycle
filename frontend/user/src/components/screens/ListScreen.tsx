@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { ChevronRight } from "lucide-react";
 import { UserLayout } from "../layout/UserLayout";
 import { DropdownSelect } from "../common/DropdownSelect";
@@ -27,6 +27,7 @@ type Announcement = {
   notice_type?: string;
   post_date?: string;
   deadline_date?: string;
+  deadlineDate?: string | null;
   publication_status?: string | null;
 };
 
@@ -46,6 +47,30 @@ function formatPublicationStatus(
   return status;
 }
 
+function inferNoticeType(
+  title: string | null | undefined
+) {
+  const value = title ?? "";
+
+  const rules: [string, string][] = [
+    ["공공임대", "공공임대"],
+    ["국민임대", "국민임대"],
+    ["영구임대", "영구임대"],
+    ["행복주택", "행복주택"],
+    ["매입임대", "매입임대"],
+    ["분양", "분양"],
+  ];
+
+  for (const [keyword, label] of rules) {
+    if (value.includes(keyword)) {
+      return label;
+    }
+  }
+
+  return "주택공고";
+}
+
+
 export function ListScreen({
   go,
   showToast,
@@ -56,109 +81,128 @@ export function ListScreen({
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [query, setQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [region, setRegion] = useState("지역 전체");
+  const [region, setRegion] = useState("전국");
   const [status, setStatus] = useState("공고 상태 전체");
   const [sort, setSort] = useState("최신순");
   const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(1);
 
   const pageSize = 6;
 
   useEffect(() => {
     const params = new URLSearchParams();
-    params.set("size", "100");
+
+    params.set(
+      "page",
+      String(page)
+    );
+
+    params.set(
+      "size",
+      String(pageSize)
+    );
+
+    params.set(
+      "sort",
+      sort === "오래된순"
+        ? "oldest"
+        : "latest"
+    );
 
     if (searchQuery) {
-      params.set("search", searchQuery);
+      params.set(
+        "search",
+        searchQuery
+      );
     }
 
-    if (region !== "지역 전체") {
-      params.set("region", region);
+    // Nationwide means no region restriction.
+    if (region !== "전국") {
+      params.set(
+        "region",
+        region
+      );
     }
 
-    if (status !== "공고 상태 전체") {
-      params.set("status", status);
+    if (
+      status !==
+      "공고 상태 전체"
+    ) {
+      params.set(
+        "status",
+        status
+      );
     }
 
-    fetch(`${API_BASE_URL}/announcements?${params.toString()}`)
+    fetch(
+      `${API_BASE_URL}/announcements?${params.toString()}`
+    )
       .then(async (res) => {
         if (!res.ok) {
-          const text = await res.text();
+          const text =
+            await res.text();
+
           throw new Error(
-            `서버 응답 오류: ${res.status} ${res.statusText}\n${text}`
+            `Backend response error: ${res.status} ${res.statusText}\n${text}`
           );
         }
+
         return res.json();
       })
       .then((data) => {
-        console.log("공고 목록 API 응답:", data);
-
-        if (Array.isArray(data?.items)) {
-          setAnnouncements(data.items);
-
-          if (data.items.length > 0) {
-            showToast("백엔드 연동 성공: 데이터를 불러왔습니다.");
-          } else {
-            showToast("백엔드와 연결되었으나 데이터가 없습니다.");
-          }
-          return;
+        if (
+          !Array.isArray(
+            data?.items
+          )
+        ) {
+          throw new Error(
+            "Unexpected announcement response"
+          );
         }
 
-        console.error("예상하지 못한 공고 목록 응답 형식:", data);
-        setAnnouncements([]);
-        showToast("백엔드 응답 형식이 올바르지 않습니다.");
+        setAnnouncements(
+          data.items
+        );
+
+        setTotal(
+          Number(
+            data.total ?? 0
+          )
+        );
+
+        setPages(
+          Math.max(
+            1,
+            Number(
+              data.total_pages ?? 0
+            )
+          )
+        );
       })
       .catch((err) => {
-        console.error("Backend fetch error:", err);
+        console.error(
+          "Backend fetch error:",
+          err
+        );
+
         setAnnouncements([]);
+        setTotal(0);
+        setPages(1);
+
         showToast(
-          "백엔드 연결 실패. 서버가 켜져있는지, 주소가 맞는지 확인하세요."
+          "공고 목록을 불러오지 못했습니다."
         );
       });
-  }, [searchQuery, region, status]);
+  }, [
+    searchQuery,
+    region,
+    status,
+    sort,
+    page,
+  ]);
 
-  const filtered = useMemo(() => {
-    return announcements
-      .filter((a) => {
-        const title = formatAnnouncementTitle(a.title);
-        const announcementRegion = a.region ?? "";
-        const announcementStatus = formatPublicationStatus(a.publication_status || a.publicationStatus);
-
-        const matchesSearch =
-          !searchQuery ||
-          title.toLowerCase().includes(searchQuery.toLowerCase());
-
-        const matchesRegion =
-          region === "지역 전체" || announcementRegion === region;
-
-        const matchesStatus =
-          status === "공고 상태 전체" ||
-          announcementStatus === status;
-
-        return matchesSearch && matchesRegion && matchesStatus;
-      })
-      .sort((a, b) => {
-        // 에러 수정: 괄호를 씌워서 우선순위를 명확히 함
-        const aDate = (a.post_date || a.announcementDate) ?? "";
-        const bDate = (b.post_date || b.announcementDate) ?? "";
-
-        return sort === "최신순"
-          ? bDate.localeCompare(aDate)
-          : aDate.localeCompare(bDate);
-      });
-  }, [announcements, searchQuery, region, status, sort]);
-
-  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
-
-  const visible = filtered.slice(
-    (page - 1) * pageSize,
-    page * pageSize
-  );
-
-  useEffect(() => {
-    if (page > pages) {
-      setPage(pages);
-    }
-  }, [pages, page]);
+  const visible = announcements;
 
   const search = () => {
     setSearchQuery(query.trim());
@@ -217,7 +261,6 @@ export function ListScreen({
           <DropdownSelect
             label="지역 필터"
             values={[
-              "지역 전체",
               "전국",
               "서울특별시",
               "부산광역시",
@@ -275,7 +318,7 @@ export function ListScreen({
 
         <p className="flex items-center gap-2 text-xs lg:text-[13px] text-slate-500 mt-5">
           <Icon name="info" size={14} />
-          총 {filtered.length}건의 공고가 있습니다.
+          총 {total}건의 공고가 있습니다.
         </p>
       </div>
 
@@ -319,7 +362,7 @@ export function ListScreen({
             </div>
             
             <div>
-              {a.deadline_date ?? "-"}
+              {a.deadlineDate ?? a.deadline_date ?? "-"}
             </div>
 
             <div>
@@ -376,7 +419,7 @@ export function ListScreen({
               <div className="flex flex-col gap-1 text-[12px] text-slate-500">
                 <span>📍 {a.region ?? "-"}</span>
                 {/* 에러 수정: 괄호를 씌워서 처리 */}
-                <span>📅 {(a.post_date || a.announcementDate) ?? "-"} ~ {a.deadline_date ?? "-"}</span>
+                <span>📅 {(a.post_date || a.announcementDate) ?? "-"} ~ {a.deadlineDate ?? a.deadline_date ?? "-"}</span>
               </div>
             </div>
 
