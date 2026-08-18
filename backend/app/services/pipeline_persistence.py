@@ -282,6 +282,11 @@ def get_registered_document_context(document_id: int):
             "document_db_id": document.id,
             "filename": document.original_filename,
             "format": document.document_format,
+            "storage_path": (
+                str(document.storage_path)
+                if document.storage_path
+                else None
+            ),
         }
 
 
@@ -704,6 +709,70 @@ def persist_document_outputs(document_id: int):
     result["document_db_id"] = context["document_db_id"]
     return result
 
+def mark_processing_run_failed(
+    processing_run_id: int,
+    *,
+    stage: str,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    exit_code: int | None = 1,
+):
+    normalized_stage = str(stage or "").strip()
+
+    if not normalized_stage:
+        raise ValueError("stage는 필수입니다.")
+
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal.begin() as db:
+        target = db.get(
+            ProcessingRun,
+            processing_run_id,
+        )
+
+        if target is None:
+            raise RuntimeError(
+                f"ProcessingRun 없음: {processing_run_id}"
+            )
+
+        # 기존 정상 active ProcessingRun은 실패 상태로 바꾸지 않는다.
+        if target.is_active:
+            raise RuntimeError(
+                "active ProcessingRun은 실패 처리할 수 없습니다."
+            )
+
+        target.execution_status = "failed"
+        target.current_stage = normalized_stage
+        target.error_stage = normalized_stage
+        target.error_code = (
+            str(error_code).strip()
+            if error_code
+            else None
+        )
+        target.error_message = (
+            str(error_message)
+            if error_message is not None
+            else None
+        )
+        target.exit_code = exit_code
+        target.finished_at = now
+        target.is_active = False
+
+        # verification_status는 수정하지 않는다.
+        # 기존 active ProcessingRun 및 KeyInformation도 수정하지 않는다.
+
+        db.flush()
+
+        return {
+            "processing_run_id": target.id,
+            "document_id": target.document_id,
+            "execution_status": target.execution_status,
+            "verification_status": target.verification_status,
+            "current_stage": target.current_stage,
+            "error_stage": target.error_stage,
+            "error_code": target.error_code,
+            "is_active": target.is_active,
+        }
 
 def activate_processing_run(processing_run_id):
     now = datetime.now(timezone.utc)
