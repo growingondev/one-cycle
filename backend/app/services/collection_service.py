@@ -9,6 +9,7 @@ from backend.app.db.session import SessionLocal
 from backend.app.models.announcement import Announcement
 from backend.app.models.collection_run import CollectionRun
 from backend.app.models.document import Document
+from backend.app.services.error_log_service import record_error
 
 
 VALID_RUN_STATUSES = {
@@ -27,6 +28,12 @@ VALID_DOWNLOAD_STATUSES = {
 VALID_DOCUMENT_FORMATS = {
     "hwp",
     "hwpx",
+}
+
+VALID_RECOLLECT_STATUSES = {
+    "success",
+    "partial",
+    "failed",
 }
 
 
@@ -78,6 +85,66 @@ def _validate_collection_result(result: dict[str, Any]) -> None:
 
     if not isinstance(data, list):
         raise ValueError("crawler data는 list여야 합니다.")
+
+
+def _validate_recollection_result(
+    result: dict[str, Any],
+    *,
+    expected_source_announcement_id: str,
+) -> None:
+    if not isinstance(result, dict):
+        raise ValueError("crawler 재수집 결과는 dict여야 합니다.")
+
+    execution_id = str(
+        result.get("execution_id") or ""
+    ).strip()
+
+    if not execution_id:
+        raise ValueError(
+            "crawler 재수집 execution_id가 없습니다."
+        )
+
+    status = str(
+        result.get("status") or ""
+    ).strip()
+
+    if status not in VALID_RECOLLECT_STATUSES:
+        raise ValueError(
+            f"지원하지 않는 recollect status입니다: {status}"
+        )
+
+    source_announcement_id = str(
+        result.get("source_announcement_id") or ""
+    ).strip()
+
+    if not source_announcement_id:
+        raise ValueError(
+            "crawler 재수집 source_announcement_id가 없습니다."
+        )
+
+    if (
+        source_announcement_id
+        != expected_source_announcement_id
+    ):
+        raise ValueError(
+            "재수집 대상 공고 식별자가 일치하지 않습니다. "
+            f"expected={expected_source_announcement_id}, "
+            f"actual={source_announcement_id}"
+        )
+
+    data = result.get("data")
+
+    if data is not None and not isinstance(data, dict):
+        raise ValueError(
+            "crawler 재수집 data는 dict 또는 None이어야 합니다."
+        )
+
+    errors = result.get("errors")
+
+    if errors is not None and not isinstance(errors, list):
+        raise ValueError(
+            "crawler 재수집 errors는 list여야 합니다."
+        )
 
 
 def persist_collection_result(
@@ -198,7 +265,6 @@ def persist_collection_result(
                     or ""
                 ).strip().lower()
 
-                # MVP에서는 HWP/HWPX만 DB 분석 대상으로 저장
                 if document_format not in VALID_DOCUMENT_FORMATS:
                     continue
 
@@ -269,10 +335,6 @@ def persist_collection_result(
 def collect_and_persist() -> dict[str, Any]:
     """
     실제 Crawler 실행 후 결과를 DB에 저장한다.
-
-    crawler import를 함수 내부에서 수행해서
-    DB 저장 로직 자체는 Selenium 설치 여부와 독립적으로
-    테스트할 수 있도록 한다.
     """
 
     from crawler.crawler import crawl_lh_notices
@@ -280,3 +342,278 @@ def collect_and_persist() -> dict[str, Any]:
     result = crawl_lh_notices()
 
     return persist_collection_result(result)
+
+
+def recollect_and_persist(
+    *,
+    announcement_id: int,
+) -> dict[str, Any]:
+    """
+    기존 Announcement 한 건을 다시 수집하고
+    새 HWP/HWPX Document를 DB에 저장한다.
+
+    동일 파일명 + 동일 checksum의 문서는
+    중복 저장하지 않는다.
+
+    Crawler 오류는 Backend ErrorLog에 저장한다.
+    """
+
+    if (
+        isinstance(announcement_id, bool)
+        or not isinstance(announcement_id, int)
+        or announcement_id <= 0
+    ):
+        raise ValueError(
+            "announcement_id는 1 이상의 정수여야 합니다."
+        )
+
+    # 1. Backend DB의 공고 식별 정보 조회
+    with SessionLocal() as db:
+        announcement = db.get(
+            Announcement,
+            announcement_id,
+        )
+
+        if announcement is None:
+            raise ValueError(
+                f"공고를 찾을 수 없습니다: {announcement_id}"
+            )
+
+        source_announcement_id = str(
+            announcement.source_announcement_id
+        ).strip()
+
+        detail_url = str(
+            announcement.detail_url
+        ).strip()
+
+        collection_run_id = (
+            announcement.collection_run_id
+        )
+
+    if not source_announcement_id:
+        raise ValueError(
+            "공고의 source_announcement_id가 없습니다."
+        )
+
+    if not detail_url:
+        raise ValueError(
+            "공고의 detail_url이 없습니다."
+        )
+
+    # 2. Crawler 개별 재수집 callable 실행
+    from crawler.crawler import recollect_lh_notice
+
+    crawler_result = recollect_lh_notice(
+        source_announcement_id=source_announcement_id,
+        detail_url=detail_url,
+    )
+
+    _validate_recollection_result(
+        crawler_result,
+        expected_source_announcement_id=(
+            source_announcement_id
+        ),
+    )
+
+    data = crawler_result.get("data") or {}
+    raw_documents = data.get("documents") or []
+
+    new_document_ids: list[int] = []
+    reused_document_ids: list[int] = []
+    document_by_filename: dict[str, int] = {}
+
+    # 3. 성공적으로 다운로드된 HWP/HWPX 저장
+    with SessionLocal.begin() as db:
+        announcement_exists = db.get(
+            Announcement,
+            announcement_id,
+        )
+
+        if announcement_exists is None:
+            raise ValueError(
+                f"공고를 찾을 수 없습니다: {announcement_id}"
+            )
+
+        for raw_document in raw_documents:
+            document_format = str(
+                raw_document.get("file_format")
+                or ""
+            ).strip().lower()
+
+            if document_format not in VALID_DOCUMENT_FORMATS:
+                continue
+
+            file_name = str(
+                raw_document.get("file_name")
+                or ""
+            ).strip()
+
+            if not file_name:
+                raise ValueError(
+                    "재수집 문서의 file_name이 없습니다."
+                )
+
+            download_status = str(
+                raw_document.get("download_status")
+                or ""
+            ).strip()
+
+            if download_status not in VALID_DOWNLOAD_STATUSES:
+                raise ValueError(
+                    "지원하지 않는 download_status입니다: "
+                    f"{download_status}"
+                )
+
+            checksum = (
+                str(
+                    raw_document.get(
+                        "checksum_sha256"
+                    )
+                    or ""
+                ).strip()
+                or None
+            )
+
+            existing_document = None
+
+            if checksum:
+                existing_document = db.scalar(
+                    select(Document).where(
+                        Document.announcement_id
+                        == announcement_id,
+                        Document.original_filename
+                        == file_name,
+                        Document.checksum_sha256
+                        == checksum,
+                    )
+                )
+
+            if existing_document is not None:
+                reused_document_ids.append(
+                    existing_document.id
+                )
+
+                document_by_filename[
+                    file_name
+                ] = existing_document.id
+
+                continue
+
+            document = Document(
+                announcement_id=announcement_id,
+                original_filename=file_name,
+                document_format=document_format,
+                storage_path=(
+                    str(
+                        raw_document.get(
+                            "storage_path"
+                        )
+                        or ""
+                    ).strip()
+                    or None
+                ),
+                file_size_bytes=int(
+                    raw_document.get(
+                        "file_size_bytes"
+                    )
+                    or 0
+                ),
+                checksum_sha256=checksum,
+                download_status=download_status,
+                error_message=raw_document.get(
+                    "error_message"
+                ),
+            )
+
+            db.add(document)
+            db.flush()
+
+            new_document_ids.append(
+                document.id
+            )
+
+            document_by_filename[
+                file_name
+            ] = document.id
+
+    # 4. Crawler 오류를 Backend ErrorLog에 저장
+    crawler_errors = (
+        crawler_result.get("errors")
+        or []
+    )
+
+    recorded_error_ids: list[int] = []
+
+    for raw_error in crawler_errors:
+        file_name = str(
+            raw_error.get("file_name")
+            or ""
+        ).strip()
+
+        error_result = record_error(
+            error_type=str(
+                raw_error.get("error_type")
+                or "collection"
+            ).strip(),
+            stage=str(
+                raw_error.get("stage")
+                or "recollect"
+            ).strip(),
+            error_code=(
+                str(
+                    raw_error.get("error_code")
+                    or ""
+                ).strip()
+                or None
+            ),
+            message=str(
+                raw_error.get("message")
+                or "Crawler 재수집 오류"
+            ),
+            collection_run_id=collection_run_id,
+            announcement_id=announcement_id,
+            document_id=(
+                document_by_filename.get(
+                    file_name
+                )
+                if file_name
+                else None
+            ),
+        )
+
+        error_id = error_result.get("error_id")
+
+        if error_id is not None:
+            recorded_error_ids.append(
+                int(error_id)
+            )
+
+    all_document_ids = (
+        new_document_ids
+        + reused_document_ids
+    )
+
+    return {
+        "execution_id": crawler_result["execution_id"],
+        "status": crawler_result["status"],
+        "announcement_id": announcement_id,
+        "source_announcement_id": (
+            source_announcement_id
+        ),
+        "detail_url": detail_url,
+        "document_count": len(
+            all_document_ids
+        ),
+        "new_document_ids": (
+            new_document_ids
+        ),
+        "reused_document_ids": (
+            reused_document_ids
+        ),
+        "document_ids": all_document_ids,
+        "error_count": len(
+            recorded_error_ids
+        ),
+        "error_ids": recorded_error_ids,
+    }
