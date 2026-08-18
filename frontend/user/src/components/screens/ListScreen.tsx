@@ -64,7 +64,22 @@ export function ListScreen({
   const pageSize = 6;
 
   useEffect(() => {
-    fetch(`${API_BASE_URL}/announcements`)
+    const params = new URLSearchParams();
+    params.set("size", "100");
+
+    if (searchQuery) {
+      params.set("search", searchQuery);
+    }
+
+    if (region !== "지역 전체") {
+      params.set("region", region);
+    }
+
+    if (status !== "공고 상태 전체") {
+      params.set("status", status);
+    }
+
+    fetch(`${API_BASE_URL}/announcements?${params.toString()}`)
       .then(async (res) => {
         if (!res.ok) {
           const text = await res.text();
@@ -99,7 +114,7 @@ export function ListScreen({
           "백엔드 연결 실패. 서버가 켜져있는지, 주소가 맞는지 확인하세요."
         );
       });
-  }, []);
+  }, [searchQuery, region, status]);
 
   const filtered = useMemo(() => {
     return announcements
@@ -205,12 +220,22 @@ export function ListScreen({
               "지역 전체",
               "전국",
               "서울특별시",
+              "부산광역시",
+              "대구광역시",
+              "인천광역시",
+              "광주광역시",
+              "대전광역시",
               "울산광역시",
+              "세종특별자치시",
+              "경기도",
+              "강원특별자치도",
               "충청북도",
               "충청남도",
-              "경기도",
+              "전북특별자치도",
+              "전라남도",
+              "경상북도",
               "경상남도",
-              "부산광역시"
+              "제주특별자치도",
             ]}
             value={region}
             onChange={(v) => {
