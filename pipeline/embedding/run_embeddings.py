@@ -49,6 +49,61 @@ from pipeline.embedding.validator import (
     validate_multiple_documents,
 )
 
+from backend.app.services.error_log_service import record_error
+
+
+_LOGGED_ERROR_IDS: set[int] = set()
+
+
+def log_embedding_error(
+    *,
+    error: Exception,
+    source_path: Path | None = None,
+    announcement_id: str | None = None,
+) -> None:
+    """
+    임베딩 단계 예외를 Backend 공통 ErrorLog에 1회 기록합니다.
+
+    현재 파일 기반 임베딩 실행에서는 DB의 document_id /
+    processing_run_id가 없을 수 있으므로 가능한 정보만 기록합니다.
+
+    같은 예외가 파일 단위 catch에서 기록된 뒤 상위 main catch로
+    다시 전달되더라도 중복 ErrorLog가 생성되지 않도록 방지합니다.
+
+    ErrorLog 저장 자체가 실패해도 원래 임베딩 오류 처리는 유지합니다.
+    """
+    error_identity = id(error)
+
+    if error_identity in _LOGGED_ERROR_IDS:
+        return
+
+    try:
+        location = (
+            f" input={source_path}"
+            if source_path is not None
+            else ""
+        )
+        announcement = (
+            f" announcement_id={announcement_id}"
+            if announcement_id
+            else ""
+        )
+
+        record_error(
+            error_type="embedding",
+            stage="embedding",
+            message=f"{error}{announcement}{location}",
+            error_code=type(error).__name__,
+            stack_trace=traceback.format_exc(),
+        )
+        _LOGGED_ERROR_IDS.add(error_identity)
+
+    except Exception as log_error:
+        print(
+            f"[WARNING] ErrorLog 기록 실패: {log_error}",
+            file=sys.stderr,
+        )
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -337,6 +392,12 @@ def main() -> int:
                 EmbeddingValidationError,
                 EmbeddingWriteError,
             ) as exc:
+                log_embedding_error(
+                    error=exc,
+                    source_path=document.source_path,
+                    announcement_id=document.announcement_id,
+                )
+
                 failed += 1
 
                 result_rows.append(
@@ -391,6 +452,10 @@ def main() -> int:
         EmbeddingGenerationError,
         EmbeddingWriteError,
     ) as exc:
+        log_embedding_error(
+            error=exc,
+        )
+
         print()
         print("[임베딩 파이프라인 실패]")
         print(exc)
@@ -402,6 +467,10 @@ def main() -> int:
         return 130
 
     except Exception as exc:
+        log_embedding_error(
+            error=exc,
+        )
+
         print()
         print("[예상하지 못한 오류]")
         print(exc)
