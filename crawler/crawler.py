@@ -241,46 +241,37 @@ def wait_for_download_completion(
 
     return None
 
-
-def create_driver(
-    temp_download_dir: str | Path,
-):
+def create_driver(temp_download_dir: str | Path):
     """다운로드 경로를 지정한 Chrome Driver를 생성한다."""
-    temp_download_dir = str(
-        Path(temp_download_dir).resolve()
-    )
+    temp_download_dir = str(Path(temp_download_dir).resolve())
 
     chrome_options = Options()
 
+    # 화면이 없는 Linux/AWS 환경에서는 headless Chrome을 사용한다.
+    is_headless_linux = (
+        sys.platform.startswith("linux")
+        and not os.getenv("DISPLAY")
+    )
+
+    if is_headless_linux:
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--window-size=1920,1080")
+
     prefs = {
-        "download.default_directory":
-            temp_download_dir,
-        "download.prompt_for_download":
-            False,
-        "safebrowsing.enabled":
-            True,
-        "profile.default_content_setting_values."
-        "automatic_downloads":
-            1,
-        "profile.default_content_setting_values."
-        "notifications":
-            2,
+        "download.default_directory": temp_download_dir,
+        "download.prompt_for_download": False,
+        "safebrowsing.enabled": True,
+        "profile.default_content_setting_values.automatic_downloads": 1,
+        "profile.default_content_setting_values.notifications": 2,
     }
 
-    chrome_options.add_experimental_option(
-        "prefs",
-        prefs,
-    )
+    chrome_options.add_experimental_option("prefs", prefs)
 
-    service = Service(
-        ChromeDriverManager().install()
-    )
+    service = Service(ChromeDriverManager().install())
 
-    return webdriver.Chrome(
-        service=service,
-        options=chrome_options,
-    )
-
+    return webdriver.Chrome(service=service, options=chrome_options)
 
 def cleanup_temp_directory(
     temp_download_dir: str | Path,
