@@ -45,6 +45,64 @@ class KeyInformationExtractorTest(unittest.TestCase):
             "2026-08-28 17:00",
         )
 
+    def test_application_period_korean_ampm_range(
+            self,
+        ):
+            text = (
+                "인터넷(PC) 청약 접수기간은 "
+                "접수시작일 ‘26.08.27(목) "
+                "오전 10시부터 "
+                "마감일 ’26.08.28(금) "
+                "오후 5시까지로 "
+                "접수기간 중에는 "
+                "24시간 신청 가능합니다."
+            )
+
+            result = _build_application_period(
+                [make_match(text)]
+            )
+
+            self.assertEqual(
+                result["start"],
+                "2026-08-27 10:00",
+            )
+            self.assertEqual(
+                result["end"],
+                "2026-08-28 17:00",
+            )
+            self.assertEqual(
+                result["summary"],
+                (
+                    "2026-08-27 10:00"
+                    " ~ "
+                    "2026-08-28 17:00"
+                ),
+            )
+
+    def test_application_period_labeled_range(
+            self,
+        ):
+            text = (
+                "신청기간 "
+                "접수시작일 "
+                "2026.08.27 10:00 "
+                "마감일 "
+                "2026.08.28 17:00"
+            )
+
+            result = _build_application_period(
+                [make_match(text)]
+            )
+
+            self.assertEqual(
+                result["start"],
+                "2026-08-27 10:00",
+            )
+            self.assertEqual(
+                result["end"],
+                "2026-08-28 17:00",
+            )
+
     def test_eligibility_summary(self):
         text = (
             "\uC2E0\uCCAD\uC790\uACA9\n"

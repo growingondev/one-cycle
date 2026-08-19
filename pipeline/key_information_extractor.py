@@ -891,6 +891,97 @@ def _date_match_to_entity(
         "precision": "regex_fallback",
     }
 
+_APPLICATION_RANGE_SEPARATORS = {
+    "~",
+    "～",
+    "-",
+    "–",
+    "—",
+    "부터",
+}
+
+_APPLICATION_RANGE_END_LABELS = {
+    "마감일",
+    "종료일",
+    "마감",
+    "종료",
+    "접수마감일",
+    "신청마감일",
+    "접수종료일",
+    "신청종료일",
+    "접수마감",
+    "신청마감",
+    "접수종료",
+    "신청종료",
+}
+
+_APPLICATION_RANGE_QUOTE_PATTERN = re.compile(
+    r"""[‘’'"“”`]"""
+)
+
+
+def _is_application_range_bridge(
+    value: str,
+) -> bool:
+    """
+    두 날짜 사이의 문자열이 신청기간을 연결하는
+    표현인지 판별한다.
+
+    특정 공고나 날짜를 기준으로 하지 않고,
+    범위 구분자와 시작/마감 의미 표현을 기준으로 판단한다.
+    """
+
+    normalized = _normalized_match_text(value)
+
+    normalized = (
+        _APPLICATION_RANGE_QUOTE_PATTERN.sub(
+            "",
+            normalized,
+        )
+    )
+
+    if not normalized:
+        return False
+
+    # 일반적인 날짜 범위 표현
+    if (
+        normalized
+        in _APPLICATION_RANGE_SEPARATORS
+    ):
+        return True
+
+    # 날짜 사이가 지나치게 멀면
+    # 서로 다른 일정일 가능성이 높다.
+    if len(normalized) > 32:
+        return False
+
+    # 시작일 2026... 마감일 2026...
+    if (
+        normalized
+        in _APPLICATION_RANGE_END_LABELS
+    ):
+        return True
+
+    # 시작일 2026...부터 마감일 2026...
+    for separator in (
+        _APPLICATION_RANGE_SEPARATORS
+    ):
+        if not normalized.startswith(
+            separator
+        ):
+            continue
+
+        remainder = normalized[
+            len(separator):
+        ]
+
+        if (
+            remainder
+            in _APPLICATION_RANGE_END_LABELS
+        ):
+            return True
+
+    return False
 
 def _extract_application_range(
     matches: list[dict[str, Any]],
@@ -915,15 +1006,6 @@ def _extract_application_range(
         "\uACC4\uC57D": 20,
     }
 
-    separators = {
-        "~",
-        "\uFF5E",
-        "-",
-        "\u2013",
-        "\u2014",
-        "\uBD80\uD130",
-    }
-
     best = None
 
     for match_index, item in enumerate(
@@ -941,16 +1023,14 @@ def _extract_application_range(
             found,
             found[1:],
         ):
-            between = re.sub(
-                r"\s+",
-                "",
-                text[
-                    left.end():
-                    right.start()
-                ],
-            )
+            between = text[
+                left.end():
+                right.start()
+            ]
 
-            if between not in separators:
+            if not _is_application_range_bridge(
+                between
+            ):
                 continue
 
             label = text[
