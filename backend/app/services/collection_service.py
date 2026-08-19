@@ -11,6 +11,11 @@ from backend.app.models.collection_run import CollectionRun
 from backend.app.models.document import Document
 from backend.app.services.error_log_service import record_error
 
+from backend.app.services.document_role_service import (
+    DOCUMENT_ROLE_PRIMARY,
+    classify_document_role,
+)
+
 
 VALID_RUN_STATUSES = {
     "running",
@@ -197,6 +202,7 @@ def persist_collection_result(
 
         announcement_ids: list[int] = []
         document_ids: list[int] = []
+        analysis_document_ids: list[int] = []
 
         for raw_announcement in announcements_data:
             source_announcement_id = str(
@@ -286,13 +292,25 @@ def persist_collection_result(
                         f"{download_status}"
                     )
 
+                file_name = str(
+                    raw_document.get("file_name")
+                    or ""
+                ).strip()
+
+                if not file_name:
+                    raise ValueError(
+                        "수집 문서의 file_name이 없습니다."
+                    )
+
+                document_role = classify_document_role(
+                    file_name
+                )
+
                 document = Document(
                     announcement_id=announcement.id,
-                    original_filename=str(
-                        raw_document.get("file_name")
-                        or ""
-                    ).strip(),
+                    original_filename=file_name,
                     document_format=document_format,
+                    document_role=document_role,
                     storage_path=(
                         str(
                             raw_document.get("storage_path")
@@ -326,6 +344,14 @@ def persist_collection_result(
 
                 document_ids.append(document.id)
 
+                if (
+                    document_role == DOCUMENT_ROLE_PRIMARY
+                    and download_status == "completed"
+                ):
+                    analysis_document_ids.append(
+                        document.id
+                    )
+
         return {
             "collection_run_id": collection_run.id,
             "execution_id": collection_run.execution_id,
@@ -336,6 +362,12 @@ def persist_collection_result(
             "document_count": len(document_ids),
             "announcement_ids": announcement_ids,
             "document_ids": document_ids,
+            "analysis_document_count": len(
+                analysis_document_ids
+            ),
+            "analysis_document_ids": (
+                analysis_document_ids
+            ),
         }
 
 
@@ -427,6 +459,7 @@ def recollect_and_persist(
     raw_documents = data.get("documents") or []
 
     new_document_ids: list[int] = []
+    new_analysis_document_ids: list[int] = []
     reused_document_ids: list[int] = []
     document_by_filename: dict[str, int] = {}
 
@@ -472,6 +505,10 @@ def recollect_and_persist(
                     f"{download_status}"
                 )
 
+            document_role = classify_document_role(
+                file_name
+            )
+
             checksum = (
                 str(
                     raw_document.get(
@@ -511,6 +548,7 @@ def recollect_and_persist(
                 announcement_id=announcement_id,
                 original_filename=file_name,
                 document_format=document_format,
+                document_role=document_role,
                 storage_path=(
                     str(
                         raw_document.get(
@@ -539,6 +577,14 @@ def recollect_and_persist(
             new_document_ids.append(
                 document.id
             )
+
+            if (
+                document_role == DOCUMENT_ROLE_PRIMARY
+                and download_status == "completed"
+            ):
+                new_analysis_document_ids.append(
+                    document.id
+                )
 
             document_by_filename[
                 file_name
@@ -614,6 +660,12 @@ def recollect_and_persist(
         ),
         "new_document_ids": (
             new_document_ids
+        ),
+        "new_analysis_document_count": len(
+            new_analysis_document_ids
+        ),
+        "new_analysis_document_ids": (
+            new_analysis_document_ids
         ),
         "reused_document_ids": (
             reused_document_ids
