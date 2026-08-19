@@ -227,11 +227,11 @@ export function ListScreen({
     >
       <div className="mb-6 lg:mb-8">
         <h1 className="text-2xl lg:text-3xl font-black text-slate-900 mb-2">
-          분양주택 공고 목록
+          임대주택 공고 목록
         </h1>
 
         <p className="text-sm lg:text-base text-slate-500">
-          LH 청약플러스의 분양주택 공고를 제공합니다.
+          LH 청약플러스의 임대주택 공고를 제공합니다.
         </p>
       </div>
 
@@ -239,7 +239,7 @@ export function ListScreen({
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(400px,1fr)_140px_160px_120px] gap-3 lg:gap-4 items-center">
           <label className="flex border border-slate-300 rounded-lg overflow-hidden h-11 lg:h-12 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all">
             <input
-              className="flex-1 border-0 px-4 outline-none text-sm lg:text-base w-full"
+              className="flex-1 border-0 px-4 outline-none text-base lg:text-lg 16px w-full"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -316,14 +316,14 @@ export function ListScreen({
           />
         </div>
 
-        <p className="flex items-center gap-2 text-xs lg:text-[13px] text-slate-500 mt-5">
-          <Icon name="info" size={14} />
+        <p className="flex items-center gap-2 text-xs lg:text-[15px] text-slate-500 mt-5">
+          <Icon name="info" size={16} />
           총 {total}건의 공고가 있습니다.
         </p>
       </div>
 
       <div className="hidden lg:block bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-        <div className="grid grid-cols-[60px_100px_minmax(300px,1fr)_100px_110px_110px_100px_40px] items-center h-[52px] bg-slate-50 border-b border-slate-200 text-[14px] font-bold text-slate-700 px-2 text-center">
+        <div className="grid grid-cols-[60px_100px_minmax(300px,1fr)_100px_110px_110px_100px_40px] items-center h-[52px] bg-slate-50 border-b border-slate-200 text-[18px] font-bold text-slate-700 px-2 text-center">
           <div>번호</div>
           <div>유형</div>
           <div className="text-left px-4">공고명</div>
