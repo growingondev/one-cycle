@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 class AnnouncementListItem(BaseModel):
     id: int
     title: str
+    notice_type: str | None = None
     region: str | None = None
     announcementDate: date | None = None
     publicationStatus: str | None = None
@@ -43,6 +44,7 @@ class KeyInformationResponse(BaseModel):
 class AnnouncementDetailResponse(BaseModel):
     id: int
     title: str
+    notice_type: str | None = None
     region: str | None = None
     announcementDate: date | None = None
     publicationStatus: str | None = None

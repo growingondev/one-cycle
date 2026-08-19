@@ -60,6 +60,7 @@ def _announcement_item(row) -> AdminAnnouncementItem:
         id=row["id"],
         title=row["title"],
         region=row["region"],
+        notice_type=row["notice_type"],
         announcement_date=row["announcement_date"],
         application_start=_extract_period_value(
             period,
@@ -145,6 +146,7 @@ def list_admin_announcements(
                 a.id,
                 a.title,
                 a.region,
+                a.notice_type,
                 a.announcement_date,
                 a.publication_status,
                 a.created_at,
@@ -185,6 +187,7 @@ def get_admin_announcement(
                 a.title,
                 a.detail_url,
                 a.region,
+                a.notice_type,
                 a.announcement_date,
                 a.publication_status,
                 a.created_at,

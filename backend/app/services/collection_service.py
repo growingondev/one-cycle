@@ -231,6 +231,13 @@ def persist_collection_result(
                 source_announcement_id=source_announcement_id,
                 title=title,
                 detail_url=detail_url,
+                notice_type=(
+                    str(
+                        raw_announcement.get("notice_type")
+                        or ""
+                    ).strip()
+                    or None
+                ),
                 region=(
                     str(
                         raw_announcement.get("region")
