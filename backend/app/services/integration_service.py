@@ -188,22 +188,24 @@ def process_document_ids(
 
 def collect_persist_and_process() -> dict[str, Any]:
     """
-    전체 수집 → DB 저장 → 신규 Document 처리.
+    전체 수집 → DB 저장 → 분석 대상 Document 처리.
+
+    전체 Document 중
+    primary + download completed 문서만 처리한다.
     """
 
     persistence = collect_and_persist()
 
     processing = process_document_ids(
         persistence.get(
-            "document_ids",
+            "analysis_document_ids",
             [],
         )
     )
 
     return {
         **persistence,
-        "document_processing":
-            processing,
+        "document_processing": processing,
     }
 
 
@@ -212,7 +214,8 @@ def recollect_persist_and_process(
     announcement_id: int,
 ) -> dict[str, Any]:
     """
-    개별 공고 재수집 → DB 저장 → 새 Document만 처리.
+    개별 공고 재수집 → DB 저장 →
+    새로 수집된 분석 대상 Document만 처리.
     """
 
     persistence = recollect_and_persist(
@@ -221,13 +224,12 @@ def recollect_persist_and_process(
 
     processing = process_document_ids(
         persistence.get(
-            "new_document_ids",
+            "new_analysis_document_ids",
             [],
         )
     )
 
     return {
         **persistence,
-        "document_processing":
-            processing,
+        "document_processing": processing,
     }

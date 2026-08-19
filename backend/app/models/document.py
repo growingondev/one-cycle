@@ -28,6 +28,11 @@ class Document(Base):
             "download_status IN ('completed', 'failed', 'skipped')",
             name="ck_documents_download_status",
         ),
+        CheckConstraint(
+            "document_role IN "
+            "('primary', 'supporting', 'unknown')",
+            name="ck_documents_role",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -46,6 +51,14 @@ class Document(Base):
     document_format: Mapped[str] = mapped_column(
         String(10),
         nullable=False,
+        index=True,
+    )
+
+    document_role: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="unknown",
+        server_default="unknown",
         index=True,
     )
 

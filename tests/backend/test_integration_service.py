@@ -18,7 +18,8 @@ class IntegrationServiceTest(unittest.TestCase):
         "backend.app.services.collection_service.record_error"
     )
     @patch(
-        "backend.app.services.collection_service._validate_recollection_result"
+        "backend.app.services.collection_service."
+        "_validate_recollection_result"
     )
     @patch(
         "crawler.crawler.recollect_lh_notice"
@@ -96,7 +97,8 @@ class IntegrationServiceTest(unittest.TestCase):
         "backend.app.services.integration_service.record_error"
     )
     @patch(
-        "backend.app.services.integration_service.reprocess_document"
+        "backend.app.services.integration_service."
+        "reprocess_document"
     )
     def test_process_document_success(
         self,
@@ -111,10 +113,22 @@ class IntegrationServiceTest(unittest.TestCase):
 
         result = process_document_ids([10])
 
-        self.assertEqual(result["requested_count"], 1)
-        self.assertEqual(result["success_count"], 1)
-        self.assertEqual(result["failed_count"], 0)
-        self.assertEqual(result["error_ids"], [])
+        self.assertEqual(
+            result["requested_count"],
+            1,
+        )
+        self.assertEqual(
+            result["success_count"],
+            1,
+        )
+        self.assertEqual(
+            result["failed_count"],
+            0,
+        )
+        self.assertEqual(
+            result["error_ids"],
+            [],
+        )
 
         mock_reprocess_document.assert_called_once_with(10)
         mock_record_error.assert_not_called()
@@ -123,7 +137,8 @@ class IntegrationServiceTest(unittest.TestCase):
         "backend.app.services.integration_service.record_error"
     )
     @patch(
-        "backend.app.services.integration_service.reprocess_document"
+        "backend.app.services.integration_service."
+        "reprocess_document"
     )
     def test_process_document_failure_records_error(
         self,
@@ -144,9 +159,18 @@ class IntegrationServiceTest(unittest.TestCase):
 
         result = process_document_ids([11])
 
-        self.assertEqual(result["success_count"], 0)
-        self.assertEqual(result["failed_count"], 1)
-        self.assertEqual(result["error_ids"], [100])
+        self.assertEqual(
+            result["success_count"],
+            0,
+        )
+        self.assertEqual(
+            result["failed_count"],
+            1,
+        )
+        self.assertEqual(
+            result["error_ids"],
+            [100],
+        )
 
         mock_record_error.assert_called_once_with(
             error_type="embedding",
@@ -157,12 +181,14 @@ class IntegrationServiceTest(unittest.TestCase):
         )
 
     @patch(
-        "backend.app.services.integration_service.process_document_ids"
+        "backend.app.services.integration_service."
+        "process_document_ids"
     )
     @patch(
-        "backend.app.services.integration_service.collect_and_persist"
+        "backend.app.services.integration_service."
+        "collect_and_persist"
     )
-    def test_collection_processes_persisted_documents(
+    def test_collection_processes_only_analysis_documents(
         self,
         mock_collect_and_persist,
         mock_process_document_ids,
@@ -170,12 +196,17 @@ class IntegrationServiceTest(unittest.TestCase):
         mock_collect_and_persist.return_value = {
             "collection_run_id": 1,
             "status": "success",
+
+            # DB에는 두 문서 모두 저장
             "document_ids": [21, 22],
+
+            # 실제 분석 대상은 primary 문서 21만
+            "analysis_document_ids": [21],
         }
 
         mock_process_document_ids.return_value = {
-            "requested_count": 2,
-            "success_count": 2,
+            "requested_count": 1,
+            "success_count": 1,
             "failed_count": 0,
             "error_ids": [],
             "results": [],
@@ -184,21 +215,25 @@ class IntegrationServiceTest(unittest.TestCase):
         result = collect_persist_and_process()
 
         mock_process_document_ids.assert_called_once_with(
-            [21, 22]
+            [21]
         )
 
         self.assertEqual(
-            result["document_processing"]["requested_count"],
-            2,
+            result[
+                "document_processing"
+            ]["requested_count"],
+            1,
         )
 
     @patch(
-        "backend.app.services.integration_service.process_document_ids"
+        "backend.app.services.integration_service."
+        "process_document_ids"
     )
     @patch(
-        "backend.app.services.integration_service.recollect_and_persist"
+        "backend.app.services.integration_service."
+        "recollect_and_persist"
     )
-    def test_recollection_processes_only_new_documents(
+    def test_recollection_processes_only_new_analysis_documents(
         self,
         mock_recollect_and_persist,
         mock_process_document_ids,
@@ -206,14 +241,22 @@ class IntegrationServiceTest(unittest.TestCase):
         mock_recollect_and_persist.return_value = {
             "announcement_id": 9,
             "status": "success",
+
+            # 새로 저장된 문서
             "new_document_ids": [31, 32],
+
+            # 이 중 primary인 31만 분석
+            "new_analysis_document_ids": [31],
+
+            # 기존 동일 문서는 재사용
             "reused_document_ids": [30],
+
             "document_ids": [31, 32, 30],
         }
 
         mock_process_document_ids.return_value = {
-            "requested_count": 2,
-            "success_count": 2,
+            "requested_count": 1,
+            "success_count": 1,
             "failed_count": 0,
             "error_ids": [],
             "results": [],
@@ -228,12 +271,14 @@ class IntegrationServiceTest(unittest.TestCase):
         )
 
         mock_process_document_ids.assert_called_once_with(
-            [31, 32]
+            [31]
         )
 
         self.assertEqual(
-            result["document_processing"]["requested_count"],
-            2,
+            result[
+                "document_processing"
+            ]["requested_count"],
+            1,
         )
 
 
