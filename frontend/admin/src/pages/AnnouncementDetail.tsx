@@ -16,16 +16,43 @@ const getBadgeColor = (status: string) => {
 export default function AnnouncementDetail({ notice, onBack }: AnnouncementDetailProps) {
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isReCollecting, setIsReCollecting] = useState(false);
 
+  // 개별 공고 재수집
+  const handleReCollect = async () => {
+    try {
+      setIsReCollecting(true);
+      const token = sessionStorage.getItem('access_token');
+      const res = await fetch(`/api/admin/notices/${notice.id}/re-collect`, {
+        method: 'POST',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      if (!res.ok) throw new Error('재수집 요청 실패');
+      alert('해당 공고의 재수집 요청이 완료되었습니다.');
+    } catch (error) {
+      console.error(error);
+      alert('재수집 요청에 실패했습니다.');
+    } finally {
+      setIsReCollecting(false);
+    }
+  };
+
+  // 공고 삭제
   const handleDelete = async () => {
     try {
       setIsDeleting(true);
-      
-      // 🔓 [실제 API 연동 시 주석 해제] 공고 삭제 요청 보내기
-      // await fetch(`/api/admin/notices/${notice.id}`, { method: 'DELETE' });
-      
+      const token = sessionStorage.getItem('access_token');
+      const res = await fetch(`/api/admin/notices/${notice.id}`, {
+        method: 'DELETE',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      if (!res.ok) throw new Error('공고 삭제 실패');
       alert('공고가 성공적으로 삭제되었습니다.');
-      onBack(); // 삭제 완료 후 목록으로 돌아가기
+      onBack();
     } catch (error) {
       console.error('삭제 실패:', error);
       alert('공고 삭제에 실패했습니다.');
@@ -40,11 +67,13 @@ export default function AnnouncementDetail({ notice, onBack }: AnnouncementDetai
       <div className="page-head" style={{ marginBottom: '24px' }}>
         <div>
           <h1 style={{ fontSize: '24px', margin: '0 0 6px' }}>공고 상세</h1>
-          <p style={{ margin: 0, color: 'var(--muted)', fontSize: '14px' }}>공고 내용을 확인하고 수정·삭제할 수 있습니다.</p>
+          <p style={{ margin: 0, color: 'var(--muted)', fontSize: '14px' }}>공고 내용을 확인하고 개별 재수집 및 삭제를 진행할 수 있습니다.</p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button className="btn btn-outline" onClick={onBack}>← 목록으로</button>
-          <button className="btn btn-outline" onClick={() => alert('수정 페이지로 이동합니다.')}>수정</button>
+          <button className="btn btn-outline" onClick={handleReCollect} disabled={isReCollecting}>
+            {isReCollecting ? '재수집 요청 중...' : '↻ 개별 재수집'}
+          </button>
           <button className="btn btn-outline" style={{ color: 'var(--red)', borderColor: '#ffd6d9', background: '#fff9fa' }} onClick={() => setDeleteConfirm(true)}>
             삭제
           </button>
@@ -58,7 +87,7 @@ export default function AnnouncementDetail({ notice, onBack }: AnnouncementDetai
         </div>
         <h2 style={{ margin: '0 0 12px', fontSize: '22px', color: 'var(--text)', fontWeight: 800 }}>{notice.title}</h2>
         <div style={{ color: 'var(--muted)', fontSize: '14px' }}>
-          {notice.org || notice.region} · 공고번호 {notice.num || notice.id}
+          {notice.org || notice.region} · 시스템 식별 ID: {notice.id} {notice.num ? `(공고번호: ${notice.num})` : ''}
         </div>
       </div>
 
@@ -88,14 +117,16 @@ export default function AnnouncementDetail({ notice, onBack }: AnnouncementDetai
           </div>
           <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {notice.files && notice.files.length > 0 ? notice.files.map((file: any, idx: number) => (
-              <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', background: '#f8f9fc', borderRadius: '8px', border: '1px solid #edf0f4', cursor: 'pointer' }}
-                onClick={() => window.open(file.url || '#')}
+              <div 
+                key={idx} 
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', background: '#f8f9fc', borderRadius: '8px', border: '1px solid #edf0f4', cursor: 'pointer' }}
+                onClick={() => window.open(file.url || `/api/admin/documents/${file.id}/download`)}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <span style={{ fontSize: '24px' }}>{file.name.includes('.pdf') ? '📄' : '📎'}</span>
+                  <span style={{ fontSize: '24px' }}>{file.name?.includes('.pdf') ? '📄' : '📎'}</span>
                   <div>
                     <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>{file.name}</div>
-                    <div style={{ fontSize: '12px', color: 'var(--muted)' }}>{file.size || '용량 미상'}</div>
+                    <div style={{ fontSize: '12px', color: 'var(--muted)' }}>{file.size || '용량 정보 없음'}</div>
                   </div>
                 </div>
                 <span style={{ color: 'var(--blue)', fontSize: '13px', fontWeight: 700 }}>↓ 다운로드</span>

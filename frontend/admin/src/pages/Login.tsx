@@ -1,4 +1,3 @@
-// src/pages/Login.tsx
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../assets/css/login.css';
@@ -9,18 +8,39 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault(); 
-    
-    // README 명세서 기준 테스트 계정 검증
-    if (adminId === 'admin' && password === 'admin1234') {
-      // 성공 시 세션 스토리지에 Mock JWT 저장 후 이동
-      sessionStorage.setItem('mock_token', 'Header.Payload.MockSignature');
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+    setIsLoading(true);
+
+    try {
+      const response = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: adminId,
+          password: password,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('아이디 또는 비밀번호가 올바르지 않습니다.');
+      }
+
+      const data = await response.json();
+      // 발급받은 실제 JWT Access Token 저장
+      if (data.token || data.access_token) {
+        sessionStorage.setItem('access_token', data.token || data.access_token);
+      }
       navigate('/announcement');
-    } else {
-      // 실패 시 에러 메시지 출력
-      setErrorMsg('아이디 또는 비밀번호가 올바르지 않습니다.');
+    } catch (error: any) {
+      setErrorMsg(error.message || '로그인 중 오류가 발생했습니다.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -53,6 +73,7 @@ export default function Login() {
                 placeholder="아이디를 입력하세요"
                 value={adminId}
                 onChange={(e) => setAdminId(e.target.value)}
+                disabled={isLoading}
               />
             </div>
 
@@ -67,6 +88,7 @@ export default function Login() {
                   placeholder="비밀번호를 입력하세요"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  disabled={isLoading}
                 />
                 <button
                   type="button"
@@ -78,20 +100,21 @@ export default function Login() {
               </div>
             </div>
 
-            <div className="login-error" id="loginError">
-              {errorMsg}
-            </div>
+            {errorMsg && (
+              <div className="login-error" id="loginError">
+                {errorMsg}
+              </div>
+            )}
 
-            <button type="submit" className="btn btn-primary login-submit" id="loginButton">
-              로그인
+            <button
+              type="submit"
+              className="btn btn-primary login-submit"
+              id="loginButton"
+              disabled={isLoading}
+            >
+              {isLoading ? '로그인 중...' : '로그인'}
             </button>
           </form>
-
-          <div className="login-help">
-            <b>시연용 계정</b><br />
-            아이디: admin / 비밀번호: admin1234<br />
-            실제 서비스에서는 FastAPI 인증 API로 교체해야 합니다.
-          </div>
         </div>
       </section>
     </main>
