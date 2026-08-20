@@ -46,22 +46,6 @@ DEFAULT_EMBEDDING_MODEL = os.getenv(
 # ============================================================
 # Recall 판정 기준
 # ============================================================
-#
-# 기존 방식:
-# reference_text와 retrieved_contexts를 문자열 유사도로 비교하고
-# threshold=0.75 이상이면 Recall HIT
-#
-# 변경 방식:
-#
-# 1. 정규화된 텍스트 직접 포함
-# 2. 핵심 토큰 포함률
-# 3. 날짜 / 시간 / 금액 / 수치 포함률
-# 4. 부분 문자열 유사도
-# 5. Top-K Context 전체를 합친 뒤 다시 근거 포함 여부 확인
-#
-# 특히 비교형 / 복합형 / multi-context 질문의 경우
-# 정답 근거가 여러 청크에 나뉘어 있어도 Recall@K를 성공으로 판정한다.
-# ============================================================
 
 NUMERIC_COVERAGE_THRESHOLD = 0.70
 TOKEN_COVERAGE_THRESHOLD = 0.45
@@ -86,7 +70,6 @@ def normalize_dataset_name(
         "GC": "GC",
         "GOCHANG": "GC",
         "고창": "GC",
-
         "HC": "HC",
         "HWACHEON": "HC",
         "화천": "HC",
@@ -175,22 +158,6 @@ def split_retrieved_contexts(
     """
     evaluate_rag.py에서 저장한 retrieved_contexts를
     Rank별 Context 리스트로 변환한다.
-
-    예:
-
-    [rank=1 | chunkId=...]
-    내용...
-
-    ---
-    [rank=2 | chunkId=...]
-    내용...
-
-    →
-
-    [
-        "내용...",
-        "내용..."
-    ]
     """
 
     if value is None:
@@ -216,7 +183,6 @@ def split_retrieved_contexts(
 
         lines = part.splitlines()
 
-        # 첫 줄의 [rank=...] 메타데이터 제거
         if (
             lines
             and lines[0]
@@ -245,14 +211,6 @@ def normalize_text(
 ) -> str:
     """
     Recall 비교용 정규화.
-
-    예:
-
-    2026.08.24
-    '26. 08. 24.
-    26년 08월 24일
-
-    처럼 표기가 달라도 최대한 동일한 정보로 비교하기 위한 처리.
     """
 
     text = str(text).lower()
@@ -327,15 +285,8 @@ def extract_numbers(
     text: str,
 ) -> list[str]:
     """
-    날짜 / 시간 / 금액 / 면적 / 나이 등의 숫자를 추출한다.
-
-    예:
-
-    '26.08.24 10:00~16:00
-
-    →
-
-    26, 8, 24, 10, 0, 16, 0
+    날짜 / 시간 / 금액 / 면적 / 나이 등의
+    숫자 정보를 추출한다.
     """
 
     text = str(
@@ -372,7 +323,8 @@ def extract_tokens(
     text: str,
 ) -> list[str]:
     """
-    reference_text에서 비교에 사용할 핵심 토큰을 추출한다.
+    reference_text에서 의미 비교에 사용할
+    핵심 토큰을 추출한다.
     """
 
     text = str(
@@ -487,10 +439,10 @@ def number_coverage(
     context: str,
 ) -> float | None:
     """
-    reference_text에 포함된 숫자 정보가
+    reference_text의 숫자 정보가
     context 안에 얼마나 존재하는지 계산한다.
 
-    reference_text에 숫자가 없으면 None.
+    reference_text에 숫자가 없다면 None.
     """
 
     reference_numbers = (
@@ -539,8 +491,8 @@ def partial_similarity(
     context: str,
 ) -> float:
     """
-    긴 Context 중 일부 구간이 reference_text와
-    얼마나 비슷한지 계산한다.
+    긴 Context의 일부 구간이
+    reference_text와 얼마나 유사한지 계산한다.
     """
 
     ref_norm = normalize_text(
@@ -557,11 +509,9 @@ def partial_similarity(
     ):
         return 0.0
 
-    # reference 전체가 context 안에 존재
     if ref_norm in ctx_norm:
         return 1.0
 
-    # Context가 더 짧으면 전체 비교
     if (
         len(ctx_norm)
         <= len(ref_norm)
@@ -572,7 +522,6 @@ def partial_similarity(
             ctx_norm,
         ).ratio()
 
-    # Context가 긴 경우 부분 비교
     window_size = max(
         len(ref_norm),
         int(
@@ -616,7 +565,6 @@ def partial_similarity(
             score,
         )
 
-    # 마지막 구간도 확인
     if (
         len(ctx_norm)
         > window_size
@@ -653,18 +601,16 @@ def evidence_matches(
     str,
 ]:
     """
-    Context 안에 reference_text의 정답 근거가 존재하는지 판단한다.
+    Context 안에 reference_text의 정답 근거가
+    존재하는지 판단한다.
 
-    Returns
-    -------
-    matched
-        True / False
-
-    score
-        진단용 점수
-
-    reason
-        어떤 조건으로 HIT 되었는지
+    판정 순서
+    --------
+    1. 정규화 후 완전 포함
+    2. 숫자 + 핵심 토큰 기반 사실 일치
+    3. 숫자가 없는 문장의 의미 토큰 일치
+    4. 높은 문자열 유사도
+    5. 복합 Evidence 보완 판정
     """
 
     ref_norm = normalize_text(
@@ -686,7 +632,7 @@ def evidence_matches(
         )
 
     # ========================================================
-    # 1. 정규화 후 reference 전체가 Context 안에 존재
+    # 1. 정규화 후 완전 포함
     # ========================================================
 
     if ref_norm in ctx_norm:
@@ -697,7 +643,7 @@ def evidence_matches(
         )
 
     # ========================================================
-    # 보조 점수 계산
+    # 개별 점수 계산
     # ========================================================
 
     word_score = token_coverage(
@@ -716,13 +662,12 @@ def evidence_matches(
     )
 
     # ========================================================
-    # 2. 숫자 정보가 존재하는 정답
-    #
-    # 날짜 / 금액 / 시간 / 면적 / 나이 등
+    # 2. 숫자 정보가 있는 정답
     # ========================================================
 
     if numeric_score is not None:
 
+        # 숫자 대부분 + 핵심 단어 충분히 일치
         if (
             numeric_score
             >= NUMERIC_COVERAGE_THRESHOLD
@@ -730,12 +675,9 @@ def evidence_matches(
             >= TOKEN_COVERAGE_THRESHOLD
         ):
             score = (
-                0.55
-                * numeric_score
-                + 0.35
-                * word_score
-                + 0.10
-                * similarity
+                0.55 * numeric_score
+                + 0.35 * word_score
+                + 0.10 * similarity
             )
 
             return (
@@ -744,24 +686,46 @@ def evidence_matches(
                 "numeric_fact_match",
             )
 
-        # 숫자가 거의 전부 일치하는 경우
+        # 숫자가 거의 전부 일치
         if (
-            numeric_score
-            >= 0.95
-            and similarity
-            >= 0.35
+            numeric_score >= 0.95
+            and similarity >= 0.35
         ):
             score = (
-                0.60
-                * numeric_score
-                + 0.40
-                * similarity
+                0.60 * numeric_score
+                + 0.40 * similarity
             )
 
             return (
                 True,
                 score,
                 "numeric_full_match",
+            )
+
+        # ----------------------------------------------------
+        # 숫자 근거 보완 판정
+        #
+        # 날짜/시간/금액 등 핵심 숫자가 매우 잘 맞고,
+        # 텍스트 쪽 근거도 조금이라도 있어야 HIT
+        # ----------------------------------------------------
+
+        if (
+            numeric_score >= 0.80
+            and (
+                word_score >= 0.25
+                or similarity >= 0.25
+            )
+        ):
+            score = (
+                0.60 * numeric_score
+                + 0.25 * word_score
+                + 0.15 * similarity
+            )
+
+            return (
+                True,
+                score,
+                "numeric_evidence_match",
             )
 
     # ========================================================
@@ -777,10 +741,8 @@ def evidence_matches(
             >= NO_NUMBER_SIMILARITY_THRESHOLD
         ):
             score = (
-                0.70
-                * word_score
-                + 0.30
-                * similarity
+                0.70 * word_score
+                + 0.30 * similarity
             )
 
             return (
@@ -789,8 +751,23 @@ def evidence_matches(
                 "semantic_token_match",
             )
 
+        if (
+            word_score >= 0.70
+            and similarity >= 0.25
+        ):
+            score = (
+                0.75 * word_score
+                + 0.25 * similarity
+            )
+
+            return (
+                True,
+                score,
+                "strong_token_match",
+            )
+
     # ========================================================
-    # 4. 문자열 자체가 매우 유사한 경우
+    # 4. 문자열 자체가 매우 유사
     # ========================================================
 
     if (
@@ -804,7 +781,51 @@ def evidence_matches(
         )
 
     # ========================================================
-    # 5. 일치하지 않음
+    # 5. 복합 Evidence 보완 판정
+    #
+    # 숫자 하나만 우연히 겹치는 것을 막기 위해
+    # 서로 다른 Evidence가 최소 2개 이상
+    # 일정 수준 이상이어야 한다.
+    # ========================================================
+
+    evidence_count = 0
+
+    if word_score >= 0.50:
+        evidence_count += 1
+
+    if similarity >= 0.40:
+        evidence_count += 1
+
+    if (
+        numeric_score is not None
+        and numeric_score >= 0.70
+    ):
+        evidence_count += 1
+
+    if evidence_count >= 2:
+
+        if numeric_score is None:
+            final_score = (
+                0.65 * word_score
+                + 0.35 * similarity
+            )
+
+        else:
+            final_score = (
+                0.45 * numeric_score
+                + 0.35 * word_score
+                + 0.20 * similarity
+            )
+
+        if final_score >= 0.55:
+            return (
+                True,
+                final_score,
+                "multi_evidence_match",
+            )
+
+    # ========================================================
+    # 6. 실패
     # ========================================================
 
     candidates = [
@@ -846,28 +867,12 @@ def recall_at_k(
     """
     Recall@K 계산.
 
-    Top-K 내 개별 Context를 먼저 검사한 뒤,
-    개별 청크에서는 정답 전체를 찾지 못했다면
-    Top-K Context 전체를 합쳐 다시 검사한다.
+    1. Top-K의 Context를 개별적으로 검사
+    2. 개별 Context에서 실패하면
+       Top-K 전체를 합쳐서 다시 검사
 
-    이렇게 하면 비교 질문이나 복합 질문처럼
-    정답 근거가 여러 청크에 나뉘어 있는 경우도
-    Recall@K = 1로 판정할 수 있다.
-
-    Returns
-    -------
-    recall
-        1 / 0 / None
-
-    matched_rank
-        하나의 Context에서 찾았을 경우 실제 Rank.
-        여러 Context를 합쳐야 찾을 수 있었으면 None.
-
-    best_score
-        진단용 점수.
-
-    match_reason
-        매칭 방식.
+    비교형 / 복합형 질문에서
+    정답 근거가 여러 청크에 나뉜 경우 대응.
     """
 
     if not reference_text.strip():
@@ -921,9 +926,7 @@ def recall_at_k(
             )
 
     # ========================================================
-    # 2. Top-K Context 전체를 하나로 합쳐 검사
-    #
-    # 비교형 / multi-hop / 복합 질문 대응
+    # 2. Top-K Context 통합 검사
     # ========================================================
 
     combined_context = "\n".join(
@@ -955,7 +958,7 @@ def recall_at_k(
         )
 
     # ========================================================
-    # 3. Top-K 전체에서도 근거 미탐지
+    # 3. Top-K 전체에서도 실패
     # ========================================================
 
     return (
@@ -976,7 +979,6 @@ def check_ragas_packages() -> None:
 
     try:
         import ragas  # noqa: F401
-
     except ImportError:
         missing.append(
             "ragas"
@@ -984,7 +986,6 @@ def check_ragas_packages() -> None:
 
     try:
         import openai  # noqa: F401
-
     except ImportError:
         missing.append(
             "openai"
@@ -992,7 +993,6 @@ def check_ragas_packages() -> None:
 
     try:
         import sentence_transformers  # noqa: F401
-
     except ImportError:
         missing.append(
             "sentence-transformers"
@@ -1651,11 +1651,7 @@ async def evaluate_metrics(
                 r5 or 0
             )
 
-            # ------------------------------------------------
-            # 가장 작은 K에서 성공한 결과를
-            # Excel 진단 정보로 기록
-            # ------------------------------------------------
-
+            # 가장 작은 K에서 성공한 결과 기록
             if r1 == 1:
 
                 final_rank = rank1
@@ -1711,10 +1707,7 @@ async def evaluate_metrics(
                 ),
             )
 
-            # ------------------------------------------------
             # Console 출력
-            # ------------------------------------------------
-
             print(
                 "  Recall@1/3/5   : "
                 f"{r1} / "
@@ -1768,8 +1761,6 @@ async def evaluate_metrics(
 
         if args.skip_ragas:
 
-            # 기존 scored.xlsx에 RAGAS 값이 들어 있으면
-            # 그대로 유지한다.
             current_status = ws.cell(
                 row=row,
                 column=ragas_status_col,
@@ -1863,10 +1854,7 @@ async def evaluate_metrics(
                 value=status,
             )
 
-        # ====================================================
         # 중간 저장
-        # ====================================================
-
         wb.save(
             output_path
         )
