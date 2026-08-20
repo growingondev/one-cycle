@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import type { ErrorItem } from './Error';
 
 interface ErrorDetailProps {
@@ -21,17 +21,19 @@ export default function ErrorDetail({ error, onBack }: ErrorDetailProps) {
   const handleStatusChange = async (newStatus: string) => {
     try {
       setIsUpdating(true);
-      
-      // 🔓 [실제 API 연동 시 주석 해제] 상태 업데이트 API 통신
-      // await fetch(`/api/admin/errors/${error.id}/status`, {
-      //   method: 'PUT',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ status: newStatus })
-      // });
+      const token = sessionStorage.getItem('access_token');
+      const res = await fetch(`/api/admin/errors/${error.id}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ status: newStatus })
+      });
+
+      if (!res.ok) throw new Error('상태 변경 실패');
       
       setStatus(newStatus);
-      
-      // 상태 변경 성공 시 로컬 이력에 자동 추가 (프론트 UI 갱신용)
       const autoEntry = { actor: '시스템', date: new Date().toISOString(), note: `상태가 [${newStatus}]로 변경됨` };
       setHistory(prev => [...prev, autoEntry]);
     } catch (err) {
@@ -45,25 +47,20 @@ export default function ErrorDetail({ error, onBack }: ErrorDetailProps) {
     if (!note.trim()) return;
     try {
       setIsUpdating(true);
-      
-      // 🔓 [실제 API 연동 시 주석 해제]
-      // const res = await fetch(`/api/admin/errors/${error.id}/notes`, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ note })
-      // });
-      // const newEntry = await res.json(); // 서버에서 DB 저장시간, 작성자가 포함된 객체를 반환받아 갱신
-      // setHistory(prev => [...prev, newEntry]);
-      
-      // 🗑️ [실제 API 연동 시 삭제] 클라이언트 단 임시 렌더링용 더미 데이터
-      const dummyEntry = {
-        actor: '관리자',
-        date: new Date().toISOString(),
-        note: note
-      };
-      setHistory(prev => [...prev, dummyEntry]);
-      
-      setNote(''); // 입력창 초기화
+      const token = sessionStorage.getItem('access_token');
+      const res = await fetch(`/api/admin/errors/${error.id}/notes`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ note })
+      });
+
+      if (!res.ok) throw new Error('메모 저장 실패');
+      const newEntry = await res.json();
+      setHistory(prev => [...prev, newEntry]);
+      setNote('');
     } catch (err) {
       alert('메모 저장에 실패했습니다.');
     } finally {

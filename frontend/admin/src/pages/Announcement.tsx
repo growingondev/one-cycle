@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import AnnouncementDetail from './AnnouncementDetail';
 
-// 백엔드에서 내려주는 데이터 타입
 export interface Notice {
   id: number;
   title: string;
@@ -37,9 +36,8 @@ export default function Announcement() {
   const [page, setPage] = useState(1);
   const [selectedNotice, setSelectedNotice] = useState<Notice | null>(null);
   
-  const perPage = 6;
+  const perPage = 10;
 
-  // 컴포넌트 마운트 시 공고 목록 데이터 로드
   useEffect(() => {
     fetchNotices();
   }, []);
@@ -47,15 +45,15 @@ export default function Announcement() {
   const fetchNotices = async () => {
     try {
       setIsLoading(true);
-      
-      // 🔓 [실제 API 연동 시 주석 해제] 백엔드에서 목록 불러오기
-      // const res = await fetch('/api/admin/notices');
-      // const data = await res.json();
-      // setNotices(data);
-      
-      // 🗑️ [실제 API 연동 시 삭제] 테스트용 임시 빈 배열
-      setNotices([]); 
-      
+      const token = sessionStorage.getItem('access_token');
+      const res = await fetch('/api/admin/notices', {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      if (!res.ok) throw new Error('공고 목록 조회 실패');
+      const data = await res.json();
+      setNotices(Array.isArray(data) ? data : data.items || []);
     } catch (error) {
       console.error('공고 목록을 불러오는 중 오류 발생:', error);
     } finally {
@@ -65,11 +63,16 @@ export default function Announcement() {
 
   const handleCollectRequest = async () => {
     try {
-      // 🔓 [실제 API 연동 시 주석 해제] 공고 수집 요청 보내기
-      // await fetch('/api/admin/notices/collect', { method: 'POST' });
-      
+      const token = sessionStorage.getItem('access_token');
+      const res = await fetch('/api/admin/notices/collect', {
+        method: 'POST',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      if (!res.ok) throw new Error('수집 요청 실패');
       alert('공고 수집 작업을 요청했습니다.');
-      fetchNotices(); // 수집 후 최신 목록으로 새로고침
+      fetchNotices();
     } catch (error) {
       alert('수집 요청에 실패했습니다.');
     }
@@ -91,7 +94,7 @@ export default function Announcement() {
         notice={selectedNotice} 
         onBack={() => {
           setSelectedNotice(null);
-          fetchNotices(); // 상세페이지에서 작업 후 돌아왔을 때 최신 데이터 반영
+          fetchNotices();
         }} 
       />
     );
@@ -110,10 +113,15 @@ export default function Announcement() {
       <section className="card filters">
         <input className="input wide" placeholder="공고명 검색" value={keyword} onChange={(e) => setKeyword(e.target.value)} />
         <select className="select" value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">공고 상태 전체</option><option>공고중</option><option>접수중</option><option>마감</option>
+          <option value="">공고 상태 전체</option>
+          <option value="공고중">공고중</option>
+          <option value="접수중">접수중</option>
+          <option value="마감">마감</option>
         </select>
         <select className="select" value={collect} onChange={(e) => setCollect(e.target.value)}>
-          <option value="">수집 상태 전체</option><option>수집완료</option><option>수집실패</option>
+          <option value="">수집 상태 전체</option>
+          <option value="수집완료">수집완료</option>
+          <option value="수집실패">수집실패</option>
         </select>
         <button className="btn btn-primary" onClick={() => setPage(1)}>검색</button>
         <button className="btn btn-outline" onClick={() => { setKeyword(''); setStatus(''); setCollect(''); setPage(1); }}>초기화</button>
@@ -122,30 +130,42 @@ export default function Announcement() {
       <section className="card table-card">
         <div className="table-toolbar">
           <b>총 {filteredNotices.length}건</b>
-          <button className="btn btn-outline">목록 다운로드</button>
+          <button className="btn btn-outline" onClick={() => window.open('/api/admin/notices/export')}>목록 다운로드</button>
         </div>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
-              <tr><th>ID</th><th>공고명</th><th>지역</th><th>공고일</th><th>공고 상태</th><th>수집 상태</th><th>작업</th></tr>
+              <tr>
+                <th style={{ width: '70px', textAlign: 'center' }}>번호</th>
+                <th>공고명</th>
+                <th>지역</th>
+                <th>공고일</th>
+                <th>공고 상태</th>
+                <th>수집 상태</th>
+                <th>작업</th>
+              </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 <tr><td colSpan={7} className="empty" style={{ padding: '40px 0', textAlign: 'center' }}>데이터를 불러오는 중입니다...</td></tr>
               ) : currentRows.length > 0 ? (
-                currentRows.map(n => (
-                  <tr key={n.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedNotice(n)}>
-                    <td>{n.id}</td>
-                    <td className="title-cell">{n.title}</td>
-                    <td>{n.region}</td>
-                    <td>{n.noticeDate}</td>
-                    <td><span className={getBadgeClass(n.status)}>{n.status}</span></td>
-                    <td><span className={getBadgeClass(n.collect)}>{n.collect}</span></td>
-                    <td onClick={e => e.stopPropagation()}>
-                      <button className="btn btn-outline" style={{ height: '30px', padding: '0 10px', fontSize: '12px' }} onClick={() => setSelectedNotice(n)}>상세</button>
-                    </td>
-                  </tr>
-                ))
+                currentRows.map((n, idx) => {
+                  // DB id 대신 내림차순 목록 순번(Index) 표시
+                  const rowNumber = filteredNotices.length - ((page - 1) * perPage + idx);
+                  return (
+                    <tr key={n.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedNotice(n)}>
+                      <td style={{ textAlign: 'center' }}>{rowNumber}</td>
+                      <td className="title-cell">{n.title}</td>
+                      <td>{n.region}</td>
+                      <td>{n.noticeDate}</td>
+                      <td><span className={getBadgeClass(n.status)}>{n.status}</span></td>
+                      <td><span className={getBadgeClass(n.collect)}>{n.collect}</span></td>
+                      <td onClick={e => e.stopPropagation()}>
+                        <button className="btn btn-outline" style={{ height: '30px', padding: '0 10px', fontSize: '12px' }} onClick={() => setSelectedNotice(n)}>상세</button>
+                      </td>
+                    </tr>
+                  );
+                })
               ) : (
                 <tr><td colSpan={7} className="empty" style={{ padding: '40px 0', textAlign: 'center' }}>검색 결과가 없습니다.</td></tr>
               )}

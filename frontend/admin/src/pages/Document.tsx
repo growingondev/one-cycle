@@ -1,15 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
-// 백엔드에서 내려주는 문서 데이터 타입 (필요시 백엔드와 조율하여 수정)
 export interface DocumentItem {
   id: number;
-  targetNotice: string; // 연결 공고명
-  docName: string;      // 문서명
-  type: string;         // 유형 (예: 공고문, 정정공고문)
-  size: string;         // 크기
-  regDate: string;      // 등록일
-  processStatus: string;// 처리 상태 (처리완료, 처리중, 처리실패)
-  analysisStatus: string;// 분석 상태 (분석완료, 분석중, 대기, 실패)
+  targetNotice: string;
+  docName: string;
+  type: string;
+  size: string;
+  regDate: string;
+  processStatus: string;
+  analysisStatus: string;
+  downloadUrl?: string;
 }
 
 function getStatusBadge(status: string) {
@@ -30,9 +30,8 @@ export default function Document() {
   const [analysisStatus, setAnalysisStatus] = useState('');
   const [page, setPage] = useState(1);
   
-  const perPage = 6;
+  const perPage = 10;
 
-  // [백엔드 연동] 컴포넌트 마운트 시 문서 목록 데이터 로드
   useEffect(() => {
     fetchDocuments();
   }, []);
@@ -40,20 +39,25 @@ export default function Document() {
   const fetchDocuments = async () => {
     try {
       setIsLoading(true);
-      
-      // 🔓 [실제 API 연동 시 주석 해제] 백엔드에서 문서 목록 불러오기
-      // const res = await fetch('/api/admin/documents');
-      // const data = await res.json();
-      // setDocuments(data);
-      
-      // 🗑️ [실제 API 연동 시 삭제] 테스트용 임시 빈 배열
-      setDocuments([]); 
-      
+      const token = sessionStorage.getItem('access_token');
+      const res = await fetch('/api/admin/documents', {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      if (!res.ok) throw new Error('문서 목록 조회 실패');
+      const data = await res.json();
+      setDocuments(Array.isArray(data) ? data : data.items || []);
     } catch (error) {
       console.error('문서 목록을 불러오는 중 오류 발생:', error);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleDownload = (doc: DocumentItem) => {
+    const url = doc.downloadUrl || `/api/admin/documents/${doc.id}/download`;
+    window.open(url, '_blank');
   };
 
   const filteredDocs = documents.filter(d => {
@@ -87,13 +91,22 @@ export default function Document() {
       <section className="card filters" style={{ gridTemplateColumns: 'minmax(240px, 1fr) repeat(3, 1fr) auto' }}>
         <input className="input wide" placeholder="공고명 또는 문서명 검색" value={keyword} onChange={(e) => setKeyword(e.target.value)} />
         <select className="select" value={docType} onChange={(e) => setDocType(e.target.value)}>
-          <option value="">문서 유형 전체</option><option>공고문</option><option>정정공고문</option>
+          <option value="">문서 유형 전체</option>
+          <option value="공고문">공고문</option>
+          <option value="정정공고문">정정공고문</option>
         </select>
         <select className="select" value={processStatus} onChange={(e) => setProcessStatus(e.target.value)}>
-          <option value="">처리 상태 전체</option><option>처리완료</option><option>처리중</option><option>처리실패</option>
+          <option value="">처리 상태 전체</option>
+          <option value="처리완료">처리완료</option>
+          <option value="처리중">처리중</option>
+          <option value="처리실패">처리실패</option>
         </select>
         <select className="select" value={analysisStatus} onChange={(e) => setAnalysisStatus(e.target.value)}>
-          <option value="">분석 상태 전체</option><option>분석완료</option><option>분석중</option><option>대기</option><option>분석실패</option>
+          <option value="">분석 상태 전체</option>
+          <option value="분석완료">분석완료</option>
+          <option value="분석중">분석중</option>
+          <option value="대기">대기</option>
+          <option value="분석실패">분석실패</option>
         </select>
         <button className="btn btn-primary" onClick={() => setPage(1)}>검색</button>
       </section>
@@ -101,31 +114,48 @@ export default function Document() {
       <section className="card table-card">
         <div className="table-toolbar">
           <b>총 {filteredDocs.length}건</b>
-          <button className="btn btn-outline">목록 다운로드</button>
+          <button className="btn btn-outline" onClick={() => window.open('/api/admin/documents/export')}>목록 다운로드</button>
         </div>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
-              <tr><th>ID</th><th>연결 공고</th><th>문서명</th><th>유형</th><th>크기</th><th>등록일</th><th>처리 상태</th><th>분석 상태</th><th>작업</th></tr>
+              <tr>
+                <th style={{ width: '70px', textAlign: 'center' }}>번호</th>
+                <th>연결 공고</th>
+                <th>문서명</th>
+                <th>유형</th>
+                <th>크기</th>
+                <th>등록일</th>
+                <th>처리 상태</th>
+                <th>분석 상태</th>
+                <th>작업</th>
+              </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 <tr><td colSpan={9} className="empty" style={{ padding: '40px 0', textAlign: 'center' }}>데이터를 불러오는 중입니다...</td></tr>
-              ) : currentRows.length > 0 ? currentRows.map(d => (
-                <tr key={d.id}>
-                  <td>{d.id}</td>
-                  <td style={{ maxWidth: '180px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.targetNotice}</td>
-                  <td className="title-cell">{d.docName}</td>
-                  <td>{d.type}</td>
-                  <td>{d.size}</td>
-                  <td>{d.regDate}</td>
-                  <td><span className={`badge ${getStatusBadge(d.processStatus)}`}>{d.processStatus}</span></td>
-                  <td><span className={`badge ${getStatusBadge(d.analysisStatus)}`}>{d.analysisStatus}</span></td>
-                  <td>
-                    <button className="icon-btn" onClick={() => alert('문서 상세 기능 준비 중입니다.')}>⋯</button>
-                  </td>
-                </tr>
-              )) : <tr><td colSpan={9} className="empty" style={{ padding: '40px 0', textAlign: 'center' }}>검색 결과가 없습니다.</td></tr>}
+              ) : currentRows.length > 0 ? (
+                currentRows.map((d, idx) => {
+                  const rowNumber = filteredDocs.length - ((page - 1) * perPage + idx);
+                  return (
+                    <tr key={d.id}>
+                      <td style={{ textAlign: 'center' }}>{rowNumber}</td>
+                      <td style={{ maxWidth: '180px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.targetNotice}</td>
+                      <td className="title-cell">{d.docName}</td>
+                      <td>{d.type}</td>
+                      <td>{d.size}</td>
+                      <td>{d.regDate}</td>
+                      <td><span className={`badge ${getStatusBadge(d.processStatus)}`}>{d.processStatus}</span></td>
+                      <td><span className={`badge ${getStatusBadge(d.analysisStatus)}`}>{d.analysisStatus}</span></td>
+                      <td>
+                        <button className="btn btn-outline" style={{ height: '30px', padding: '0 10px', fontSize: '12px' }} onClick={() => handleDownload(d)}>다운로드</button>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr><td colSpan={9} className="empty" style={{ padding: '40px 0', textAlign: 'center' }}>검색 결과가 없습니다.</td></tr>
+              )}
             </tbody>
           </table>
         </div>

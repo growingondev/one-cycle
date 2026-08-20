@@ -36,7 +36,7 @@ export default function ErrorPage() {
   const [page, setPage] = useState(1);
   const [selectedError, setSelectedError] = useState<ErrorItem | null>(null);
 
-  const perPage = 6;
+  const perPage = 10;
 
   useEffect(() => {
     fetchErrors();
@@ -45,15 +45,15 @@ export default function ErrorPage() {
   const fetchErrors = async () => {
     try {
       setIsLoading(true);
-      
-      // 🔓 [실제 API 연동 시 주석 해제]
-      // const res = await fetch('/api/admin/errors');
-      // const data = await res.json();
-      // setErrorsList(data);
-      
-      // 🗑️ [실제 API 연동 시 삭제]
-      setErrorsList([]); 
-      
+      const token = sessionStorage.getItem('access_token');
+      const res = await fetch('/api/admin/errors', {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      if (!res.ok) throw new Error('오류 목록 조회 실패');
+      const data = await res.json();
+      setErrorsList(Array.isArray(data) ? data : data.items || []);
     } catch (error) {
       console.error('오류 목록 로드 실패', error);
     } finally {
@@ -77,7 +77,7 @@ export default function ErrorPage() {
         error={selectedError} 
         onBack={() => {
           setSelectedError(null);
-          fetchErrors(); // 상세에서 상태 변경 후 목록 갱신
+          fetchErrors();
         }} 
       />
     );
@@ -103,10 +103,16 @@ export default function ErrorPage() {
       <section className="card filters">
         <input className="input wide" placeholder="공고명 또는 오류 내용 검색" value={keyword} onChange={(e) => setKeyword(e.target.value)} />
         <select className="select" value={type} onChange={(e) => setType(e.target.value)}>
-          <option value="">오류 유형 전체</option><option>공고 수집</option><option>문서 처리</option><option>AI 분석</option>
+          <option value="">오류 유형 전체</option>
+          <option value="공고 수집">공고 수집</option>
+          <option value="문서 처리">문서 처리</option>
+          <option value="AI 분석">AI 분석</option>
         </select>
         <select className="select" value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">처리 상태 전체</option><option>미해결</option><option>해결중</option><option>해결완료</option>
+          <option value="">처리 상태 전체</option>
+          <option value="미해결">미해결</option>
+          <option value="해결중">해결중</option>
+          <option value="해결완료">해결완료</option>
         </select>
         <button className="btn btn-primary" onClick={() => setPage(1)}>검색</button>
       </section>
@@ -118,21 +124,41 @@ export default function ErrorPage() {
         <div className="table-wrap">
           <table className="data-table">
             <thead>
-              <tr><th>ID</th><th>발생 일시</th><th>오류 유형</th><th>발생 구간</th><th>대상 공고</th><th>오류 내용</th><th>처리 상태</th><th>작업</th></tr>
+              <tr>
+                <th style={{ width: '70px', textAlign: 'center' }}>번호</th>
+                <th>발생 일시</th>
+                <th>오류 유형</th>
+                <th>발생 구간</th>
+                <th>대상 공고</th>
+                <th>오류 내용</th>
+                <th>처리 상태</th>
+                <th>작업</th>
+              </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 <tr><td colSpan={8} className="empty" style={{ padding: '40px 0', textAlign: 'center' }}>데이터를 불러오는 중입니다...</td></tr>
-              ) : currentRows.length > 0 ? currentRows.map(e => (
-                <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedError(e)}>
-                  <td>{e.id}</td><td>{e.time}</td><td>{e.type}</td><td>{e.step}</td><td>{e.target}</td>
-                  <td className="title-cell">{e.message}</td>
-                  <td><span className={getBadgeClass(e.status)}>{e.status}</span></td>
-                  <td onClick={evt => evt.stopPropagation()}>
-                    <button className="btn btn-outline" style={{ height: '30px', padding: '0 10px', fontSize: '12px' }} onClick={() => setSelectedError(e)}>상세</button>
-                  </td>
-                </tr>
-              )) : <tr><td colSpan={8} className="empty" style={{ padding: '40px 0', textAlign: 'center' }}>검색 결과가 없습니다.</td></tr>}
+              ) : currentRows.length > 0 ? (
+                currentRows.map((e, idx) => {
+                  const rowNumber = filteredErrors.length - ((page - 1) * perPage + idx);
+                  return (
+                    <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedError(e)}>
+                      <td style={{ textAlign: 'center' }}>{rowNumber}</td>
+                      <td>{e.time}</td>
+                      <td>{e.type}</td>
+                      <td>{e.step}</td>
+                      <td>{e.target}</td>
+                      <td className="title-cell">{e.message}</td>
+                      <td><span className={getBadgeClass(e.status)}>{e.status}</span></td>
+                      <td onClick={evt => evt.stopPropagation()}>
+                        <button className="btn btn-outline" style={{ height: '30px', padding: '0 10px', fontSize: '12px' }} onClick={() => setSelectedError(e)}>상세</button>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr><td colSpan={8} className="empty" style={{ padding: '40px 0', textAlign: 'center' }}>검색 결과가 없습니다.</td></tr>
+              )}
             </tbody>
           </table>
         </div>
