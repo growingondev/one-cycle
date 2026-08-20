@@ -18,7 +18,7 @@ venvs/
 !.env.example
 
 # AI / Model files
-models/
+/models/
 *.gguf
 *.pt
 *.pth
@@ -28,6 +28,7 @@ models/
 # Pipeline outputs / runtime artifacts
 outputs/
 logs/
+/storage/
 
 # Frontend
 node_modules/

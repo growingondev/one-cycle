@@ -818,6 +818,527 @@ def _extract_date_bounds(
     )
 
 
+
+# ============================================================
+# Card summaries and date fallback
+# ============================================================
+_DATE_PATTERN = re.compile(
+    r"(?P<year>20\d{2}|\d{2})"
+    r"\s*[./-]\s*"
+    r"(?P<month>\d{1,2})"
+    r"\s*[./-]\s*"
+    r"(?P<day>\d{1,2})"
+    r"\s*\.?"
+    r"(?:\s*\([^)]{1,3}\))?"
+    r"(?:"
+    r"\s*(?P<ampm>\uC624\uC804|\uC624\uD6C4)?"
+    r"\s*(?P<hour>\d{1,2})"
+    r"(?:"
+    r":(?P<minute>\d{2})"
+    r"|"
+    r"\uC2DC(?:\s*(?P<minute_word>\d{1,2})\uBD84)?"
+    r")"
+    r")?"
+)
+
+
+def _date_match_to_entity(
+    match: re.Match[str],
+) -> dict[str, Any]:
+    year = int(match.group("year"))
+
+    if year < 100:
+        year += 2000
+
+    month = int(match.group("month"))
+    day = int(match.group("day"))
+
+    normalized = (
+        f"{year:04d}-{month:02d}-{day:02d}"
+    )
+
+    hour_value = match.group("hour")
+
+    if hour_value is not None:
+        hour = int(hour_value)
+        minute = int(
+            match.group("minute")
+            or match.group("minute_word")
+            or 0
+        )
+
+        ampm = match.group("ampm")
+
+        if (
+            ampm == "\uC624\uD6C4"
+            and hour < 12
+        ):
+            hour += 12
+
+        if (
+            ampm == "\uC624\uC804"
+            and hour == 12
+        ):
+            hour = 0
+
+        normalized += (
+            f" {hour:02d}:{minute:02d}"
+        )
+
+    return {
+        "raw": match.group(0).strip(),
+        "normalized_value": normalized,
+        "precision": "regex_fallback",
+    }
+
+_APPLICATION_RANGE_SEPARATORS = {
+    "~",
+    "～",
+    "-",
+    "–",
+    "—",
+    "부터",
+}
+
+_APPLICATION_RANGE_END_LABELS = {
+    "마감일",
+    "종료일",
+    "마감",
+    "종료",
+    "접수마감일",
+    "신청마감일",
+    "접수종료일",
+    "신청종료일",
+    "접수마감",
+    "신청마감",
+    "접수종료",
+    "신청종료",
+}
+
+_APPLICATION_RANGE_QUOTE_PATTERN = re.compile(
+    r"""[‘’'"“”`]"""
+)
+
+
+def _is_application_range_bridge(
+    value: str,
+) -> bool:
+    """
+    두 날짜 사이의 문자열이 신청기간을 연결하는
+    표현인지 판별한다.
+
+    특정 공고나 날짜를 기준으로 하지 않고,
+    범위 구분자와 시작/마감 의미 표현을 기준으로 판단한다.
+    """
+
+    normalized = _normalized_match_text(value)
+
+    normalized = (
+        _APPLICATION_RANGE_QUOTE_PATTERN.sub(
+            "",
+            normalized,
+        )
+    )
+
+    if not normalized:
+        return False
+
+    # 일반적인 날짜 범위 표현
+    if (
+        normalized
+        in _APPLICATION_RANGE_SEPARATORS
+    ):
+        return True
+
+    # 날짜 사이가 지나치게 멀면
+    # 서로 다른 일정일 가능성이 높다.
+    if len(normalized) > 32:
+        return False
+
+    # 시작일 2026... 마감일 2026...
+    if (
+        normalized
+        in _APPLICATION_RANGE_END_LABELS
+    ):
+        return True
+
+    # 시작일 2026...부터 마감일 2026...
+    for separator in (
+        _APPLICATION_RANGE_SEPARATORS
+    ):
+        if not normalized.startswith(
+            separator
+        ):
+            continue
+
+        remainder = normalized[
+            len(separator):
+        ]
+
+        if (
+            remainder
+            in _APPLICATION_RANGE_END_LABELS
+        ):
+            return True
+
+    return False
+
+def _extract_application_range(
+    matches: list[dict[str, Any]],
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+] | None:
+    positive_keywords = {
+        "\uC2E0\uCCAD\uC811\uC218": 20,
+        "\uC811\uC218\uAE30\uAC04": 20,
+        "\uC2E0\uCCAD\uAE30\uAC04": 20,
+        "\uCCAD\uC57D\uC811\uC218": 20,
+        "\uC778\uD130\uB137\uC2E0\uCCAD": 12,
+        "\uC2E0\uCCAD": 5,
+        "\uC811\uC218": 5,
+    }
+
+    negative_keywords = {
+        "\uC11C\uB958\uC81C\uCD9C": 30,
+        "\uC11C\uB958\uC811\uC218": 30,
+        "\uBC1C\uD45C": 20,
+        "\uACC4\uC57D": 20,
+    }
+
+    best = None
+
+    for match_index, item in enumerate(
+        matches[:8]
+    ):
+        text = _clean_text(
+            item.get("text")
+        )
+
+        found = list(
+            _DATE_PATTERN.finditer(text)
+        )
+
+        for left, right in zip(
+            found,
+            found[1:],
+        ):
+            between = text[
+                left.end():
+                right.start()
+            ]
+
+            if not _is_application_range_bridge(
+                between
+            ):
+                continue
+
+            label = text[
+                max(0, left.start() - 180):
+                left.start()
+            ]
+
+            normalized_label = (
+                _normalized_match_text(label)
+            )
+
+            score = 0
+
+            for keyword, weight in (
+                positive_keywords.items()
+            ):
+                if (
+                    _normalized_match_text(
+                        keyword
+                    )
+                    in normalized_label
+                ):
+                    score += weight
+
+            for keyword, weight in (
+                negative_keywords.items()
+            ):
+                if (
+                    _normalized_match_text(
+                        keyword
+                    )
+                    in normalized_label
+                ):
+                    score -= weight
+
+            if score <= 0:
+                continue
+
+            start_entity = (
+                _date_match_to_entity(left)
+            )
+            end_entity = (
+                _date_match_to_entity(right)
+            )
+
+            candidate = (
+                score,
+                -match_index,
+                start_entity,
+                end_entity,
+            )
+
+            if (
+                best is None
+                or candidate[:2] > best[:2]
+            ):
+                best = candidate
+
+    if best is None:
+        return None
+
+    return best[2], best[3]
+
+
+def _summary_lines(
+    matches: list[dict[str, Any]],
+) -> list[str]:
+    result: list[str] = []
+
+    for match in matches[:8]:
+        text = _clean_text(
+            match.get("text")
+        )
+
+        for line in text.splitlines():
+            line = re.sub(
+                r"\s+",
+                " ",
+                line,
+            ).strip()
+
+            if (
+                line
+                and line not in result
+            ):
+                result.append(line)
+
+    return result
+
+
+def _compact_summary(
+    value: Any,
+    max_length: int = 200,
+) -> str:
+    text = re.sub(
+        r"\s+",
+        " ",
+        _clean_text(value),
+    ).strip()
+
+    if len(text) <= max_length:
+        return text
+
+    return (
+        text[:max_length]
+        .rstrip(" ,;/")
+        + "\u2026"
+    )
+
+
+def _best_summary_line(
+    matches: list[dict[str, Any]],
+    required: tuple[str, ...],
+    preferred: tuple[str, ...],
+    max_length: int = 200,
+) -> str:
+    best = None
+
+    for index, line in enumerate(
+        _summary_lines(matches)
+    ):
+        normalized = (
+            _normalized_match_text(line)
+        )
+
+        if not any(
+            _normalized_match_text(keyword)
+            in normalized
+            for keyword in required
+        ):
+            continue
+
+        score = sum(
+            10
+            for keyword in preferred
+            if (
+                _normalized_match_text(keyword)
+                in normalized
+            )
+        )
+
+        candidate = (
+            score,
+            -index,
+            line,
+        )
+
+        if (
+            best is None
+            or candidate[:2] > best[:2]
+        ):
+            best = candidate
+
+    if best is None:
+        return ""
+
+    return _compact_summary(
+        best[2],
+        max_length,
+    )
+
+
+def _build_eligibility_summary(
+    matches: list[dict[str, Any]],
+) -> str:
+    return _best_summary_line(
+        matches,
+        (
+            "\uBB34\uC8FC\uD0DD",
+            "\uC2E0\uCCAD\uC790\uACA9",
+            "\uC785\uC8FC\uC790",
+        ),
+        (
+            "\uBB34\uC8FC\uD0DD\uC138\uB300\uAD6C\uC131\uC6D0",
+            "\uB9CC19\uC138",
+            "\uAC70\uC8FC",
+            "\uBAA8\uC9D1\uACF5\uACE0\uC77C",
+        ),
+        220,
+    )
+
+
+def _build_supply_summary(
+    matches: list[dict[str, Any]],
+) -> str:
+    selected: list[str] = []
+
+    for line in _summary_lines(matches):
+        normalized = (
+            _normalized_match_text(line)
+        )
+
+        has_candidate = (
+            _normalized_match_text(
+                "\uC608\uBE44\uC785\uC8FC\uC790"
+            )
+            in normalized
+        )
+
+        has_households = (
+            _normalized_match_text(
+                "\uC138\uB300"
+            )
+            in normalized
+        )
+
+        if (
+            has_candidate
+            and has_households
+        ):
+            selected.append(
+                _compact_summary(
+                    line,
+                    160,
+                )
+            )
+
+        if len(selected) >= 2:
+            break
+
+    if selected:
+        return " / ".join(selected)
+
+    return _best_summary_line(
+        matches,
+        (
+            "\uACF5\uAE09",
+            "\uC138\uB300",
+        ),
+        (
+            "\uACF5\uAE09\uB300\uC0C1",
+            "\uBAA8\uC9D1\uD638\uC218",
+            "\uC608\uBE44\uC785\uC8FC\uC790",
+        ),
+        220,
+    )
+
+
+def _build_income_asset_summary(
+    matches: list[dict[str, Any]],
+) -> str:
+    return _best_summary_line(
+        matches,
+        (
+            "\uC18C\uB4DD",
+            "\uC790\uC0B0",
+        ),
+        (
+            "\uAD00\uACC4\uC5C6\uC774",
+            "\uC18C\uB4DD\uAE30\uC900",
+            "\uC790\uC0B0\uAE30\uC900",
+            "\uCD1D\uC790\uC0B0",
+            "\uC790\uB3D9\uCC28",
+        ),
+        220,
+    )
+
+
+def _extract_document_items(
+    matches: list[dict[str, Any]],
+) -> list[str]:
+    text = _normalized_match_text(
+        "\n".join(
+            match.get("text", "")
+            for match in matches[:8]
+        )
+    )
+
+    rules = (
+        (
+            "\uC8FC\uBBFC\uB4F1\uB85D\uD45C\uB4F1\uBCF8",
+            "\uC8FC\uBBFC\uB4F1\uB85D\uB4F1\uBCF8",
+        ),
+        (
+            "\uC8FC\uBBFC\uB4F1\uB85D\uB4F1\uBCF8",
+            "\uC8FC\uBBFC\uB4F1\uB85D\uB4F1\uBCF8",
+        ),
+        (
+            "\uC8FC\uBBFC\uB4F1\uB85D\uD45C\uCD08\uBCF8",
+            "\uC8FC\uBBFC\uB4F1\uB85D\uCD08\uBCF8",
+        ),
+        (
+            "\uAC00\uC871\uAD00\uACC4\uC99D\uBA85\uC11C",
+            "\uAC00\uC871\uAD00\uACC4\uC99D\uBA85\uC11C",
+        ),
+        (
+            "\uC2E0\uBD84\uC99D",
+            "\uC2E0\uBD84\uC99D",
+        ),
+        (
+            "\uC778\uAC10\uC99D\uBA85\uC11C",
+            "\uC778\uAC10\uC99D\uBA85\uC11C",
+        ),
+    )
+
+    result: list[str] = []
+
+    for keyword, display in rules:
+        if (
+            _normalized_match_text(keyword)
+            in text
+            and display not in result
+        ):
+            result.append(display)
+
+    return result[:6]
+
+
 def _collect_phone_numbers(
     matches: list[
         dict[str, Any]
@@ -1710,6 +2231,11 @@ def _build_application_period(
             "start": start,
             "end": end,
             "dates": dates,
+            "summary": (
+                f"{start} ~ {end}"
+                if start and end
+                else start or end or ""
+            ),
         }
     )
 
@@ -1721,6 +2247,81 @@ def _build_application_period(
         )
     ):
         result["status"] = "not_found"
+
+    return result
+
+
+def _build_eligibility(
+    matches: list[
+        dict[str, Any]
+    ],
+) -> dict[str, Any]:
+    result = _build_generic_field(
+        "eligibility",
+        matches,
+    )
+    result["summary"] = (
+        _build_eligibility_summary(
+            matches
+        )
+    )
+    return result
+
+
+def _build_supply_information(
+    matches: list[
+        dict[str, Any]
+    ],
+) -> dict[str, Any]:
+    result = _build_generic_field(
+        "supply_information",
+        matches,
+    )
+    result["summary"] = (
+        _build_supply_summary(
+            matches
+        )
+    )
+    return result
+
+
+def _build_income_asset_criteria(
+    matches: list[
+        dict[str, Any]
+    ],
+) -> dict[str, Any]:
+    result = _build_generic_field(
+        "income_asset_criteria",
+        matches,
+    )
+    result["summary"] = (
+        _build_income_asset_summary(
+            matches
+        )
+    )
+    return result
+
+
+def _build_required_documents(
+    matches: list[
+        dict[str, Any]
+    ],
+) -> dict[str, Any]:
+    result = _build_generic_field(
+        "required_documents",
+        matches,
+    )
+
+    items = _extract_document_items(
+        matches
+    )
+
+    result["items"] = items
+    result["summary"] = (
+        " · ".join(items)
+        if items
+        else ""
+    )
 
     return result
 
@@ -2000,35 +2601,31 @@ def extract_key_information(
             )
         ),
         "eligibility": (
-            _build_generic_field(
-                "eligibility",
+            _build_eligibility(
                 matches[
                     "eligibility"
-                ],
+                ]
             )
         ),
         "supply_information": (
-            _build_generic_field(
-                "supply_information",
+            _build_supply_information(
                 matches[
                     "supply_information"
-                ],
+                ]
             )
         ),
         "income_asset_criteria": (
-            _build_generic_field(
-                "income_asset_criteria",
+            _build_income_asset_criteria(
                 matches[
                     "income_asset_criteria"
-                ],
+                ]
             )
         ),
         "required_documents": (
-            _build_generic_field(
-                "required_documents",
+            _build_required_documents(
                 matches[
                     "required_documents"
-                ],
+                ]
             )
         ),
         "winner_announcement": (
