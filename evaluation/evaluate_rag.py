@@ -453,7 +453,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "생략하면 DEFAULT_RUN_NUMBER에 맞춰 "
-            "GC_RUN_001, HC_RUN_001 형식으로 자동 설정"
+            "GC_RUN_001, BD_RUN_001 형식으로 자동 설정"
         ),
     )
 

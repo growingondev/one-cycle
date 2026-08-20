@@ -70,15 +70,16 @@ def normalize_dataset_name(
         "GC": "GC",
         "GOCHANG": "GC",
         "고창": "GC",
-        "HC": "HC",
-        "HWACHEON": "HC",
-        "화천": "HC",
+
+        "BD": "BD",
+        "BUNDONG": "BD",
+        "서울번동": "BD",
     }
 
     if dataset not in aliases:
         raise ValueError(
             f"지원하지 않는 dataset입니다: {value}\n"
-            "사용 가능: GC, HC"
+            "사용 가능: GC, BD"
         )
 
     return aliases[dataset]
@@ -1987,7 +1988,7 @@ def parse_args() -> argparse.Namespace:
         default="GC",
         help=(
             "평가셋 코드 "
-            "(GC=고창율계, HC=화천신읍2)"
+            "(GC=고창율계, BD=서울번동3)"
         ),
     )
 
