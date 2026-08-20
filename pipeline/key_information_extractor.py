@@ -880,6 +880,617 @@ def _collect_phone_numbers(
     return phones
 
 
+
+# ============================================================
+# 핵심값 단위 추출 보조 함수
+# ============================================================
+def _extract_structured_key_values(
+    section: dict[str, Any],
+) -> list[dict[str, str]]:
+    """structured_table 안의 key/value를 가능한 형태에서 수집한다."""
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for node in _iter_nested_dicts(section):
+        key_values = node.get("key_values")
+
+        if isinstance(key_values, list):
+            for item in key_values:
+                if not isinstance(item, dict):
+                    continue
+
+                key = _clean_text(
+                    item.get("key")
+                    or item.get("label")
+                    or item.get("header")
+                )
+                value = _clean_text(
+                    item.get("value")
+                    or item.get("text")
+                )
+
+                if not key and not value:
+                    continue
+
+                pair = (key, value)
+
+                if pair in seen:
+                    continue
+
+                seen.add(pair)
+                result.append(
+                    {
+                        "key": key,
+                        "value": value,
+                    }
+                )
+
+        key = _clean_text(node.get("key"))
+        value = node.get("value")
+
+        if key and isinstance(
+            value,
+            (str, int, float),
+        ):
+            value_text = _clean_text(value)
+            pair = (key, value_text)
+
+            if pair not in seen:
+                seen.add(pair)
+                result.append(
+                    {
+                        "key": key,
+                        "value": value_text,
+                    }
+                )
+
+    return result
+
+
+def _extract_relevant_snippets(
+    text: str,
+    keywords: Iterable[str],
+    *,
+    max_items: int = 12,
+    max_length: int = 500,
+) -> list[str]:
+    """Section 전체가 아니라 핵심 키워드가 있는 짧은 문장/항목만 추출한다."""
+    if not text:
+        return []
+
+    parts = re.split(
+        r"(?:\n+|[•■※◆●]+)",
+        text,
+    )
+
+    result: list[str] = []
+
+    for part in parts:
+        cleaned = _clean_text(part)
+
+        if not cleaned:
+            continue
+
+        if not _contains_keyword(
+            cleaned,
+            keywords,
+        ):
+            continue
+
+        if len(cleaned) > max_length:
+            sentences = re.split(
+                r"(?<=[.!?。])\s+|(?<=다\.)\s*",
+                cleaned,
+            )
+
+            selected = [
+                _clean_text(sentence)
+                for sentence in sentences
+                if _clean_text(sentence)
+                and _contains_keyword(
+                    sentence,
+                    keywords,
+                )
+            ]
+
+            result.extend(selected)
+        else:
+            result.append(cleaned)
+
+    return _deduplicate_texts(
+        result
+    )[:max_items]
+
+
+def _key_value_matches_for_field(
+    matches: list[dict[str, Any]],
+    field: str,
+) -> list[dict[str, str]]:
+    keywords = FIELD_RULES[field]["keywords"]
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for match in matches:
+        section = match["_section"]
+
+        for item in _extract_structured_key_values(
+            section
+        ):
+            key = item["key"]
+            value = item["value"]
+
+            if not key:
+                continue
+
+            if not _contains_keyword(
+                key,
+                keywords,
+            ):
+                continue
+
+            pair = (key, value)
+
+            if pair in seen:
+                continue
+
+            seen.add(pair)
+            result.append(item)
+
+    return result
+
+
+_DATE_WITH_TIME_PATTERN = re.compile(
+    r"[‘’']?"
+    r"(?P<year>\d{2,4})[.\-/년]\s*"
+    r"(?P<month>\d{1,2})[.\-/월]\s*"
+    r"(?P<day>\d{1,2})(?:일)?"
+    r"(?:\s*\([^)]*\))?"
+    r"\s*"
+    r"(?:(?P<ampm>오전|오후)\s*)?"
+    r"(?P<hour>\d{1,2})?"
+    r"(?::|시)?\s*"
+    r"(?P<minute>\d{1,2})?"
+    r"(?:분)?"
+)
+
+
+_DATE_RANGE_PATTERN = re.compile(
+    r"[‘’']?"
+    r"(?P<start_year>\d{2,4})[.\-/]\s*"
+    r"(?P<start_month>\d{1,2})[.\-/]\s*"
+    r"(?P<start_day>\d{1,2})"
+    r"(?:\s*\([^)]*\))?"
+    r"\s*"
+    r"(?:(?P<start_ampm>오전|오후)\s*)?"
+    r"(?P<start_hour>\d{1,2})?"
+    r"(?::|시)?\s*"
+    r"(?P<start_minute>\d{1,2})?"
+    r"(?:분)?"
+    r"\s*(?:~|∼|～|부터)\s*"
+    r"[‘’']?"
+    r"(?:(?P<end_year>\d{2,4})[.\-/]\s*)?"
+    r"(?P<end_month>\d{1,2})[.\-/]\s*"
+    r"(?P<end_day>\d{1,2})"
+    r"(?:\s*\([^)]*\))?"
+    r"\s*"
+    r"(?:(?P<end_ampm>오전|오후)\s*)?"
+    r"(?P<end_hour>\d{1,2})?"
+    r"(?::|시)?\s*"
+    r"(?P<end_minute>\d{1,2})?"
+    r"(?:분)?"
+)
+
+
+def _normalize_year_value(
+    value: str | int,
+) -> int:
+    year = int(value)
+
+    if year < 100:
+        year += 2000
+
+    return year
+
+
+def _normalize_time_parts(
+    ampm: str | None,
+    hour_raw: str | None,
+    minute_raw: str | None,
+) -> str | None:
+    if not hour_raw:
+        return None
+
+    hour = int(hour_raw)
+    minute = int(minute_raw or 0)
+
+    if ampm == "오후" and hour < 12:
+        hour += 12
+    elif ampm == "오전" and hour == 12:
+        hour = 0
+
+    if not (
+        0 <= hour <= 23
+        and 0 <= minute <= 59
+    ):
+        return None
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _format_date_time(
+    *,
+    year: int,
+    month: int,
+    day: int,
+    time_value: str | None,
+) -> str:
+    date_value = (
+        f"{year:04d}-"
+        f"{month:02d}-"
+        f"{day:02d}"
+    )
+
+    if time_value:
+        return f"{date_value}T{time_value}"
+
+    return date_value
+
+
+def _normalize_date_match(
+    match: re.Match[str],
+) -> str:
+    year = _normalize_year_value(
+        match.group("year")
+    )
+    month = int(match.group("month"))
+    day = int(match.group("day"))
+
+    time_value = _normalize_time_parts(
+        match.group("ampm"),
+        match.group("hour"),
+        match.group("minute"),
+    )
+
+    return _format_date_time(
+        year=year,
+        month=month,
+        day=day,
+        time_value=time_value,
+    )
+
+
+def _normalize_date_range_match(
+    match: re.Match[str],
+) -> tuple[str, str]:
+    """'26.8.31 ~ 9.2처럼 종료 연도가 생략된 범위를 복원한다."""
+
+    start_year = _normalize_year_value(
+        match.group("start_year")
+    )
+    start_month = int(
+        match.group("start_month")
+    )
+    start_day = int(
+        match.group("start_day")
+    )
+
+    end_year_raw = match.group(
+        "end_year"
+    )
+
+    if end_year_raw:
+        end_year = _normalize_year_value(
+            end_year_raw
+        )
+    else:
+        # 종료 연도가 생략되면 시작 연도를 상속한다.
+        end_year = start_year
+
+    end_month = int(
+        match.group("end_month")
+    )
+    end_day = int(
+        match.group("end_day")
+    )
+
+    # 12월 → 1월처럼 연말을 넘는 범위도 방어적으로 처리한다.
+    if (
+        not end_year_raw
+        and (end_month, end_day)
+        < (start_month, start_day)
+    ):
+        end_year += 1
+
+    start_time = _normalize_time_parts(
+        match.group("start_ampm"),
+        match.group("start_hour"),
+        match.group("start_minute"),
+    )
+    end_time = _normalize_time_parts(
+        match.group("end_ampm"),
+        match.group("end_hour"),
+        match.group("end_minute"),
+    )
+
+    start = _format_date_time(
+        year=start_year,
+        month=start_month,
+        day=start_day,
+        time_value=start_time,
+    )
+    end = _format_date_time(
+        year=end_year,
+        month=end_month,
+        day=end_day,
+        time_value=end_time,
+    )
+
+    return start, end
+
+
+def _keyword_positions(
+    text: str,
+    keywords: Iterable[str],
+) -> list[int]:
+    normalized = text.lower()
+    result: list[int] = []
+
+    for keyword in keywords:
+        needle = _clean_text(keyword).lower()
+
+        if not needle:
+            continue
+
+        start = 0
+
+        while True:
+            index = normalized.find(
+                needle,
+                start,
+            )
+
+            if index < 0:
+                break
+
+            result.append(index)
+            start = index + len(needle)
+
+    return sorted(set(result))
+
+
+def _distance_to_nearest_keyword(
+    position: int,
+    keyword_positions: list[int],
+) -> int:
+    if not keyword_positions:
+        return 10**9
+
+    return min(
+        abs(position - keyword_position)
+        for keyword_position
+        in keyword_positions
+    )
+
+
+def _extract_application_period_values(
+    matches: list[dict[str, Any]],
+) -> tuple[
+    str | None,
+    str | None,
+    list[dict[str, Any]],
+]:
+    """신청/접수 문맥에서 실제 기간 범위를 우선 추출한다."""
+
+    positive_keywords = (
+        "신청기간",
+        "신청 기간",
+        "접수기간",
+        "접수 기간",
+        "접수시작",
+        "접수 시작",
+        "접수마감",
+        "접수 마감",
+        "신청시작",
+        "신청 시작",
+        "신청마감",
+        "신청 마감",
+        "청약 접수",
+        "청약접수",
+        "신청접수",
+        "신청 접수",
+    )
+
+    # 1순위: "~"로 연결된 실제 신청 기간을 하나의 range로 인식한다.
+    range_candidates: list[
+        dict[str, Any]
+    ] = []
+
+    for match_item in matches:
+        text_value = match_item["text"]
+        keyword_positions = (
+            _keyword_positions(
+                text_value,
+                positive_keywords,
+            )
+        )
+
+        for range_match in (
+            _DATE_RANGE_PATTERN.finditer(
+                text_value
+            )
+        ):
+            start, end = (
+                _normalize_date_range_match(
+                    range_match
+                )
+            )
+
+            distance = (
+                _distance_to_nearest_keyword(
+                    range_match.start(),
+                    keyword_positions,
+                )
+            )
+
+            left = max(
+                0,
+                range_match.start() - 120,
+            )
+            right = min(
+                len(text_value),
+                range_match.end() + 120,
+            )
+
+            context = _clean_text(
+                text_value[left:right]
+            )
+
+            # 신청/접수 문맥이 없는 날짜범위는 제외한다.
+            if (
+                distance > 250
+                and not _contains_keyword(
+                    context,
+                    positive_keywords,
+                )
+            ):
+                continue
+
+            range_candidates.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "raw": _clean_text(
+                        range_match.group(0)
+                    ),
+                    "context": context,
+                    "distance": distance,
+                }
+            )
+
+    if range_candidates:
+        # 신청/접수 키워드와 가장 가까운 범위를 선택한다.
+        range_candidates.sort(
+            key=lambda item: (
+                item["distance"],
+                item["start"],
+            )
+        )
+
+        selected = range_candidates[0]
+
+        return (
+            selected["start"],
+            selected["end"],
+            [
+                {
+                    "raw": selected["raw"],
+                    "normalized_value": (
+                        f"{selected['start']} ~ "
+                        f"{selected['end']}"
+                    ),
+                    "context": (
+                        selected["context"]
+                    ),
+                }
+            ],
+        )
+
+    # 2순위 fallback:
+    # 완전한 날짜만 존재하는 문서에서는 신청/접수 키워드와 가까운 날짜를 사용한다.
+    date_candidates: list[
+        dict[str, Any]
+    ] = []
+
+    for match_item in matches:
+        text_value = match_item["text"]
+        keyword_positions = (
+            _keyword_positions(
+                text_value,
+                positive_keywords,
+            )
+        )
+
+        for date_match in (
+            _DATE_WITH_TIME_PATTERN.finditer(
+                text_value
+            )
+        ):
+            distance = (
+                _distance_to_nearest_keyword(
+                    date_match.start(),
+                    keyword_positions,
+                )
+            )
+
+            if distance > 250:
+                continue
+
+            normalized = (
+                _normalize_date_match(
+                    date_match
+                )
+            )
+
+            date_candidates.append(
+                {
+                    "raw": _clean_text(
+                        date_match.group(0)
+                    ),
+                    "normalized_value": (
+                        normalized
+                    ),
+                    "distance": distance,
+                }
+            )
+
+    # 가까운 날짜 우선 → 동일 문맥 내에서 시간순
+    date_candidates.sort(
+        key=lambda item: (
+            item["distance"],
+            item["normalized_value"],
+        )
+    )
+
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for item in date_candidates:
+        value = item[
+            "normalized_value"
+        ]
+
+        if value in seen:
+            continue
+
+        seen.add(value)
+        unique.append(item)
+
+    if not unique:
+        return None, None, []
+
+    # fallback에서는 가까운 후보 최대 2개만 기간으로 사용한다.
+    selected = unique[:2]
+    selected.sort(
+        key=lambda item: item[
+            "normalized_value"
+        ]
+    )
+
+    start = selected[0][
+        "normalized_value"
+    ]
+    end = (
+        selected[-1][
+            "normalized_value"
+        ]
+        if len(selected) > 1
+        else start
+    )
+
+    return start, end, selected
+
+
+
 # ============================================================
 # Match 결과
 # ============================================================
@@ -1027,21 +1638,51 @@ def _build_generic_field(
         return {
             "status": "not_found",
             "text": "",
+            "key_values": [],
             "sources": [],
         }
 
-    texts = _deduplicate_texts(
-        match["text"]
-        for match in matches[
-            :5
-        ]
+    key_values = (
+        _key_value_matches_for_field(
+            matches,
+            field,
+        )
     )
+
+    snippets: list[str] = []
+
+    for match in matches[:5]:
+        snippets.extend(
+            _extract_relevant_snippets(
+                match["text"],
+                FIELD_RULES[field][
+                    "keywords"
+                ],
+            )
+        )
+
+    snippets = _deduplicate_texts(
+        snippets
+    )
+
+    text_value = "\n".join(
+        snippets[:10]
+    )
+
+    if not key_values and not text_value:
+        return {
+            "status": "not_found",
+            "text": "",
+            "key_values": [],
+            "sources": _public_sources(
+                matches
+            ),
+        }
 
     return {
         "status": "extracted",
-        "text": "\n\n".join(
-            texts
-        ),
+        "text": text_value,
+        "key_values": key_values[:20],
         "sources": _public_sources(
             matches
         ),
@@ -1059,7 +1700,7 @@ def _build_application_period(
     )
 
     start, end, dates = (
-        _extract_date_bounds(
+        _extract_application_period_values(
             matches
         )
     )
@@ -1071,6 +1712,15 @@ def _build_application_period(
             "dates": dates,
         }
     )
+
+    if (
+        start is None
+        and end is None
+        and not result.get(
+            "key_values"
+        )
+    ):
+        result["status"] = "not_found"
 
     return result
 
@@ -1085,26 +1735,129 @@ def _build_winner_announcement(
         matches,
     )
 
-    _, _, dates = (
-        _extract_date_bounds(
-            matches
+    keywords = FIELD_RULES[
+        "winner_announcement"
+    ]["keywords"]
+
+    winner_dates: list[
+        dict[str, Any]
+    ] = []
+
+    for match_item in matches:
+        text_value = match_item["text"]
+
+        keyword_positions = (
+            _keyword_positions(
+                text_value,
+                keywords,
+            )
+        )
+
+        if not keyword_positions:
+            continue
+
+        for date_match in (
+            _DATE_WITH_TIME_PATTERN.finditer(
+                text_value
+            )
+        ):
+            distance = (
+                _distance_to_nearest_keyword(
+                    date_match.start(),
+                    keyword_positions,
+                )
+            )
+
+            # Section 안의 "가장 이른 날짜"가 아니라
+            # "당첨자/예비입주자 발표" 표현과 가까운 날짜만 후보로 사용한다.
+            if distance > 180:
+                continue
+
+            normalized = (
+                _normalize_date_match(
+                    date_match
+                )
+            )
+
+            left = max(
+                0,
+                date_match.start() - 100,
+            )
+            right = min(
+                len(text_value),
+                date_match.end() + 100,
+            )
+
+            winner_dates.append(
+                {
+                    "raw": _clean_text(
+                        date_match.group(0)
+                    ),
+                    "normalized_value": (
+                        normalized
+                    ),
+                    "context": _clean_text(
+                        text_value[left:right]
+                    ),
+                    "distance": distance,
+                }
+            )
+
+    # keyword와 가까운 날짜를 우선한다.
+    winner_dates.sort(
+        key=lambda item: (
+            item["distance"],
+            item["normalized_value"],
         )
     )
 
-    result["dates"] = dates
+    deduped: list[
+        dict[str, Any]
+    ] = []
+    seen: set[str] = set()
 
-    if dates:
-        result[
-            "announcement_date"
-        ] = dates[0][
+    for item in winner_dates:
+        value = item[
             "normalized_value"
         ]
-    else:
-        result[
-            "announcement_date"
-        ] = None
+
+        if value in seen:
+            continue
+
+        seen.add(value)
+        deduped.append(item)
+
+    public_dates = [
+        {
+            "raw": item["raw"],
+            "normalized_value": (
+                item["normalized_value"]
+            ),
+            "context": item["context"],
+        }
+        for item in deduped
+    ]
+
+    result["dates"] = public_dates
+    result["announcement_date"] = (
+        deduped[0][
+            "normalized_value"
+        ]
+        if deduped
+        else None
+    )
+
+    if (
+        not deduped
+        and not result.get(
+            "key_values"
+        )
+        and not result.get("text")
+    ):
+        result["status"] = "not_found"
 
     return result
+
 
 
 def _build_contact_information(
@@ -1117,11 +1870,20 @@ def _build_contact_information(
         matches,
     )
 
-    result["phone_numbers"] = (
-        _collect_phone_numbers(
-            matches
-        )
+    phones = _collect_phone_numbers(
+        matches
     )
+
+    result["phone_numbers"] = phones
+
+    if (
+        not phones
+        and not result.get(
+            "key_values"
+        )
+        and not result.get("text")
+    ):
+        result["status"] = "not_found"
 
     return result
 
