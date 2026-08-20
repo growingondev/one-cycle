@@ -47,21 +47,20 @@ DEFAULT_EMBEDDING_MODEL = os.getenv(
 # Recall 판정 기준
 # ============================================================
 #
-# 기존:
-#   reference_text와 context의 문자열 유사도
-#   threshold=0.75 이상 → HIT
+# 기존 방식:
+# reference_text와 retrieved_contexts를 문자열 유사도로 비교하고
+# threshold=0.75 이상이면 Recall HIT
 #
-# 변경:
-#   1. 정규화 후 직접 포함 여부
-#   2. 핵심 단어 포함률
-#   3. 날짜/시간/금액 등 숫자 정보 포함률
-#   4. 부분 문자열 유사도
+# 변경 방식:
 #
-# 를 함께 사용한다.
+# 1. 정규화된 텍스트 직접 포함
+# 2. 핵심 토큰 포함률
+# 3. 날짜 / 시간 / 금액 / 수치 포함률
+# 4. 부분 문자열 유사도
+# 5. Top-K Context 전체를 합친 뒤 다시 근거 포함 여부 확인
 #
-# ※ 최종적으로 gold_chunk_ids 기반 Recall을 사용하는 것이 가장
-#    객관적이지만, 현재 평가셋 구조를 그대로 사용할 수 있도록
-#    reference_text 기반 Hybrid Matching을 사용한다.
+# 특히 비교형 / 복합형 / multi-context 질문의 경우
+# 정답 근거가 여러 청크에 나뉘어 있어도 Recall@K를 성공으로 판정한다.
 # ============================================================
 
 NUMERIC_COVERAGE_THRESHOLD = 0.70
@@ -78,13 +77,16 @@ HIGH_SIMILARITY_THRESHOLD = 0.75
 # ============================================================
 
 
-def normalize_dataset_name(value: str) -> str:
+def normalize_dataset_name(
+    value: str,
+) -> str:
     dataset = value.strip().upper()
 
     aliases = {
         "GC": "GC",
         "GOCHANG": "GC",
         "고창": "GC",
+
         "HC": "HC",
         "HWACHEON": "HC",
         "화천": "HC",
@@ -102,7 +104,9 @@ def normalize_dataset_name(value: str) -> str:
 def dataset_paths(
     dataset: str,
 ) -> tuple[Path, Path]:
-    dataset = normalize_dataset_name(dataset)
+    dataset = normalize_dataset_name(
+        dataset
+    )
 
     input_xlsx = (
         RESULTS_DIR
@@ -114,7 +118,10 @@ def dataset_paths(
         / f"{dataset}_FINAL_V1_scored.xlsx"
     )
 
-    return input_xlsx, output_xlsx
+    return (
+        input_xlsx,
+        output_xlsx,
+    )
 
 
 # ============================================================
@@ -167,25 +174,23 @@ def split_retrieved_contexts(
 ) -> list[str]:
     """
     evaluate_rag.py에서 저장한 retrieved_contexts를
-    개별 Rank Context로 분리한다.
+    Rank별 Context 리스트로 변환한다.
 
     예:
 
-    [rank=1 ...]
+    [rank=1 | chunkId=...]
     내용...
 
     ---
-    [rank=2 ...]
+    [rank=2 | chunkId=...]
     내용...
 
-    을
+    →
 
     [
         "내용...",
         "내용..."
     ]
-
-    형태로 변환한다.
     """
 
     if value is None:
@@ -211,7 +216,7 @@ def split_retrieved_contexts(
 
         lines = part.splitlines()
 
-        # 첫 줄이 [rank=...] 메타데이터라면 제거
+        # 첫 줄의 [rank=...] 메타데이터 제거
         if (
             lines
             and lines[0]
@@ -223,7 +228,9 @@ def split_retrieved_contexts(
             ).strip()
 
         if part:
-            contexts.append(part)
+            contexts.append(
+                part
+            )
 
     return contexts
 
@@ -237,59 +244,41 @@ def normalize_text(
     text: str,
 ) -> str:
     """
-    Recall 비교를 위한 정규화.
+    Recall 비교용 정규화.
 
-    다음과 같은 표기 차이를 줄인다.
+    예:
 
-    2026 → 26
+    2026.08.24
+    '26. 08. 24.
+    26년 08월 24일
 
-    '26. 08. 24.(월)
-    '26.08.24(월)
-
-    등의 표현을 최대한 동일하게 비교한다.
+    처럼 표기가 달라도 최대한 동일한 정보로 비교하기 위한 처리.
     """
 
     text = str(text).lower()
 
-    # --------------------------------------------------------
-    # 2026년 → 26년
     # 2026 → 26
-    # --------------------------------------------------------
-
     text = re.sub(
         r"\b20(\d{2})\b",
         r"\1",
         text,
     )
 
-    # --------------------------------------------------------
-    # 시간 표현 일부 통일
-    #
     # 10시 → 10:00
-    # --------------------------------------------------------
-
     text = re.sub(
         r"(\d{1,2})\s*시",
         r"\1:00",
         text,
     )
 
-    # --------------------------------------------------------
     # 공백 제거
-    # --------------------------------------------------------
-
     text = re.sub(
         r"\s+",
         "",
         text,
     )
 
-    # --------------------------------------------------------
-    # 특수문자 제거
-    #
     # 한글 / 영어 / 숫자만 유지
-    # --------------------------------------------------------
-
     text = re.sub(
         r"[^0-9a-z가-힣]",
         "",
@@ -308,25 +297,27 @@ def normalize_number(
     value: str,
 ) -> str:
     """
-    숫자를 비교하기 쉽게 정규화.
+    숫자 표기 통일.
 
-    예:
-
-    08   → 8
+    08 → 8
     08.0 → 8
     """
 
     value = value.strip()
 
     try:
-        number = float(value)
+        number = float(
+            value
+        )
 
         if number.is_integer():
             return str(
                 int(number)
             )
 
-        return str(number)
+        return str(
+            number
+        )
 
     except ValueError:
         return value
@@ -336,20 +327,20 @@ def extract_numbers(
     text: str,
 ) -> list[str]:
     """
-    reference/context에서 숫자 정보를 추출한다.
-
-    날짜, 시간, 금액, 면적, 나이 등의
-    핵심 정보를 비교하는 데 사용한다.
+    날짜 / 시간 / 금액 / 면적 / 나이 등의 숫자를 추출한다.
 
     예:
 
     '26.08.24 10:00~16:00
 
     →
+
     26, 8, 24, 10, 0, 16, 0
     """
 
-    text = str(text)
+    text = str(
+        text
+    )
 
     # 2026 → 26
     text = re.sub(
@@ -364,8 +355,11 @@ def extract_numbers(
     )
 
     return [
-        normalize_number(number)
-        for number in numbers
+        normalize_number(
+            number
+        )
+        for number
+        in numbers
     ]
 
 
@@ -378,10 +372,12 @@ def extract_tokens(
     text: str,
 ) -> list[str]:
     """
-    reference_text의 의미 있는 단어를 추출한다.
+    reference_text에서 비교에 사용할 핵심 토큰을 추출한다.
     """
 
-    text = str(text).lower()
+    text = str(
+        text
+    ).lower()
 
     text = re.sub(
         r"\b20(\d{2})\b",
@@ -396,7 +392,6 @@ def extract_tokens(
         text,
     )
 
-    # 비교에 큰 의미가 없는 단어
     stopwords = {
         "및",
         "또는",
@@ -430,7 +425,9 @@ def extract_tokens(
         if token in stopwords:
             continue
 
-        result.append(token)
+        result.append(
+            token
+        )
 
     return result
 
@@ -445,10 +442,8 @@ def token_coverage(
     context: str,
 ) -> float:
     """
-    reference_text의 핵심 토큰이
-    context 안에 얼마나 존재하는지 계산한다.
-
-    0.0 ~ 1.0
+    reference_text의 핵심 토큰 중
+    context에 포함된 비율을 계산한다.
     """
 
     tokens = extract_tokens(
@@ -492,12 +487,10 @@ def number_coverage(
     context: str,
 ) -> float | None:
     """
-    reference_text에 있는 숫자 정보가
-    context에도 얼마나 존재하는지 계산한다.
+    reference_text에 포함된 숫자 정보가
+    context 안에 얼마나 존재하는지 계산한다.
 
-    날짜 / 시간 / 금액 / 나이 등에서 중요하다.
-
-    reference_text에 숫자가 없다면 None.
+    reference_text에 숫자가 없으면 None.
     """
 
     reference_numbers = (
@@ -546,12 +539,8 @@ def partial_similarity(
     context: str,
 ) -> float:
     """
-    긴 Context 안에 reference_text와 유사한
-    부분이 존재하는지 확인한다.
-
-    기존 SequenceMatcher를 유지하되
-    전체 Context와만 비교하지 않고
-    부분 구간을 비교한다.
+    긴 Context 중 일부 구간이 reference_text와
+    얼마나 비슷한지 계산한다.
     """
 
     ref_norm = normalize_text(
@@ -568,22 +557,22 @@ def partial_similarity(
     ):
         return 0.0
 
-    # reference가 context에 그대로 존재
+    # reference 전체가 context 안에 존재
     if ref_norm in ctx_norm:
         return 1.0
 
-    # context가 reference보다 짧은 경우
-    if len(ctx_norm) <= len(ref_norm):
+    # Context가 더 짧으면 전체 비교
+    if (
+        len(ctx_norm)
+        <= len(ref_norm)
+    ):
         return SequenceMatcher(
             None,
             ref_norm,
             ctx_norm,
         ).ratio()
 
-    # --------------------------------------------------------
-    # 긴 context의 일부분과 reference 비교
-    # --------------------------------------------------------
-
+    # Context가 긴 경우 부분 비교
     window_size = max(
         len(ref_norm),
         int(
@@ -627,8 +616,11 @@ def partial_similarity(
             score,
         )
 
-    # 마지막 부분도 한 번 비교
-    if len(ctx_norm) > window_size:
+    # 마지막 구간도 확인
+    if (
+        len(ctx_norm)
+        > window_size
+    ):
         candidate = ctx_norm[
             -window_size:
         ]
@@ -648,7 +640,7 @@ def partial_similarity(
 
 
 # ============================================================
-# 실제 Evidence 판정
+# Evidence 판정
 # ============================================================
 
 
@@ -661,7 +653,7 @@ def evidence_matches(
     str,
 ]:
     """
-    Context가 정답 근거를 포함하는지 판정한다.
+    Context 안에 reference_text의 정답 근거가 존재하는지 판단한다.
 
     Returns
     -------
@@ -672,7 +664,7 @@ def evidence_matches(
         진단용 점수
 
     reason
-        어떤 방식으로 매칭되었는지
+        어떤 조건으로 HIT 되었는지
     """
 
     ref_norm = normalize_text(
@@ -694,9 +686,7 @@ def evidence_matches(
         )
 
     # ========================================================
-    # 1. 정규화 후 reference 전체가 Context에 포함
-    #
-    # 가장 신뢰도가 높은 방식
+    # 1. 정규화 후 reference 전체가 Context 안에 존재
     # ========================================================
 
     if ref_norm in ctx_norm:
@@ -707,7 +697,7 @@ def evidence_matches(
         )
 
     # ========================================================
-    # 각각의 보조 점수 계산
+    # 보조 점수 계산
     # ========================================================
 
     word_score = token_coverage(
@@ -726,16 +716,13 @@ def evidence_matches(
     )
 
     # ========================================================
-    # 2. 날짜 / 금액 / 시간 등의 숫자가 있는 경우
+    # 2. 숫자 정보가 존재하는 정답
     #
-    # 숫자 정보는 RAG 질문에서 매우 중요하기 때문에
-    # 숫자가 실제로 일치하는지를 우선적으로 본다.
+    # 날짜 / 금액 / 시간 / 면적 / 나이 등
     # ========================================================
 
     if numeric_score is not None:
 
-        # 숫자 대부분이 일치하고
-        # 핵심 단어도 일정 수준 이상 일치
         if (
             numeric_score
             >= NUMERIC_COVERAGE_THRESHOLD
@@ -757,8 +744,7 @@ def evidence_matches(
                 "numeric_fact_match",
             )
 
-        # 숫자가 거의 완전히 동일하고
-        # 문장 유사성도 존재
+        # 숫자가 거의 전부 일치하는 경우
         if (
             numeric_score
             >= 0.95
@@ -819,8 +805,6 @@ def evidence_matches(
 
     # ========================================================
     # 5. 일치하지 않음
-    #
-    # 그래도 디버깅을 위해 가장 높은 점수를 반환한다.
     # ========================================================
 
     candidates = [
@@ -860,27 +844,30 @@ def recall_at_k(
     str,
 ]:
     """
-    Recall@K
+    Recall@K 계산.
 
-    정답 근거(reference_text)가
-    Top-K 검색 결과 안에 하나라도 존재하면:
+    Top-K 내 개별 Context를 먼저 검사한 뒤,
+    개별 청크에서는 정답 전체를 찾지 못했다면
+    Top-K Context 전체를 합쳐 다시 검사한다.
 
-        Recall@K = 1
-
-    존재하지 않으면:
-
-        Recall@K = 0
-
-    reference_text가 없는 Unanswerable 질문은:
-
-        None
+    이렇게 하면 비교 질문이나 복합 질문처럼
+    정답 근거가 여러 청크에 나뉘어 있는 경우도
+    Recall@K = 1로 판정할 수 있다.
 
     Returns
     -------
     recall
+        1 / 0 / None
+
     matched_rank
+        하나의 Context에서 찾았을 경우 실제 Rank.
+        여러 Context를 합쳐야 찾을 수 있었으면 None.
+
     best_score
+        진단용 점수.
+
     match_reason
+        매칭 방식.
     """
 
     if not reference_text.strip():
@@ -891,11 +878,25 @@ def recall_at_k(
             "no_reference_text",
         )
 
+    top_k_contexts = contexts[:k]
+
+    if not top_k_contexts:
+        return (
+            0,
+            None,
+            0.0,
+            "no_contexts",
+        )
+
     best_score = 0.0
     best_reason = "no_match"
 
+    # ========================================================
+    # 1. 개별 Context 검사
+    # ========================================================
+
     for rank, context in enumerate(
-        contexts[:k],
+        top_k_contexts,
         start=1,
     ):
         (
@@ -918,6 +919,44 @@ def recall_at_k(
                 score,
                 reason,
             )
+
+    # ========================================================
+    # 2. Top-K Context 전체를 하나로 합쳐 검사
+    #
+    # 비교형 / multi-hop / 복합 질문 대응
+    # ========================================================
+
+    combined_context = "\n".join(
+        top_k_contexts
+    )
+
+    (
+        combined_matched,
+        combined_score,
+        combined_reason,
+    ) = evidence_matches(
+        reference_text,
+        combined_context,
+    )
+
+    if combined_score > best_score:
+        best_score = combined_score
+        best_reason = combined_reason
+
+    if combined_matched:
+        return (
+            1,
+            None,
+            combined_score,
+            (
+                f"combined_top_{k}_"
+                f"{combined_reason}"
+            ),
+        )
+
+    # ========================================================
+    # 3. Top-K 전체에서도 근거 미탐지
+    # ========================================================
 
     return (
         0,
@@ -982,7 +1021,9 @@ async def build_ragas_scorers(
 
     from openai import AsyncOpenAI
 
-    from ragas.llms import llm_factory
+    from ragas.llms import (
+        llm_factory,
+    )
 
     from ragas.embeddings import (
         HuggingFaceEmbeddings,
@@ -1049,7 +1090,7 @@ async def build_ragas_scorers(
 
 
 # ============================================================
-# 문항 1개 RAGAS 평가
+# RAGAS 문항 1개 평가
 # ============================================================
 
 
@@ -1089,9 +1130,13 @@ async def score_one_with_ragas(
             if value is None:
                 return None
 
-            value = float(value)
+            value = float(
+                value
+            )
 
-            if math.isnan(value):
+            if math.isnan(
+                value
+            ):
                 return None
 
             return value
@@ -1104,10 +1149,6 @@ async def score_one_with_ragas(
 
             return None
 
-    # --------------------------------------------------------
-    # Context Precision
-    # --------------------------------------------------------
-
     scores[
         "context_precision"
     ] = await safe_score(
@@ -1116,10 +1157,6 @@ async def score_one_with_ragas(
         reference=reference,
         retrieved_contexts=contexts,
     )
-
-    # --------------------------------------------------------
-    # Context Recall
-    # --------------------------------------------------------
 
     scores[
         "context_recall"
@@ -1130,10 +1167,6 @@ async def score_one_with_ragas(
         retrieved_contexts=contexts,
     )
 
-    # --------------------------------------------------------
-    # Faithfulness
-    # --------------------------------------------------------
-
     scores[
         "faithfulness"
     ] = await safe_score(
@@ -1143,10 +1176,6 @@ async def score_one_with_ragas(
         retrieved_contexts=contexts,
     )
 
-    # --------------------------------------------------------
-    # Response Relevancy
-    # --------------------------------------------------------
-
     scores[
         "response_relevancy"
     ] = await safe_score(
@@ -1154,10 +1183,6 @@ async def score_one_with_ragas(
         user_input=user_input,
         response=response,
     )
-
-    # --------------------------------------------------------
-    # Factual Correctness
-    # --------------------------------------------------------
 
     scores[
         "factual_correctness"
@@ -1248,7 +1273,7 @@ async def evaluate_metrics(
     )
 
     # ========================================================
-    # 필요한 열 확인
+    # 필수 열 확인
     # ========================================================
 
     required = [
@@ -1278,7 +1303,9 @@ async def evaluate_metrics(
         raise ValueError(
             "평가에 필요한 Excel 열이 "
             "없습니다:\n"
-            + ", ".join(missing)
+            + ", ".join(
+                missing
+            )
         )
 
     # ========================================================
@@ -1291,15 +1318,12 @@ async def evaluate_metrics(
         "recall_match_method",
     )
 
-    # Top-5에서 실제로 몇 등에
-    # 정답 근거가 검색되었는지 저장
     recall_rank_col = ensure_column(
         ws,
         columns,
         "recall_matched_rank",
     )
 
-    # 디버깅용 점수
     recall_score_col = ensure_column(
         ws,
         columns,
@@ -1340,7 +1364,7 @@ async def evaluate_metrics(
         )
 
     # ========================================================
-    # 시작 출력
+    # 시작 정보
     # ========================================================
 
     print(
@@ -1369,7 +1393,7 @@ async def evaluate_metrics(
     print(
         "Recall 방식      : "
         "Hybrid Evidence Matching "
-        "(텍스트 + 핵심 토큰 + 숫자 사실)"
+        "+ Combined Top-K Context"
     )
 
     print(
@@ -1386,7 +1410,6 @@ async def evaluate_metrics(
     # ========================================================
 
     processed = 0
-
     answerable = 0
 
     recall_1_hits = 0
@@ -1405,7 +1428,7 @@ async def evaluate_metrics(
     }
 
     # ========================================================
-    # 평가 문항 반복
+    # 문항 반복
     # ========================================================
 
     for row in range(
@@ -1413,20 +1436,12 @@ async def evaluate_metrics(
         ws.max_row + 1,
     ):
 
-        # ----------------------------------------------------
-        # question_id
-        # ----------------------------------------------------
-
         question_id = ws.cell(
             row=row,
             column=columns[
                 "question_id"
             ],
         ).value
-
-        # ----------------------------------------------------
-        # user_input
-        # ----------------------------------------------------
 
         user_input = ws.cell(
             row=row,
@@ -1446,20 +1461,12 @@ async def evaluate_metrics(
         if not user_input:
             continue
 
-        # ----------------------------------------------------
-        # reference
-        # ----------------------------------------------------
-
         reference = ws.cell(
             row=row,
             column=columns[
                 "reference"
             ],
         ).value
-
-        # ----------------------------------------------------
-        # reference_text
-        # ----------------------------------------------------
 
         reference_text = ws.cell(
             row=row,
@@ -1468,10 +1475,6 @@ async def evaluate_metrics(
             ],
         ).value
 
-        # ----------------------------------------------------
-        # retrieved_contexts
-        # ----------------------------------------------------
-
         retrieved_raw = ws.cell(
             row=row,
             column=columns[
@@ -1479,20 +1482,12 @@ async def evaluate_metrics(
             ],
         ).value
 
-        # ----------------------------------------------------
-        # response
-        # ----------------------------------------------------
-
         response = ws.cell(
             row=row,
             column=columns[
                 "response"
             ],
         ).value
-
-        # ----------------------------------------------------
-        # 문자열 정리
-        # ----------------------------------------------------
 
         reference = (
             ""
@@ -1525,10 +1520,6 @@ async def evaluate_metrics(
         )
 
         processed += 1
-
-        # ====================================================
-        # 문항 정보 출력
-        # ====================================================
 
         print(
             f"\n[{processed:02d}] "
@@ -1582,7 +1573,7 @@ async def evaluate_metrics(
         )
 
         # ====================================================
-        # Excel에 Recall 저장
+        # Recall 저장
         # ====================================================
 
         ws.cell(
@@ -1660,32 +1651,69 @@ async def evaluate_metrics(
                 r5 or 0
             )
 
-            # Top-5 결과를 기준으로
-            # 매칭 방법/순위/점수 저장
+            # ------------------------------------------------
+            # 가장 작은 K에서 성공한 결과를
+            # Excel 진단 정보로 기록
+            # ------------------------------------------------
+
+            if r1 == 1:
+
+                final_rank = rank1
+                final_score = score1
+                final_reason = reason1
+                matched_scope = "Top-1"
+
+            elif r3 == 1:
+
+                final_rank = rank3
+                final_score = score3
+                final_reason = reason3
+                matched_scope = "Top-3"
+
+            elif r5 == 1:
+
+                final_rank = rank5
+                final_score = score5
+                final_reason = reason5
+                matched_scope = "Top-5"
+
+            else:
+
+                final_rank = None
+                final_score = score5
+                final_reason = reason5
+                matched_scope = (
+                    "Top-5 미탐지"
+                )
 
             ws.cell(
                 row=row,
                 column=recall_method_col,
                 value=(
                     "hybrid evidence match"
-                    f" | reason={reason5}"
+                    f" | scope={matched_scope}"
+                    f" | reason={final_reason}"
                 ),
             )
 
             ws.cell(
                 row=row,
                 column=recall_rank_col,
-                value=rank5,
+                value=final_rank,
             )
 
             ws.cell(
                 row=row,
                 column=recall_score_col,
                 value=round(
-                    score5,
+                    final_score,
                     4,
                 ),
             )
+
+            # ------------------------------------------------
+            # Console 출력
+            # ------------------------------------------------
 
             print(
                 "  Recall@1/3/5   : "
@@ -1694,34 +1722,45 @@ async def evaluate_metrics(
                 f"{r5}"
             )
 
-            if rank5 is not None:
+            print(
+                "  Match Scope    : "
+                f"{matched_scope}"
+            )
+
+            if final_rank is not None:
 
                 print(
                     "  Match Rank     : "
-                    f"{rank5}"
+                    f"{final_rank}"
                 )
 
-                print(
-                    "  Match Reason   : "
-                    f"{reason5}"
-                )
+            elif (
+                r1 == 1
+                or r3 == 1
+                or r5 == 1
+            ):
 
                 print(
-                    "  Match Score    : "
-                    f"{score5:.4f}"
+                    "  Match Rank     : "
+                    "복수 Context"
                 )
 
             else:
 
                 print(
-                    "  Match          : "
-                    "Top-5 내 근거 미탐지"
+                    "  Match Rank     : "
+                    "없음"
                 )
 
-                print(
-                    "  Best Score     : "
-                    f"{score5:.4f}"
-                )
+            print(
+                "  Match Reason   : "
+                f"{final_reason}"
+            )
+
+            print(
+                "  Match Score    : "
+                f"{final_score:.4f}"
+            )
 
         # ====================================================
         # RAGAS
@@ -1729,17 +1768,15 @@ async def evaluate_metrics(
 
         if args.skip_ragas:
 
-            # 이미 scored.xlsx에 RAGAS 결과가 존재하는 경우
-            # 기존 결과를 지우지 않는다.
-            #
-            # ragas_status가 비어 있을 때만 SKIPPED 입력.
-
+            # 기존 scored.xlsx에 RAGAS 값이 들어 있으면
+            # 그대로 유지한다.
             current_status = ws.cell(
                 row=row,
                 column=ragas_status_col,
             ).value
 
             if current_status is None:
+
                 ws.cell(
                     row=row,
                     column=ragas_status_col,
@@ -1828,9 +1865,6 @@ async def evaluate_metrics(
 
         # ====================================================
         # 중간 저장
-        #
-        # 평가 중 오류가 발생해도 앞 문항의 결과가
-        # 보존되도록 매 문항마다 저장한다.
         # ====================================================
 
         wb.save(
@@ -1997,7 +2031,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "RAGAS 평가는 실행하지 않고 "
-            "Recall@K만 계산합니다."
+            "Recall@K만 다시 계산합니다."
         ),
     )
 
