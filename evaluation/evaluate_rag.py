@@ -39,9 +39,9 @@ def normalize_dataset_name(value: str) -> str:
         "GC": "GC",
         "GOCHANG": "GC",
         "고창": "GC",
-        "HC": "HC",
-        "HWACHEON": "HC",
-        "화천": "HC",
+        "BD": "BD",
+        "BEONDONG": "BD",
+        "서울 번동": "BD",
     }
 
     if dataset not in aliases:
