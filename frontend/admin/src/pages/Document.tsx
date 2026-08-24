@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import DocumentDetail from './DocumentDetail'; // ❗ 이 파일 새로 생성해야 함
+import DocumentDetail from './DocumentDetail';
 
 export interface DocumentItem {
   id: number;
@@ -27,6 +27,7 @@ const formatFileSize = (bytes: number) => {
 export default function Document() {
   const navigate = useNavigate();
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [listTotal, setListTotal] = useState(0);
   const [stats, setStats] = useState({ total: 0, succeeded: 0, running: 0, failed: 0 });
   const [totalPages, setTotalPages] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
@@ -47,10 +48,16 @@ export default function Document() {
   const fetchStats = async () => {
     const fetchCount = async (status: string) => {
       const res = await fetch(`/api/admin/documents?page=1&size=1${status ? `&processing_status=${status}` : ''}`, { credentials: 'include' });
-      return res.ok ? (await res.json()).total : 0;
+      if (res.status === 401) { throw new Error('401'); }
+      if (!res.ok) return 0;
+      return (await res.json()).total || 0;
     };
-    const [total, succeeded, running, failed] = await Promise.all([fetchCount(''), fetchCount('succeeded'), fetchCount('running'), fetchCount('failed')]);
-    setStats({ total, succeeded, running, failed });
+    try {
+      const [total, succeeded, running, failed] = await Promise.all([fetchCount(''), fetchCount('succeeded'), fetchCount('running'), fetchCount('failed')]);
+      setStats({ total, succeeded, running, failed });
+    } catch (e: any) {
+      if (e.message === '401') navigate('/');
+    }
   };
 
   const fetchDocuments = async () => {
@@ -66,6 +73,7 @@ export default function Document() {
 
       const res = await fetch(`/api/admin/documents?${query}`, { credentials: 'include' });
       if (res.status === 401) { navigate('/'); return; }
+      if (!res.ok) { alert('서버 오류로 인해 문서 목록을 불러올 수 없습니다.'); return; }
       
       const data = await res.json();
       const mappedItems = (data.items || []).map((item: any) => ({
@@ -81,6 +89,7 @@ export default function Document() {
       }));
 
       setDocuments(mappedItems);
+      setListTotal(data.total || 0);
       setTotalPages(data.total_pages || 1);
     } finally {
       setIsLoading(false);
@@ -89,7 +98,8 @@ export default function Document() {
 
   const handleSearch = () => page === 1 ? fetchDocuments() : setPage(1);
 
-  const handleDownload = async (id: number, e: React.MouseEvent) => {
+  // 파일명을 파라미터로 추가 받아 다운로드 속성에 세팅
+  const handleDownload = async (id: number, fileName: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
       const res = await fetch(`/api/admin/documents/${id}/download`, { credentials: 'include' });
@@ -102,12 +112,12 @@ export default function Document() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `document_${id}`; 
+      a.download = fileName; // 원본 확장자가 유지됨
       document.body.appendChild(a);
       a.click();
       a.remove();
     } catch {
-      alert('다운로드 중 오류가 발생했습니다.');
+      alert('다운로드 중 서버 오류가 발생했습니다.');
     }
   };
 
@@ -118,10 +128,7 @@ export default function Document() {
   return (
     <main className="content">
       <div className="page-head">
-        <div>
-          <h1>문서 관리</h1>
-          <p>공고에 연결된 문서의 처리 및 AI 분석 상태를 확인합니다.</p>
-        </div>
+        <div><h1>문서 관리</h1><p>공고에 연결된 문서의 처리 및 AI 분석 상태를 확인합니다.</p></div>
       </div>
 
       <section className="stats">
@@ -157,13 +164,11 @@ export default function Document() {
       </section>
 
       <section className="card table-card">
-        <div className="table-toolbar"><b>총 {stats.total}건</b></div>
+        <div className="table-toolbar"><b>총 {listTotal}건</b></div>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
-              <tr>
-                <th>ID</th><th>연결 공고</th><th>문서명</th><th>유형</th><th>크기</th><th>처리 상태</th><th>분석 상태</th><th>작업</th>
-              </tr>
+              <tr><th>ID</th><th>연결 공고</th><th>문서명</th><th>유형</th><th>크기</th><th>처리 상태</th><th>분석 상태</th><th>작업</th></tr>
             </thead>
             <tbody>
               {isLoading ? (
@@ -178,7 +183,7 @@ export default function Document() {
                   <td><span className={`badge ${d.processStatus === 'succeeded' ? 'green' : d.processStatus === 'failed' ? 'red' : 'orange'}`}>{processingStatusLabel[d.processStatus] || d.processStatus}</span></td>
                   <td><span className={`badge ${d.analysisStatus === 'pass' ? 'green' : d.analysisStatus === 'fail' ? 'red' : 'gray'}`}>{analysisStatusLabel[d.analysisStatus] || d.analysisStatus}</span></td>
                   <td onClick={e => e.stopPropagation()}>
-                    <button className="btn btn-outline" disabled={d.downloadStatus !== 'completed'} onClick={(e) => handleDownload(d.id, e)}>다운로드</button>
+                    <button className="btn btn-outline" disabled={d.downloadStatus !== 'completed'} onClick={(e) => handleDownload(d.id, d.docName, e)}>다운로드</button>
                   </td>
                 </tr>
               ))}

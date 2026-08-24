@@ -14,10 +14,7 @@ export interface Notice {
 }
 
 const collectionStatusLabel: Record<string, string> = {
-  running: '수집중',
-  success: '수집완료',
-  partial: '부분완료',
-  failed: '수집실패',
+  running: '수집중', success: '수집완료', partial: '부분완료', failed: '수집실패',
 };
 
 function getBadgeClass(value: string) {
@@ -30,7 +27,7 @@ function getBadgeClass(value: string) {
 export default function Announcement() {
   const navigate = useNavigate();
   const [notices, setNotices] = useState<Notice[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
+  const [listTotal, setListTotal] = useState(0); // 현재 검색된 목록 건수
   const [totalPages, setTotalPages] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   
@@ -43,14 +40,13 @@ export default function Announcement() {
 
   useEffect(() => {
     fetchNotices();
-  }, [page]); // page 변경 시 자동 페칭
+  }, [page]);
 
   const fetchNotices = async () => {
     try {
       setIsLoading(true);
       const query = new URLSearchParams({
-        page: page.toString(),
-        size: '10',
+        page: page.toString(), size: '10',
         ...(keyword && { search: keyword }),
         ...(status && { announcement_status: status }),
         ...(collect && { collection_status: collect }),
@@ -59,7 +55,7 @@ export default function Announcement() {
       const res = await fetch(`/api/admin/announcements?${query}`, { credentials: 'include' });
       
       if (res.status === 401) { navigate('/'); return; }
-      if (!res.ok) throw new Error('조회 실패');
+      if (!res.ok) { alert('목록을 불러오는 중 서버 오류가 발생했습니다.'); return; }
       
       const data = await res.json();
       
@@ -75,7 +71,7 @@ export default function Announcement() {
       }));
 
       setNotices(mappedItems);
-      setTotalCount(data.total || 0);
+      setListTotal(data.total || 0);
       setTotalPages(data.total_pages || 1);
     } catch (error) {
       console.error(error);
@@ -86,7 +82,19 @@ export default function Announcement() {
 
   const handleSearch = () => {
     if (page === 1) fetchNotices();
-    else setPage(1); // 1페이지로 가면 useEffect가 fetchNotices를 호출함
+    else setPage(1);
+  };
+
+  const handleCollectRequest = async () => {
+    try {
+      const res = await fetch('/api/admin/announcements/collect', { method: 'POST', credentials: 'include' });
+      if (res.status === 401) { navigate('/'); return; }
+      if (!res.ok) { alert('서버 오류로 인해 수집 요청에 실패했습니다.'); return; }
+      alert('공고 수집 작업을 요청했습니다.');
+      fetchNotices();
+    } catch (error) {
+      alert('네트워크 오류가 발생했습니다.');
+    }
   };
 
   if (selectedNoticeId) {
@@ -100,10 +108,7 @@ export default function Announcement() {
           <h1>공고 관리</h1>
           <p>수집된 공고 목록과 수집 상태를 조회하고 관리합니다.</p>
         </div>
-        <button className="btn btn-primary" onClick={async () => {
-          const res = await fetch('/api/admin/announcements/collect', { method: 'POST', credentials: 'include' });
-          if (res.ok) { alert('수집 요청 완료'); fetchNotices(); }
-        }}>＋ 공고 수집</button>
+        <button className="btn btn-primary" onClick={handleCollectRequest}>＋ 공고 수집</button>
       </div>
       
       <section className="card filters">
@@ -121,7 +126,7 @@ export default function Announcement() {
       
       <section className="card table-card">
         <div className="table-toolbar">
-          <b>총 {totalCount}건</b>
+          <b>총 {listTotal}건</b>
         </div>
         <div className="table-wrap">
           <table className="data-table">

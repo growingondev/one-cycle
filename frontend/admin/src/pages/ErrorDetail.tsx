@@ -4,22 +4,32 @@ import { useNavigate } from 'react-router-dom';
 const statusToDisplay: Record<string, string> = { unresolved: '미해결', in_progress: '해결중', resolved: '해결완료' };
 const getStatusColor = (s: string) => s === 'resolved' ? 'var(--green)' : s === 'in_progress' ? 'var(--orange)' : 'var(--red)'; 
 
-export default function ErrorDetail({ id, onBack }: { id: number, onBack: () => void }) {
+interface ErrorDetailProps {
+  id: number;
+  onBack: () => void;
+}
+
+export default function ErrorDetail({ id, onBack }: ErrorDetailProps) {
   const navigate = useNavigate();
   const [detail, setDetail] = useState<any>(null);
   const [status, setStatus] = useState('unresolved');
   const [note, setNote] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     const fetchDetail = async () => {
-      const res = await fetch(`/api/admin/errors/${id}`, { credentials: 'include' });
-      if (res.status === 401) { navigate('/'); return; }
-      if (res.status === 404) { alert('오류 정보를 찾을 수 없습니다.'); onBack(); return; }
-      if (res.ok) {
+      try {
+        const res = await fetch(`/api/admin/errors/${id}`, { credentials: 'include' });
+        if (res.status === 401) { navigate('/'); return; }
+        if (res.status === 404) { alert('오류 정보를 찾을 수 없습니다.'); onBack(); return; }
+        if (!res.ok) { alert('오류 상세 정보를 불러오는 중 서버 문제가 발생했습니다.'); setFetchError(true); onBack(); return; }
         const data = await res.json();
         setDetail(data);
         setStatus(data.status);
+      } catch {
+        alert('네트워크 오류가 발생했습니다.');
+        onBack();
       }
     };
     fetchDetail();
@@ -34,16 +44,20 @@ export default function ErrorDetail({ id, onBack }: { id: number, onBack: () => 
         credentials: 'include',
         body: JSON.stringify({ 
           status: apiStatus, 
-          resolution: note.trim() || null // 입력 UI가 있을 경우 입력값 전송, 아니면 null
+          resolution: note.trim() || null 
         })
       });
 
       if (res.status === 401) { navigate('/'); return; }
-      if (!res.ok) throw new Error();
-      setStatus(apiStatus);
+      if (!res.ok) { alert('서버 오류로 인해 상태 변경에 실패했습니다.'); return; }
+      
+      const updated = await res.json();
+      setDetail(updated);         // 전체 데이터(해결 시각, 메모 등) 교체
+      setStatus(updated.status);  // 상태 동기화
+      setNote('');                // 입력창 초기화
       alert('상태가 변경되었습니다.');
     } catch {
-      alert('상태 변경에 실패했습니다.');
+      alert('네트워크 오류가 발생했습니다.');
     } finally {
       setIsUpdating(false);
     }
@@ -55,16 +69,16 @@ export default function ErrorDetail({ id, onBack }: { id: number, onBack: () => 
       const res = await fetch(`/api/admin/errors/${id}/retry`, { method: 'POST', credentials: 'include' });
       if (res.status === 401) { navigate('/'); return; }
       if (res.status === 409) { alert('현재 재시도 할 수 없는 상태입니다.'); return; }
-      if (!res.ok) throw new Error();
+      if (!res.ok) { alert('서버 오류로 인해 재시도 요청에 실패했습니다.'); return; }
       alert('오류 재시도 작업이 요청되었습니다.');
     } catch {
-      alert('재시도 요청에 실패했습니다.');
+      alert('네트워크 오류가 발생했습니다.');
     } finally {
       setIsUpdating(false);
     }
   };
 
-  if (!detail) return <main className="content"><div style={{ padding: '40px', textAlign: 'center' }}>불러오는 중...</div></main>;
+  if (fetchError || !detail) return <main className="content"><div style={{ padding: '40px', textAlign: 'center' }}>불러오는 중...</div></main>;
 
   return (
     <main className="content">
