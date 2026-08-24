@@ -48,15 +48,19 @@ export default function Document() {
   const fetchStats = async () => {
     const fetchCount = async (status: string) => {
       const res = await fetch(`/api/admin/documents?page=1&size=1${status ? `&processing_status=${status}` : ''}`, { credentials: 'include' });
-      if (res.status === 401) { throw new Error('401'); }
-      if (!res.ok) return 0;
+      if (res.status === 401) throw new Error('401');
+      if (!res.ok) throw new Error('server_error');
       return (await res.json()).total || 0;
     };
     try {
       const [total, succeeded, running, failed] = await Promise.all([fetchCount(''), fetchCount('succeeded'), fetchCount('running'), fetchCount('failed')]);
       setStats({ total, succeeded, running, failed });
     } catch (e: any) {
-      if (e.message === '401') navigate('/');
+      if (e.message === '401') {
+        navigate('/');
+      } else {
+        alert('문서 통계 데이터를 불러오는 중 서버 또는 네트워크 오류가 발생했습니다.');
+      }
     }
   };
 
@@ -98,7 +102,6 @@ export default function Document() {
 
   const handleSearch = () => page === 1 ? fetchDocuments() : setPage(1);
 
-  // 파일명을 파라미터로 추가 받아 다운로드 속성에 세팅
   const handleDownload = async (id: number, fileName: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
@@ -112,7 +115,7 @@ export default function Document() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = fileName; // 원본 확장자가 유지됨
+      a.download = fileName;
       document.body.appendChild(a);
       a.click();
       a.remove();

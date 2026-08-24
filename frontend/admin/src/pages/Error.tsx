@@ -41,15 +41,19 @@ export default function ErrorPage() {
   const fetchStats = async () => {
     const fetchCount = async (st: string) => {
       const res = await fetch(`/api/admin/errors?page=1&size=1${st ? `&status=${st}` : ''}`, { credentials: 'include' });
-      if (res.status === 401) { throw new Error('401'); }
-      if (!res.ok) return 0;
+      if (res.status === 401) throw new Error('401');
+      if (!res.ok) throw new Error('server_error');
       return (await res.json()).total || 0;
     };
     try {
       const [total, unresolved, in_progress, resolved] = await Promise.all([fetchCount(''), fetchCount('unresolved'), fetchCount('in_progress'), fetchCount('resolved')]);
       setStats({ total, unresolved, in_progress, resolved });
     } catch (e: any) {
-      if (e.message === '401') navigate('/');
+      if (e.message === '401') {
+        navigate('/');
+      } else {
+        alert('오류 통계 데이터를 불러오는 중 서버 또는 네트워크 문제가 발생했습니다.');
+      }
     }
   };
 
