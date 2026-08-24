@@ -16,26 +16,23 @@ export default function Login() {
     setIsLoading(true);
 
     try {
-      const response = await fetch('/api/admin/login', {
+      const response = await fetch('/api/admin/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify({
-          username: adminId,
+          admin_id: adminId,
           password: password,
         }),
       });
 
       if (!response.ok) {
-        throw new Error('아이디 또는 비밀번호가 올바르지 않습니다.');
+        if (response.status === 401) throw new Error('아이디 또는 비밀번호가 올바르지 않습니다.');
+        throw new Error('로그인 중 오류가 발생했습니다.');
       }
 
-      const data = await response.json();
-      // 발급받은 실제 JWT Access Token 저장
-      if (data.token || data.access_token) {
-        sessionStorage.setItem('access_token', data.token || data.access_token);
-      }
       navigate('/announcement');
     } catch (error: any) {
       setErrorMsg(error.message || '로그인 중 오류가 발생했습니다.');

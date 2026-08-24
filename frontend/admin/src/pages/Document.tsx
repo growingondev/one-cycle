@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 export interface DocumentItem {
   id: number;
@@ -9,18 +10,18 @@ export interface DocumentItem {
   regDate: string;
   processStatus: string;
   analysisStatus: string;
-  downloadUrl?: string;
 }
 
 function getStatusBadge(status: string) {
-  if (status.includes('완료')) return 'green';
-  if (status.includes('중')) return 'orange';
-  if (status.includes('실패')) return 'red';
-  if (status.includes('대기')) return 'blue';
+  if (/완료|성공/.test(status)) return 'green';
+  if (/중|진행/.test(status)) return 'orange';
+  if (/실패|오류/.test(status)) return 'red';
+  if (/대기/.test(status)) return 'blue';
   return 'gray';
 }
 
 export default function Document() {
+  const navigate = useNavigate();
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -39,15 +40,27 @@ export default function Document() {
   const fetchDocuments = async () => {
     try {
       setIsLoading(true);
-      const token = sessionStorage.getItem('access_token');
       const res = await fetch('/api/admin/documents', {
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        }
+        credentials: 'include',
       });
+      if (res.status === 401) { navigate('/'); return; }
       if (!res.ok) throw new Error('문서 목록 조회 실패');
+      
       const data = await res.json();
-      setDocuments(Array.isArray(data) ? data : data.items || []);
+      const rawItems = Array.isArray(data) ? data : data.items || [];
+
+      const mappedItems: DocumentItem[] = rawItems.map((item: any) => ({
+        id: item.id,
+        targetNotice: item.announcement_title || '-',
+        docName: item.file_name || '-',
+        type: item.document_type || '-',
+        size: `${item.file_size || 0} KB`,
+        regDate: item.created_at || '-',
+        processStatus: item.processing_status || '미처리',
+        analysisStatus: item.analysis_status || '대기',
+      }));
+
+      setDocuments(mappedItems);
     } catch (error) {
       console.error('문서 목록을 불러오는 중 오류 발생:', error);
     } finally {
@@ -55,9 +68,8 @@ export default function Document() {
     }
   };
 
-  const handleDownload = (doc: DocumentItem) => {
-    const url = doc.downloadUrl || `/api/admin/documents/${doc.id}/download`;
-    window.open(url, '_blank');
+  const handleDownload = (id: number) => {
+    window.open(`/api/admin/documents/${id}/download`, '_blank');
   };
 
   const filteredDocs = documents.filter(d => {
@@ -83,9 +95,9 @@ export default function Document() {
 
       <section className="stats">
         <div className="card stat"><small>전체 문서</small><strong>{documents.length}</strong></div>
-        <div className="card stat"><small>처리 완료</small><strong>{documents.filter(d => d.processStatus === '처리완료').length}</strong></div>
-        <div className="card stat"><small>처리 중</small><strong>{documents.filter(d => d.processStatus === '처리중').length}</strong></div>
-        <div className="card stat"><small>처리 실패</small><strong>{documents.filter(d => d.processStatus === '처리실패').length}</strong></div>
+        <div className="card stat"><small>처리 완료</small><strong>{documents.filter(d => d.processStatus.includes('완료')).length}</strong></div>
+        <div className="card stat"><small>처리 중</small><strong>{documents.filter(d => d.processStatus.includes('중')).length}</strong></div>
+        <div className="card stat"><small>처리 실패</small><strong>{documents.filter(d => d.processStatus.includes('실패')).length}</strong></div>
       </section>
 
       <section className="card filters" style={{ gridTemplateColumns: 'minmax(240px, 1fr) repeat(3, 1fr) auto' }}>
@@ -97,16 +109,14 @@ export default function Document() {
         </select>
         <select className="select" value={processStatus} onChange={(e) => setProcessStatus(e.target.value)}>
           <option value="">처리 상태 전체</option>
-          <option value="처리완료">처리완료</option>
-          <option value="처리중">처리중</option>
-          <option value="처리실패">처리실패</option>
+          <option value="완료">완료</option>
+          <option value="진행중">진행중</option>
+          <option value="실패">실패</option>
         </select>
         <select className="select" value={analysisStatus} onChange={(e) => setAnalysisStatus(e.target.value)}>
           <option value="">분석 상태 전체</option>
-          <option value="분석완료">분석완료</option>
-          <option value="분석중">분석중</option>
+          <option value="완료">완료</option>
           <option value="대기">대기</option>
-          <option value="분석실패">분석실패</option>
         </select>
         <button className="btn btn-primary" onClick={() => setPage(1)}>검색</button>
       </section>
@@ -114,7 +124,6 @@ export default function Document() {
       <section className="card table-card">
         <div className="table-toolbar">
           <b>총 {filteredDocs.length}건</b>
-          <button className="btn btn-outline" onClick={() => window.open('/api/admin/documents/export')}>목록 다운로드</button>
         </div>
         <div className="table-wrap">
           <table className="data-table">
@@ -148,7 +157,7 @@ export default function Document() {
                       <td><span className={`badge ${getStatusBadge(d.processStatus)}`}>{d.processStatus}</span></td>
                       <td><span className={`badge ${getStatusBadge(d.analysisStatus)}`}>{d.analysisStatus}</span></td>
                       <td>
-                        <button className="btn btn-outline" style={{ height: '30px', padding: '0 10px', fontSize: '12px' }} onClick={() => handleDownload(d)}>다운로드</button>
+                        <button className="btn btn-outline" style={{ height: '30px', padding: '0 10px', fontSize: '12px' }} onClick={() => handleDownload(d.id)}>다운로드</button>
                       </td>
                     </tr>
                   );
