@@ -6,6 +6,31 @@ interface AnnouncementDetailProps {
   onBack: () => void;
 }
 
+// JSON 객체나 배열을 React 화면용으로 변환해주는 유틸 함수
+const formatKeyInfo = (data: any): React.ReactNode => {
+  if (data === null || data === undefined) return '-';
+  if (typeof data !== 'object') return String(data);
+  
+  if (Array.isArray(data)) {
+    return (
+      <ul style={{ margin: 0, paddingLeft: '16px', listStyleType: 'disc' }}>
+        {data.map((item, i) => <li key={i}>{formatKeyInfo(item)}</li>)}
+      </ul>
+    );
+  }
+  
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      {Object.entries(data).map(([k, v]) => (
+        <div key={k}>
+          <strong style={{ color: '#4b5563', fontSize: '13px' }}>{k}: </strong> 
+          <span style={{ color: 'var(--text)' }}>{formatKeyInfo(v)}</span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 export default function AnnouncementDetail({ id, onBack }: AnnouncementDetailProps) {
   const navigate = useNavigate();
   const [detail, setDetail] = useState<any>(null);
@@ -78,15 +103,15 @@ export default function AnnouncementDetail({ id, onBack }: AnnouncementDetailPro
             {[
               { label: '공고 상태', value: detail.announcement_status },
               { label: '수집 상태', value: detail.collection_status },
-              { label: '접수 기간', value: detail.key_information?.application_period },
-              { label: '신청 자격', value: detail.key_information?.eligibility },
-              { label: '제출 서류', value: detail.key_information?.required_documents },
-              { label: '문의처', value: detail.key_information?.contact_information },
+              { label: '접수 기간', value: formatKeyInfo(detail.key_information?.application_period) },
+              { label: '신청 자격', value: formatKeyInfo(detail.key_information?.eligibility) },
+              { label: '제출 서류', value: formatKeyInfo(detail.key_information?.required_documents) },
+              { label: '문의처', value: formatKeyInfo(detail.key_information?.contact_information) },
               { label: '연결된 문서 수', value: `${detail.document_count || 0}건` },
             ].map((row, idx) => (
               <div key={idx} style={{ display: 'grid', gridTemplateColumns: '120px 1fr', padding: '12px 24px', borderBottom: '1px solid #f8f9fc', fontSize: '14px' }}>
                 <span style={{ color: 'var(--muted)', fontWeight: 700 }}>{row.label}</span>
-                <span style={{ fontWeight: 500, color: 'var(--text)' }}>{row.value || '-'}</span>
+                <div style={{ fontWeight: 500, color: 'var(--text)', lineHeight: '1.6' }}>{row.value}</div>
               </div>
             ))}
           </div>
