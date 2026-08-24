@@ -17,11 +17,13 @@ export default function Layout() {
         const res = await fetch('/api/admin/auth/me', {
           credentials: 'include',
         });
-        if (res.status === 401 || !res.ok) {
-          navigate('/');
+        if (res.status === 401) {
+          navigate('/'); // 401(인증 만료)일 때만 로그인으로 튕김
+        } else if (!res.ok) {
+          console.error('서버 오류(500/503) 또는 응답 실패입니다.'); // 그 외 에러는 무시
         }
-      } catch {
-        navigate('/');
+      } catch (error) {
+        console.error('네트워크 에러 발생:', error);
       }
     };
     checkAuth();
