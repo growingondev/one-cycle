@@ -6,6 +6,9 @@ from backend.app.services.collection_service import (
     collect_and_persist,
     recollect_and_persist,
 )
+from backend.app.services.collection_publish_service import (
+    publish_collection_run,
+)
 from backend.app.services.error_log_service import record_error
 from backend.app.services.pipeline_gateway import (
     PipelineUnavailableError,
@@ -203,9 +206,101 @@ def collect_persist_and_process() -> dict[str, Any]:
         )
     )
 
-    return {
+    collection_status = str(
+        persistence.get("status") or ""
+    ).strip()
+
+    collection_run_id = persistence.get(
+        "collection_run_id"
+    )
+
+    base_result = {
         **persistence,
+        "collection_status": collection_status,
         "document_processing": processing,
+    }
+
+    if collection_status != "success":
+        return {
+            **base_result,
+            "status": "failed",
+            "publish": {
+                "status": "skipped",
+                "reason": "collection_not_success",
+            },
+        }
+
+    if processing.get("failed_count", 0) > 0:
+        return {
+            **base_result,
+            "status": "failed",
+            "publish": {
+                "status": "skipped",
+                "reason": "document_processing_failed",
+            },
+        }
+
+    if (
+        isinstance(collection_run_id, bool)
+        or not isinstance(collection_run_id, int)
+        or collection_run_id <= 0
+    ):
+        message = (
+            "Collection publish requires a valid "
+            "collection_run_id."
+        )
+
+        error_result = record_error(
+            error_type="database",
+            stage="publish",
+            error_code="INVALID_COLLECTION_RUN_ID",
+            message=message,
+        )
+
+        return {
+            **base_result,
+            "status": "failed",
+            "publish": {
+                "status": "failed",
+                "reason": "invalid_collection_run_id",
+                "message": message,
+                "error_id": error_result.get("error_id"),
+            },
+        }
+
+    try:
+        publish_result = publish_collection_run(
+            collection_run_id
+        )
+
+    except Exception as exc:
+        message = str(exc)
+
+        error_result = record_error(
+            error_type="database",
+            stage="publish",
+            error_code="COLLECTION_PUBLISH_FAILED",
+            message=message,
+            collection_run_id=collection_run_id,
+        )
+
+        return {
+            **base_result,
+            "status": "failed",
+            "publish": {
+                "status": "failed",
+                "reason": (
+                    "publish_validation_or_activation_failed"
+                ),
+                "message": message,
+                "error_id": error_result.get("error_id"),
+            },
+        }
+
+    return {
+        **base_result,
+        "status": "success",
+        "publish": publish_result,
     }
 
 
