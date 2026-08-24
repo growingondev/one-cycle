@@ -1,17 +1,29 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-export default function DocumentDetail({ id, onBack }: { id: number, onBack: () => void }) {
+interface DocumentDetailProps {
+  id: number;
+  onBack: () => void;
+}
+
+export default function DocumentDetail({ id, onBack }: DocumentDetailProps) {
   const navigate = useNavigate();
   const [detail, setDetail] = useState<any>(null);
   const [isReprocessing, setIsReprocessing] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     const fetchDetail = async () => {
-      const res = await fetch(`/api/admin/documents/${id}`, { credentials: 'include' });
-      if (res.status === 401) { navigate('/'); return; }
-      if (res.status === 404) { alert('문서를 찾을 수 없습니다.'); onBack(); return; }
-      if (res.ok) setDetail(await res.json());
+      try {
+        const res = await fetch(`/api/admin/documents/${id}`, { credentials: 'include' });
+        if (res.status === 401) { navigate('/'); return; }
+        if (res.status === 404) { alert('문서를 찾을 수 없습니다.'); onBack(); return; }
+        if (!res.ok) { alert('문서 상세 정보를 불러오는 중 서버 오류가 발생했습니다.'); setFetchError(true); onBack(); return; }
+        setDetail(await res.json());
+      } catch {
+        alert('네트워크 오류가 발생했습니다.');
+        onBack();
+      }
     };
     fetchDetail();
   }, [id, navigate, onBack]);
@@ -22,16 +34,16 @@ export default function DocumentDetail({ id, onBack }: { id: number, onBack: () 
       const res = await fetch(`/api/admin/documents/${id}/reprocess`, { method: 'POST', credentials: 'include' });
       if (res.status === 401) { navigate('/'); return; }
       if (res.status === 409) { alert('현재 상태에서는 재처리할 수 없습니다.'); return; }
-      if (!res.ok) throw new Error();
+      if (!res.ok) { alert('서버 오류로 인해 요청에 실패했습니다.'); return; }
       alert('재처리 요청이 완료되었습니다.');
     } catch {
-      alert('재처리 요청에 실패했습니다.');
+      alert('네트워크 오류가 발생했습니다.');
     } finally {
       setIsReprocessing(false);
     }
   };
 
-  if (!detail) return <main className="content"><div style={{ padding: '40px', textAlign: 'center' }}>불러오는 중...</div></main>;
+  if (fetchError || !detail) return <main className="content"><div style={{ padding: '40px', textAlign: 'center' }}>불러오는 중...</div></main>;
 
   return (
     <main className="content">

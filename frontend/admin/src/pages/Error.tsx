@@ -22,6 +22,7 @@ const statusToDisplay: Record<string, string> = { unresolved: '미해결', in_pr
 export default function ErrorPage() {
   const navigate = useNavigate();
   const [errorsList, setErrorsList] = useState<ErrorItem[]>([]);
+  const [listTotal, setListTotal] = useState(0);
   const [stats, setStats] = useState({ total: 0, unresolved: 0, in_progress: 0, resolved: 0 });
   const [totalPages, setTotalPages] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
@@ -40,10 +41,16 @@ export default function ErrorPage() {
   const fetchStats = async () => {
     const fetchCount = async (st: string) => {
       const res = await fetch(`/api/admin/errors?page=1&size=1${st ? `&status=${st}` : ''}`, { credentials: 'include' });
-      return res.ok ? (await res.json()).total : 0;
+      if (res.status === 401) { throw new Error('401'); }
+      if (!res.ok) return 0;
+      return (await res.json()).total || 0;
     };
-    const [total, unresolved, in_progress, resolved] = await Promise.all([fetchCount(''), fetchCount('unresolved'), fetchCount('in_progress'), fetchCount('resolved')]);
-    setStats({ total, unresolved, in_progress, resolved });
+    try {
+      const [total, unresolved, in_progress, resolved] = await Promise.all([fetchCount(''), fetchCount('unresolved'), fetchCount('in_progress'), fetchCount('resolved')]);
+      setStats({ total, unresolved, in_progress, resolved });
+    } catch (e: any) {
+      if (e.message === '401') navigate('/');
+    }
   };
 
   const fetchErrors = async () => {
@@ -58,6 +65,7 @@ export default function ErrorPage() {
 
       const res = await fetch(`/api/admin/errors?${query}`, { credentials: 'include' });
       if (res.status === 401) { navigate('/'); return; }
+      if (!res.ok) { alert('서버 오류로 인해 오류 목록을 불러올 수 없습니다.'); return; }
       
       const data = await res.json();
       const mappedItems = (data.items || []).map((item: any) => ({
@@ -71,6 +79,7 @@ export default function ErrorPage() {
       }));
 
       setErrorsList(mappedItems);
+      setListTotal(data.total || 0);
       setTotalPages(data.total_pages || 1);
     } finally {
       setIsLoading(false);
@@ -112,7 +121,7 @@ export default function ErrorPage() {
       </section>
 
       <section className="card table-card">
-        <div className="table-toolbar"><b>총 {stats.total}건</b></div>
+        <div className="table-toolbar"><b>총 {listTotal}건</b></div>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
@@ -120,7 +129,7 @@ export default function ErrorPage() {
             </thead>
             <tbody>
               {isLoading ? <tr><td colSpan={8} className="empty">불러오는 중...</td></tr> : 
-               errorsList.map((e) => (
+               errorsList.length > 0 ? errorsList.map((e) => (
                 <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedErrorId(e.id)}>
                   <td>{e.id}</td><td>{e.time}</td><td>{errorTypeLabel[e.type] || e.type}</td><td>{e.stage}</td>
                   <td style={{ maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.target}</td>
@@ -128,7 +137,7 @@ export default function ErrorPage() {
                   <td><span className={`badge ${e.status === 'resolved' ? 'green' : e.status === 'in_progress' ? 'orange' : 'red'}`}>{statusToDisplay[e.status]}</span></td>
                   <td onClick={evt => evt.stopPropagation()}><button className="btn btn-outline" style={{ height: '30px', padding: '0 10px', fontSize: '12px' }} onClick={() => setSelectedErrorId(e.id)}>상세</button></td>
                 </tr>
-              ))}
+              )) : <tr><td colSpan={8} className="empty">검색 결과가 없습니다.</td></tr>}
             </tbody>
           </table>
         </div>
