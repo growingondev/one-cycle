@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import AnnouncementDetail from './AnnouncementDetail';
 
 export interface Notice {
@@ -8,13 +9,7 @@ export interface Notice {
   noticeDate: string;
   status: string;
   collect: string;
-  org?: string;
-  num?: string;
-  category?: string;
   endDate?: string;
-  views?: number;
-  files?: any[];
-  content?: string;
 }
 
 function getBadgeClass(value: string) {
@@ -27,6 +22,7 @@ function getBadgeClass(value: string) {
 }
 
 export default function Announcement() {
+  const navigate = useNavigate();
   const [notices, setNotices] = useState<Notice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   
@@ -45,15 +41,30 @@ export default function Announcement() {
   const fetchNotices = async () => {
     try {
       setIsLoading(true);
-      const token = sessionStorage.getItem('access_token');
-      const res = await fetch('/api/admin/notices', {
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        }
+      const res = await fetch('/api/admin/announcements', {
+        credentials: 'include',
       });
+      
+      if (res.status === 401) {
+        navigate('/');
+        return;
+      }
       if (!res.ok) throw new Error('공고 목록 조회 실패');
+      
       const data = await res.json();
-      setNotices(Array.isArray(data) ? data : data.items || []);
+      const rawItems = Array.isArray(data) ? data : data.items || [];
+
+      const mappedItems: Notice[] = rawItems.map((item: any) => ({
+        id: item.id,
+        title: item.title,
+        region: item.region || '-',
+        noticeDate: item.announcement_date || '-',
+        status: item.announcement_status || '상태 미확인',
+        collect: item.collection_status || '미수집',
+        endDate: item.application_end || '-',
+      }));
+
+      setNotices(mappedItems);
     } catch (error) {
       console.error('공고 목록을 불러오는 중 오류 발생:', error);
     } finally {
@@ -63,13 +74,11 @@ export default function Announcement() {
 
   const handleCollectRequest = async () => {
     try {
-      const token = sessionStorage.getItem('access_token');
-      const res = await fetch('/api/admin/notices/collect', {
+      const res = await fetch('/api/admin/announcements/collect', {
         method: 'POST',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        }
+        credentials: 'include',
       });
+      if (res.status === 401) { navigate('/'); return; }
       if (!res.ok) throw new Error('수집 요청 실패');
       alert('공고 수집 작업을 요청했습니다.');
       fetchNotices();
@@ -130,7 +139,6 @@ export default function Announcement() {
       <section className="card table-card">
         <div className="table-toolbar">
           <b>총 {filteredNotices.length}건</b>
-          <button className="btn btn-outline" onClick={() => window.open('/api/admin/notices/export')}>목록 다운로드</button>
         </div>
         <div className="table-wrap">
           <table className="data-table">
@@ -150,7 +158,6 @@ export default function Announcement() {
                 <tr><td colSpan={7} className="empty" style={{ padding: '40px 0', textAlign: 'center' }}>데이터를 불러오는 중입니다...</td></tr>
               ) : currentRows.length > 0 ? (
                 currentRows.map((n, idx) => {
-                  // DB id 대신 내림차순 목록 순번(Index) 표시
                   const rowNumber = filteredNotices.length - ((page - 1) * perPage + idx);
                   return (
                     <tr key={n.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedNotice(n)}>

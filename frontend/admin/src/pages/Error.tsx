@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import ErrorDetail from './ErrorDetail';
 
 export interface ErrorItem {
@@ -9,24 +10,24 @@ export interface ErrorItem {
   target: string;
   message: string;
   status: string;
-  code?: string;
-  level?: string;
-  method?: string;
-  url?: string;
-  stack?: string;
-  history?: any[];
 }
+
+const statusToDisplay: Record<string, string> = {
+  unresolved: '미해결',
+  in_progress: '해결중',
+  resolved: '해결완료',
+};
 
 function getBadgeClass(value: string) {
   let color = "gray";
-  if (/완료|공고중|정상|해결완료/.test(value)) color = "green";
-  else if (/진행|처리중|분석중|해결중/.test(value)) color = "orange";
-  else if (/실패|오류|미해결/.test(value)) color = "red";
-  else if (/대기|예정|접수중/.test(value)) color = "blue";
+  if (/resolved|해결완료/.test(value)) color = "green";
+  else if (/in_progress|해결중/.test(value)) color = "orange";
+  else if (/unresolved|미해결/.test(value)) color = "red";
   return `badge ${color}`;
 }
 
 export default function ErrorPage() {
+  const navigate = useNavigate();
   const [errorsList, setErrorsList] = useState<ErrorItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -45,15 +46,26 @@ export default function ErrorPage() {
   const fetchErrors = async () => {
     try {
       setIsLoading(true);
-      const token = sessionStorage.getItem('access_token');
       const res = await fetch('/api/admin/errors', {
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        }
+        credentials: 'include',
       });
+      if (res.status === 401) { navigate('/'); return; }
       if (!res.ok) throw new Error('오류 목록 조회 실패');
+      
       const data = await res.json();
-      setErrorsList(Array.isArray(data) ? data : data.items || []);
+      const rawItems = Array.isArray(data) ? data : data.items || [];
+
+      const mappedItems: ErrorItem[] = rawItems.map((item: any) => ({
+        id: item.id,
+        time: item.created_at || '-',
+        type: item.error_type || '-',
+        step: item.step || '-',
+        target: item.target || '-',
+        message: item.message || '-',
+        status: statusToDisplay[item.status] || item.status || '미해결',
+      }));
+
+      setErrorsList(mappedItems);
     } catch (error) {
       console.error('오류 목록 로드 실패', error);
     } finally {
@@ -90,7 +102,6 @@ export default function ErrorPage() {
           <h1>오류 관리</h1>
           <p>수집, 문서 처리 및 AI 분석 과정에서 발생한 오류를 관리합니다.</p>
         </div>
-        <button className="btn btn-outline" onClick={() => window.open('/api/admin/errors/export')}>목록 다운로드</button>
       </div>
 
       <section className="stats">

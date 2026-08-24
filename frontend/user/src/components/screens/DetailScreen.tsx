@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   CalendarDays,
   House,
@@ -274,6 +274,12 @@ export function DetailScreen({
 
   // 💡 제출서류 근거 확인 토글을 위한 상태
   const [showDocsEvidence, setShowDocsEvidence] = useState(false);
+const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // messages 배열이 바뀔 때마다(새 채팅이 추가될 때마다) 맨 아래로 부드럽게 스크롤
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   /* =========================
      목록에서 전달받은 공고
@@ -658,6 +664,8 @@ export function DetailScreen({
                 </div>
               </div>
             ))}
+            <div ref={messagesEndRef} />
+          
           </div>
 
           <div className="mt-4">
