@@ -14,7 +14,30 @@ import { UserLayout } from "../layout/UserLayout";
 import { StatusPill } from "../common/StatusPill";
 import { Icon } from "../common/Icons";
 import { API_BASE_URL } from "../../config";
+import { GlossaryTooltip } from "../common/GlossaryTooltip";
+// 💡 파라미터로 받은 glossaryData를 활용하여 매칭
+function renderTextWithGlossary(text: string, glossaryData: Record<string, string>) {
+  // 1. 단어 목록을 가져와서 글자 길이가 '긴' 순서대로 내림차순 정렬 (포함 단어 버그 방지)
+  const terms = Object.keys(glossaryData).sort((a, b) => b.length - a.length);
+  if (terms.length === 0) return text;
 
+  // 2. 혹시 단어에 괄호나 특수문자가 있을 경우 정규식이 깨지는 것을 방지 (안전 장치)
+  const escapedTerms = terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
+  const regex = new RegExp(`(${escapedTerms.join("|")})`, "g");
+  const parts = text.split(regex);
+
+  return parts.map((part, index) => {
+    if (glossaryData[part]) {
+      return (
+        <GlossaryTooltip key={index} term={part} definition={glossaryData[part]}>
+          {part}
+        </GlossaryTooltip>
+      );
+    }
+    return <span key={index}>{part}</span>;
+  });
+}
 
 /* =========================
    공통 유틸
@@ -273,9 +296,28 @@ export function DetailScreen({
   const [currentNotice, setCurrentNotice] = useState<any>(notice || null);
 
   // 💡 제출서류 근거 확인 토글을 위한 상태
-  const [showDocsEvidence, setShowDocsEvidence] = useState(false);
+const [showDocsEvidence, setShowDocsEvidence] = useState(false);
 const messagesEndRef = useRef<HTMLDivElement>(null);
+const [glossary, setGlossary] = useState<Record<string, string>>({});
 
+  useEffect(() => {
+    // 마운트 시 API를 한 번 호출하여 용어 사전을 메모리에 올려둡니다.
+    fetch(`${API_BASE_URL}/glossary`)
+      .then(res => res.json())
+      .then((data) => {
+        // 백엔드에서 배열 형태로 보내준다고 가정 [{term: "무주택", definition: "..."}, ...]
+        const glossaryMap: Record<string, string> = {};
+        if (Array.isArray(data)) {
+          data.forEach((item: any) => {
+            if (item.is_active !== false) { // 활성화된 용어만
+              glossaryMap[item.term] = item.definition;
+            }
+          });
+        }
+        setGlossary(glossaryMap);
+      })
+      .catch(err => console.error("용어 사전 API 연동 실패:", err));
+  }, []);
   useEffect(() => {
     // messages 배열이 바뀔 때마다(새 채팅이 추가될 때마다) 맨 아래로 부드럽게 스크롤
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -655,7 +697,7 @@ const messagesEndRef = useRef<HTMLDivElement>(null);
                 <div className="w-8 h-8 rounded-full border-2 border-blue-500 text-blue-600 flex items-center justify-center text-[12px] font-black flex-shrink-0 bg-white shadow-sm">AI</div>
                 <div className="flex flex-col items-start max-w-[80%] lg:max-w-[70%]">
                   <div className="bg-white border border-slate-200 text-slate-800 text-[14px] lg:text-[15px] leading-relaxed px-4 py-3 rounded-2xl rounded-tl-sm shadow-sm whitespace-pre-wrap break-keep">
-                    {message.text}
+                    {renderTextWithGlossary(message.text)}
                     {message.evidence && message.evidence.length > 0 && (
                       <button onClick={() => setEvidence(message.evidence ?? [])} className="block mt-3 bg-blue-50 text-blue-600 text-[13px] font-bold px-3 py-1.5 rounded-md hover:bg-blue-100 transition-colors">근거 문단 보기</button>
                     )}
