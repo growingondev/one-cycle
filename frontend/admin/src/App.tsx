@@ -3,8 +3,9 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Login from './pages/Login';
 import Layout from './components/Layout';
 import Announcement from './pages/Announcement';
-import Document from './pages/Document'; // 새로 추가
-import ErrorPage from './pages/Error';   // 새로 추가
+import Document from './pages/Document';
+import ErrorPage from './pages/Error';  
+import GlossaryAdmin from './pages/GlossaryAdmin';
 
 function App() {
   return (
