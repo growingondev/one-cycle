@@ -6,6 +6,7 @@ import math
 import os
 import re
 import sys
+import time
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -971,6 +972,41 @@ def recall_at_k(
 
 
 # ============================================================
+# 선택 평가 문항 파싱
+# ============================================================
+
+
+def parse_question_ids(
+    value: str | None,
+) -> set[str] | None:
+    """
+    --question-ids로 전달된 문항 ID를 set으로 변환한다.
+
+    예:
+    Q002,Q003,Q007
+        ↓
+    {"Q002", "Q003", "Q007"}
+
+    옵션을 사용하지 않으면 None을 반환하여
+    기존처럼 전체 문항을 평가한다.
+    """
+
+    if value is None:
+        return None
+
+    question_ids = {
+        item.strip().upper()
+        for item in value.split(",")
+        if item.strip()
+    }
+
+    return (
+        question_ids
+        or None
+    )
+
+
+# ============================================================
 # RAGAS 패키지 확인
 # ============================================================
 
@@ -1018,6 +1054,8 @@ async def build_ragas_scorers(
     api_key: str,
     model: str,
     embedding_model: str,
+    adapt_factual_korean: bool = False,
+    factual_only: bool = False,
 ) -> dict[str, Any]:
 
     from openai import AsyncOpenAI
@@ -1032,8 +1070,6 @@ async def build_ragas_scorers(
 
     from ragas.metrics.collections import (
         AnswerRelevancy,
-        ContextPrecision,
-        ContextRecall,
         Faithfulness,
         FactualCorrectness,
     )
@@ -1055,39 +1091,97 @@ async def build_ragas_scorers(
     llm = llm_factory(
         model,
         client=client,
+        max_tokens=4096,
     )
 
-    embeddings = HuggingFaceEmbeddings(
-        model=embedding_model,
+    embeddings = None
+
+    if not factual_only:
+        embeddings = HuggingFaceEmbeddings(
+            model=embedding_model,
+        )
+
+    # ========================================================
+    # Factual Correctness
+    #
+    # RAGAS의 FactualCorrectness는 내부적으로
+    # 1) claim 분해용 prompt
+    # 2) claim 사실 일치 판정용 nli_prompt
+    # 두 개의 LLM prompt를 사용한다.
+    #
+    # --adapt-factual-korean 옵션을 사용하면
+    # 두 prompt의 instruction과 few-shot 예시를
+    # 한국어 평가에 맞게 adaptation한다.
+    # ========================================================
+
+    factual_correctness = (
+        FactualCorrectness(
+            llm=llm
+        )
     )
 
-    return {
-        "context_precision":
-            ContextPrecision(
-                llm=llm
-            ),
+    if adapt_factual_korean:
 
-        "context_recall":
-            ContextRecall(
-                llm=llm
-            ),
+        print(
+            "[RAGAS] FactualCorrectness "
+            "한국어 Prompt adaptation 시작"
+        )
 
-        "faithfulness":
-            Faithfulness(
-                llm=llm
-            ),
-
-        "response_relevancy":
-            AnswerRelevancy(
+        factual_correctness.prompt = (
+            await factual_correctness.prompt.adapt(
+                target_language="korean",
                 llm=llm,
-                embeddings=embeddings,
-            ),
+                adapt_instruction=True,
+            )
+        )
 
+        factual_correctness.nli_prompt = (
+            await factual_correctness.nli_prompt.adapt(
+                target_language="korean",
+                llm=llm,
+                adapt_instruction=True,
+            )
+        )
+
+        print(
+            "[RAGAS] FactualCorrectness "
+            "한국어 Prompt adaptation 완료"
+        )
+
+        print(
+            "  Claim Prompt Language : "
+            f"{factual_correctness.prompt.language}"
+        )
+
+        print(
+            "  NLI Prompt Language   : "
+            f"{factual_correctness.nli_prompt.language}"
+        )
+
+    scorers = {
         "factual_correctness":
-            FactualCorrectness(
-                llm=llm
-            ),
+            factual_correctness,
     }
+
+    if not factual_only:
+        assert embeddings is not None
+
+        scorers.update(
+            {
+                "faithfulness":
+                    Faithfulness(
+                        llm=llm
+                    ),
+
+                "response_relevancy":
+                    AnswerRelevancy(
+                        llm=llm,
+                        embeddings=embeddings,
+                    ),
+            }
+        )
+
+    return scorers
 
 
 # ============================================================
@@ -1101,23 +1195,29 @@ async def score_one_with_ragas(
     reference: str,
     response: str,
     contexts: list[str],
-) -> dict[str, float | None]:
+    factual_only: bool = False,
+) -> tuple[
+    dict[str, float | None],
+    dict[str, float],
+]:
 
     scores: dict[
         str,
         float | None,
     ] = {
-        "context_precision": None,
-        "context_recall": None,
         "faithfulness": None,
         "response_relevancy": None,
         "factual_correctness": None,
     }
 
+    metric_times: dict[str, float] = {}
+
     async def safe_score(
         name: str,
         **kwargs,
     ) -> float | None:
+
+        metric_start = time.perf_counter()
 
         try:
             result = await scorers[
@@ -1150,40 +1250,40 @@ async def score_one_with_ragas(
 
             return None
 
-    scores[
-        "context_precision"
-    ] = await safe_score(
-        "context_precision",
-        user_input=user_input,
-        reference=reference,
-        retrieved_contexts=contexts,
-    )
+        finally:
+            elapsed = (
+                time.perf_counter()
+                - metric_start
+            )
 
-    scores[
-        "context_recall"
-    ] = await safe_score(
-        "context_recall",
-        user_input=user_input,
-        reference=reference,
-        retrieved_contexts=contexts,
-    )
+            metric_times[
+                name
+            ] = elapsed
 
-    scores[
-        "faithfulness"
-    ] = await safe_score(
-        "faithfulness",
-        user_input=user_input,
-        response=response,
-        retrieved_contexts=contexts,
-    )
+            print(
+                "  [TIME] "
+                f"{name:22s}: "
+                f"{elapsed:8.2f}s"
+            )
 
-    scores[
-        "response_relevancy"
-    ] = await safe_score(
-        "response_relevancy",
-        user_input=user_input,
-        response=response,
-    )
+    if not factual_only:
+
+        scores[
+            "faithfulness"
+        ] = await safe_score(
+            "faithfulness",
+            user_input=user_input,
+            response=response,
+            retrieved_contexts=contexts,
+        )
+
+        scores[
+            "response_relevancy"
+        ] = await safe_score(
+            "response_relevancy",
+            user_input=user_input,
+            response=response,
+        )
 
     scores[
         "factual_correctness"
@@ -1193,7 +1293,10 @@ async def score_one_with_ragas(
         reference=reference,
     )
 
-    return scores
+    return (
+        scores,
+        metric_times,
+    )
 
 
 # ============================================================
@@ -1274,6 +1377,18 @@ async def evaluate_metrics(
     )
 
     # ========================================================
+    # 선택 평가 문항
+    # ========================================================
+
+    selected_question_ids = (
+        parse_question_ids(
+            args.question_ids
+        )
+    )
+
+    found_question_ids: set[str] = set()
+
+    # ========================================================
     # 필수 열 확인
     # ========================================================
 
@@ -1287,8 +1402,6 @@ async def evaluate_metrics(
         "recall_at_1",
         "recall_at_3",
         "recall_at_5",
-        "context_precision",
-        "context_recall",
         "faithfulness",
         "response_relevancy",
         "factual_correctness",
@@ -1361,6 +1474,12 @@ async def evaluate_metrics(
                 embedding_model=(
                     args.embedding_model
                 ),
+                adapt_factual_korean=(
+                    args.adapt_factual_korean
+                ),
+                factual_only=(
+                    args.factual_only
+                ),
             )
         )
 
@@ -1403,6 +1522,38 @@ async def evaluate_metrics(
     )
 
     print(
+        "평가 모드       : "
+        + (
+            "Factual Correctness only"
+            if args.factual_only
+            else "RAGAS 핵심 3개 metrics"
+        )
+    )
+
+    print(
+        "Factual Prompt   : "
+        + (
+            "한국어 Adaptation"
+            if args.adapt_factual_korean
+            else "기본 Prompt"
+        )
+    )
+
+    if selected_question_ids:
+        print(
+            "선택 문항       : "
+            + ", ".join(
+                sorted(
+                    selected_question_ids
+                )
+            )
+        )
+    else:
+        print(
+            "선택 문항       : 전체"
+        )
+
+    print(
         "=" * 78
     )
 
@@ -1421,12 +1572,22 @@ async def evaluate_metrics(
         str,
         list[float],
     ] = {
-        "context_precision": [],
-        "context_recall": [],
         "faithfulness": [],
         "response_relevancy": [],
         "factual_correctness": [],
     }
+
+    metric_time_totals: dict[
+        str,
+        float,
+    ] = {
+        "recall": 0.0,
+        "faithfulness": 0.0,
+        "response_relevancy": 0.0,
+        "factual_correctness": 0.0,
+    }
+
+    evaluation_start = time.perf_counter()
 
     # ========================================================
     # 문항 반복
@@ -1443,6 +1604,26 @@ async def evaluate_metrics(
                 "question_id"
             ],
         ).value
+
+        question_id = (
+            ""
+            if question_id is None
+            else str(
+                question_id
+            ).strip().upper()
+        )
+
+        if (
+            selected_question_ids is not None
+            and question_id
+            not in selected_question_ids
+        ):
+            continue
+
+        if selected_question_ids is not None:
+            found_question_ids.add(
+                question_id
+            )
 
         user_input = ws.cell(
             row=row,
@@ -1522,6 +1703,8 @@ async def evaluate_metrics(
 
         processed += 1
 
+        question_start = time.perf_counter()
+
         print(
             f"\n[{processed:02d}] "
             f"{question_id}: "
@@ -1529,8 +1712,10 @@ async def evaluate_metrics(
         )
 
         # ====================================================
-        # Recall@1
+        # Recall@1 / @3 / @5 실행시간 측정
         # ====================================================
+
+        recall_start = time.perf_counter()
 
         (
             r1,
@@ -1571,6 +1756,21 @@ async def evaluate_metrics(
             reference_text,
             contexts,
             5,
+        )
+
+        recall_elapsed = (
+            time.perf_counter()
+            - recall_start
+        )
+
+        metric_time_totals[
+            "recall"
+        ] += recall_elapsed
+
+        print(
+            "  [TIME] "
+            f"{'recall@1/3/5':22s}: "
+            f"{recall_elapsed:8.4f}s"
         )
 
         # ====================================================
@@ -1801,15 +2001,29 @@ async def evaluate_metrics(
 
             assert scorers is not None
 
-            scores = (
+            (
+                scores,
+                metric_times,
+            ) = (
                 await score_one_with_ragas(
                     scorers=scorers,
                     user_input=user_input,
                     reference=reference,
                     response=response,
                     contexts=contexts,
+                    factual_only=(
+                        args.factual_only
+                    ),
                 )
             )
+
+            for (
+                metric_name,
+                elapsed,
+            ) in metric_times.items():
+                metric_time_totals[
+                    metric_name
+                ] += elapsed
 
             for (
                 metric_name,
@@ -1832,7 +2046,23 @@ async def evaluate_metrics(
                         score
                     )
 
-            if all(
+            if args.factual_only:
+
+                if (
+                    scores[
+                        "factual_correctness"
+                    ]
+                    is not None
+                ):
+                    status = (
+                        "OK - FACTUAL_ONLY"
+                    )
+                else:
+                    status = (
+                        "FAILED - FACTUAL_ONLY"
+                    )
+
+            elif all(
                 value is not None
                 for value
                 in scores.values()
@@ -1855,10 +2085,44 @@ async def evaluate_metrics(
                 value=status,
             )
 
+        question_elapsed = (
+            time.perf_counter()
+            - question_start
+        )
+
+        print(
+            "  [TIME] "
+            f"{'QUESTION TOTAL':22s}: "
+            f"{question_elapsed:8.2f}s"
+        )
+
         # 중간 저장
         wb.save(
             output_path
         )
+
+    # ========================================================
+    # 선택 문항 확인
+    # ========================================================
+
+    if selected_question_ids is not None:
+
+        missing_question_ids = (
+            selected_question_ids
+            - found_question_ids
+        )
+
+        if missing_question_ids:
+
+            print(
+                "\n[경고] Excel에서 "
+                "찾지 못한 문항: "
+                + ", ".join(
+                    sorted(
+                        missing_question_ids
+                    )
+                )
+            )
 
     # ========================================================
     # 최종 Recall 통계
@@ -1939,6 +2203,13 @@ async def evaluate_metrics(
             values,
         ) in ragas_values.items():
 
+            if (
+                args.factual_only
+                and metric_name
+                != "factual_correctness"
+            ):
+                continue
+
             if values:
 
                 average = (
@@ -1958,6 +2229,51 @@ async def evaluate_metrics(
                     f"{metric_name:22s}: "
                     "N/A"
                 )
+
+    evaluation_elapsed = (
+        time.perf_counter()
+        - evaluation_start
+    )
+
+    print(
+        "\n[실행시간 요약]"
+    )
+
+    print(
+        f"{'Recall@1/3/5 합계':26s}: "
+        f"{metric_time_totals['recall']:.2f}s"
+    )
+
+    if not args.skip_ragas:
+
+        for metric_name in (
+            "faithfulness",
+            "response_relevancy",
+            "factual_correctness",
+        ):
+            if (
+                args.factual_only
+                and metric_name
+                != "factual_correctness"
+            ):
+                continue
+
+            print(
+                f"{metric_name:26s}: "
+                f"{metric_time_totals[metric_name]:.2f}s"
+            )
+
+    print(
+        f"{'전체 평가시간':26s}: "
+        f"{evaluation_elapsed:.2f}s "
+        f"({evaluation_elapsed / 60:.1f}분)"
+    )
+
+    if processed > 0:
+        print(
+            f"{'문항당 평균시간':26s}: "
+            f"{evaluation_elapsed / processed:.2f}s"
+        )
 
     print(
         f"\n결과 파일       : "
@@ -2042,6 +2358,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--embedding-model",
         default=DEFAULT_EMBEDDING_MODEL,
+    )
+
+    parser.add_argument(
+        "--factual-only",
+        action="store_true",
+        help=(
+            "RAGAS 핵심 3개 지표 대신 "
+            "Factual Correctness만 계산합니다. "
+            "Judge 비교/디버깅용 빠른 평가 옵션입니다."
+        ),
+    )
+
+    parser.add_argument(
+        "--question-ids",
+        default=None,
+        help=(
+            "평가할 question_id를 "
+            "쉼표로 구분하여 지정합니다. "
+            "예: Q002,Q003,Q007 "
+            "생략하면 전체 문항을 평가합니다."
+        ),
+    )
+
+    parser.add_argument(
+        "--adapt-factual-korean",
+        action="store_true",
+        help=(
+            "RAGAS FactualCorrectness의 "
+            "claim 분해 prompt와 NLI prompt를 "
+            "한국어로 adaptation합니다."
+        ),
     )
 
     return parser.parse_args()
