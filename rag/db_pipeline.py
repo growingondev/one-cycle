@@ -29,6 +29,10 @@ class DBRAGPipelineError(RuntimeError):
     """DB 기반 RAG 처리 중 발생하는 오류."""
 
 
+class DBRAGNoEvidenceError(DBRAGPipelineError):
+    """선택한 공고에서 검색 가능한 근거가 없을 때 발생."""
+
+
 @dataclass
 class DBRAGPipeline:
     """
@@ -211,10 +215,7 @@ class DBRAGPipeline:
             )
 
         if not rows:
-            raise DBRAGPipelineError(
-                "DB pgvector 검색 결과가 없습니다. "
-                f"announcement_id={announcement_id}"
-            )
+            return []
 
         results: list[RetrievalResult] = []
 
@@ -296,6 +297,12 @@ class DBRAGPipeline:
             announcement_id=announcement_id,
             query=query,
         )
+
+        if not retrieved:
+            raise DBRAGNoEvidenceError(
+                "선택한 공고에서 검색 가능한 근거가 없습니다. "
+                f"announcement_id={announcement_id}"
+            )
 
         document_format = (
             retrieved[0]
