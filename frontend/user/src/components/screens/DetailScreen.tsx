@@ -297,7 +297,7 @@ export function DetailScreen({
 
   // 💡 제출서류 근거 확인 토글을 위한 상태
 const [showDocsEvidence, setShowDocsEvidence] = useState(false);
-const messagesEndRef = useRef<HTMLDivElement>(null);
+const chatContainerRef = useRef<HTMLDivElement>(null);
 const [glossary, setGlossary] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -305,11 +305,10 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
     fetch(`${API_BASE_URL}/glossary`)
       .then(res => res.json())
       .then((data) => {
-        // 백엔드에서 배열 형태로 보내준다고 가정 [{term: "무주택", definition: "..."}, ...]
         const glossaryMap: Record<string, string> = {};
         if (Array.isArray(data)) {
           data.forEach((item: any) => {
-            if (item.is_active !== false) { // 활성화된 용어만
+            if (item.is_active !== false) { 
               glossaryMap[item.term] = item.definition;
             }
           });
@@ -318,11 +317,16 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
       })
       .catch(err => console.error("용어 사전 API 연동 실패:", err));
   }, []);
-  useEffect(() => {
-    // messages 배열이 바뀔 때마다(새 채팅이 추가될 때마다) 맨 아래로 부드럽게 스크롤
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
 
+  useEffect(() => {
+    // 🟢 2. 창 전체가 아닌 '채팅창 내부'만 맨 아래로 내리도록 스크롤 로직 변경
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [messages]);
   /* =========================
      목록에서 전달받은 공고
   ========================= */
@@ -684,7 +688,7 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
           <h2 className="text-[17px] lg:text-[19px] font-bold text-slate-900 mb-1">AI에게 무엇이든 물어보세요</h2>
           <p className="text-[13px] lg:text-[14px] text-slate-500 mb-4">공고에 대해 궁금한 내용을 질문하면 AI가 답변해 드립니다.</p>
 
-          <div className="flex-1 overflow-auto px-2 py-4 bg-slate-50/50 rounded-lg border border-slate-100">
+          <div ref={chatContainerRef} className="flex-1 overflow-auto px-2 py-4 bg-slate-50/50 rounded-lg border border-slate-100">
             {messages.length === 0 && <div className="text-center text-slate-400 py-10 text-sm">질문을 입력하면 이곳에 AI 답변이 표시됩니다.</div>}
 
             {messages.map((message, index) => message.role === "user" ? (
@@ -697,7 +701,7 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
                 <div className="w-8 h-8 rounded-full border-2 border-blue-500 text-blue-600 flex items-center justify-center text-[12px] font-black flex-shrink-0 bg-white shadow-sm">AI</div>
                 <div className="flex flex-col items-start max-w-[80%] lg:max-w-[70%]">
                   <div className="bg-white border border-slate-200 text-slate-800 text-[14px] lg:text-[15px] leading-relaxed px-4 py-3 rounded-2xl rounded-tl-sm shadow-sm whitespace-pre-wrap break-keep">
-                    {renderTextWithGlossary(message.text)}
+                    {renderTextWithGlossary(message.text, glossary)}
                     {message.evidence && message.evidence.length > 0 && (
                       <button onClick={() => setEvidence(message.evidence ?? [])} className="block mt-3 bg-blue-50 text-blue-600 text-[13px] font-bold px-3 py-1.5 rounded-md hover:bg-blue-100 transition-colors">근거 문단 보기</button>
                     )}
@@ -706,7 +710,6 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
                 </div>
               </div>
             ))}
-            <div ref={messagesEndRef} />
           
           </div>
 

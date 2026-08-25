@@ -60,6 +60,10 @@ export default function Layout() {
           <NavLink to="/error" className={({ isActive }) => isActive ? 'active' : ''}>
             △ &nbsp;오류 관리
           </NavLink>
+          {/* 💡 새로 추가된 메뉴 */}
+          <NavLink to="/glossary" className={({ isActive }) => isActive ? 'active' : ''}>
+            📖 &nbsp;용어 사전 관리
+          </NavLink>
         </nav>
 
         <div className="sidebar-user">
