@@ -2,25 +2,22 @@
 
 > 이 문서는 DDOKBOT의 RAG 평가 구조와 실행 방법을 설명합니다.
 >
-> 새로운 개발자 또는 AI가 이 문서만 읽고도 다음 내용을 이해할 수 있도록 작성되었습니다.
+> 주요 내용:
 >
-> - 평가셋이 어디에 있는지
-> - 평가 대상 문서가 무엇인지
-> - `evaluate_rag.py`와 `evaluate_metrics.py`의 역할이 어떻게 나뉘는지
-> - 질문을 `/api/chat`에 자동 전송하는 방법
-> - Retrieval과 Generation 품질을 어떤 지표로 평가하는지
-> - RAGAS를 어떻게 실행하는지
-> - RUN_001, RUN_002처럼 반복 실험을 어떻게 관리하는지
-> - 사람이 직접 검수해야 하는 항목은 무엇인지
-> - 낮은 점수가 나왔을 때 어느 Pipeline Stage부터 확인해야 하는지
+> * 평가셋 위치와 구성
+> * `evaluate_rag.py`와 `evaluate_metrics.py`의 역할
+> * Retrieval / Generation 평가 지표
+> * RAGAS 실행 방법
+> * RUN 관리 방법
+> * Human Review와 실패 원인 분석 방법
 
 ---
 
 # 1. Evaluation 목적
 
-DDOKBOT Evaluation은 동일한 평가 질문을 기준으로 RAG의 검색 품질과 최종 답변 품질을 반복 측정하기 위한 영역입니다.
+DDOKBOT Evaluation은 동일한 평가셋을 기준으로 RAG 시스템의 검색 성능과 답변 품질을 반복 측정하기 위한 영역입니다.
 
-평가 흐름:
+전체 흐름:
 
 ```text
 Evaluation Dataset
@@ -29,11 +26,13 @@ evaluate_rag.py
       ↓
 POST /api/chat
       ↓
-Retrieved Context + Answer 저장
+Retrieved Context + Response 저장
       ↓
 evaluate_metrics.py
       ↓
 Recall@K + RAGAS
+      ↓
+Automatic Metric Result
       ↓
 Human Review
       ↓
@@ -44,31 +43,27 @@ Code Improvement
 Next RUN
 ```
 
-평가의 핵심 원칙:
+최종 정량 성능은 **자동 Metric을 기준으로 판단**합니다.
+
+Human Review는 최종 점수를 대신하는 평가가 아니라, 점수가 낮거나 이상한 문항에서 **어느 부분의 정확성이 떨어졌는지 분석하기 위한 보조 수단**으로 사용합니다.
+
+핵심 원칙:
 
 ```text
 같은 평가셋
-    +
-같은 문서
-    +
++
+같은 평가 대상 문서
++
 다른 코드 버전
-    ↓
+↓
 RUN별 성능 비교
 ```
 
-코드 개선 효과를 확인하려면 평가 질문과 정답 기준을 RUN마다 바꾸지 않습니다.
+한 번 고정한 평가셋은 코드 개선 전후를 비교하는 동안 유지합니다.
 
 ---
 
-# 2. Evaluation Root
-
-평가 관련 파일 위치:
-
-```text
-evaluation/
-```
-
-현재 권장 구조:
+# 2. Evaluation 구조
 
 ```text
 evaluation/
@@ -77,133 +72,150 @@ evaluation/
 │
 ├── datasets/
 │   ├── GC_FINAL_V1.xlsx
-│   └── HC_FINAL_V1.xlsx
+│   └── BD_FINAL_V1.xlsx
 │
 ├── source_documents/
 │   ├── DOC_GC_001/
-│   │   └── v1/
-│   └── DOC_HC_001/
-│       └── v1/
+│   └── DOC_BD_001/
 │
 └── results/
     └── .gitkeep
 ```
 
-`results/`는 평가 실행 시 자동 생성되는 결과 파일을 저장합니다.
+역할:
+
+| 위치                    | 역할                   |
+| --------------------- | -------------------- |
+| `datasets/`           | 평가 질문과 Reference 저장  |
+| `evaluate_rag.py`     | 실제 RAG 실행 결과 수집      |
+| `evaluate_metrics.py` | Recall / RAGAS 자동 평가 |
+| `source_documents/`   | 평가 기준이 된 원본 문서 보관    |
+| `results/`            | RUN별 평가 결과 저장        |
 
 ---
 
-# 3. 현재 평가 대상 문서
+# 3. 현재 평가 Dataset
 
-현재 기본 평가 문서는 두 개입니다.
+현재 주요 고정 평가 문서:
 
-```text
-GC
-→ 고창율계 고령자복지주택(영구임대)
+| Dataset Code | 문서           |
+| ------------ | ------------ |
+| `GC`         | 고창율계 고령자복지주택 |
+| `BD`         | 서울 번동3 행복주택  |
 
-HC
-→ 화천신읍2 영구임대(화천용신마을)
-```
-
-Dataset Code:
-
-| 코드 | 문서 |
-|---|---|
-| `GC` | 고창율계 고령자복지주택 |
-| `HC` | 화천신읍2 영구임대 |
-
-평가셋 파일:
+평가셋:
 
 ```text
 evaluation/datasets/GC_FINAL_V1.xlsx
-evaluation/datasets/HC_FINAL_V1.xlsx
+evaluation/datasets/BD_FINAL_V1.xlsx
+```
+
+Dataset Alias 예:
+
+```text
+GC / GOCHANG / 고창
+
+BD / BUNDONG / 서울번동
 ```
 
 ---
 
 # 4. 평가셋 구성 원칙
 
-현재 평가셋은 문서당 60개 질문을 기준으로 구성합니다.
+평가셋은 문서별 약 60문항을 기준으로 구성합니다.
 
-질문 그룹:
+단, **모든 문서가 동일한 유형과 동일한 문항 수를 가져야 하는 것은 아닙니다.**
+
+문서마다 정보의 구조와 난이도가 다르기 때문에 평가 목적에 따라 문항 구성을 조정할 수 있습니다.
+
+주요 평가 유형:
+
+| 유형             | 목적                   |
+| -------------- | -------------------- |
+| `easy`         | 단일 사실 검색 및 답변        |
+| `medium`       | 자격·조건·일정 등의 해석       |
+| `hard`         | 비교·복합 정보·다중 근거       |
+| `robustness`   | 실제 사용자 입력 변형에 대한 견고성 |
+| `unanswerable` | 문서에 없는 질문의 잘못된 답변 차단 |
+
+예를 들어 고창은:
 
 ```text
-frequent
-variant
-condition
+easy
+medium
 hard
-colloquial
 unanswerable
 ```
 
-권장 구성:
+위주로 구성할 수 있고,
 
-| test_group | 개수 | 목적 |
-|---|---:|---|
-| `frequent` | 25 | 실제 사용자가 자주 물을 질문 |
-| `variant` | 12 | 같은 의미의 다양한 표현 |
-| `condition` | 7 | 조건형/부정형 질문 |
-| `hard` | 8 | 비교·복합 정보·추론형 질문 |
-| `colloquial` | 3 | 짧은 말투·구어체·키워드형 질문 |
-| `unanswerable` | 5 | 문서에 없는 질문의 거절 여부 확인 |
-
-총:
+서울 번동은:
 
 ```text
-60 questions / document
+easy
+medium
+hard
+robustness
+unanswerable
 ```
 
-두 문서를 모두 평가하면:
+형태로 구성할 수 있습니다.
 
-```text
-120 evaluation cases
-```
-
-입니다.
+즉, **문서별 구성은 달라도 되지만 동일 문서의 RUN 간 평가셋은 유지합니다.**
 
 ---
 
-# 5. 평가셋 Excel
+# 5. Robustness 평가
 
-현재 주요 Sheet:
+서울 번동 평가셋에는 실제 사용자 입력 변형을 확인하기 위한 `robustness` 문항을 추가합니다.
 
-```text
-평가셋
-평가설계
-실행기록
-사용가이드
-```
-
-자동 평가 Script는 기본적으로:
+주요 유형:
 
 ```text
-평가셋
+오타
+띄어쓰기 오류
+조사 생략
+짧은 키워드
+날짜 표현 변형
+금액 표현 변형
 ```
 
-Sheet를 읽습니다.
+예:
 
-다른 Sheet는 평가 설계와 실행 이력을 사람이 확인하기 위한 보조 영역입니다.
+```text
+정상
+→ 신청 기간은 언제인가요?
+
+조사 생략
+→ 신청 기간 언제?
+
+짧은 키워드
+→ 신청기간
+
+날짜 표현 변형
+→ 8/31부터 신청이야?
+
+금액 표현 변형
+→ 보증금 2천만원이야?
+```
+
+Robustness 평가는 문법적으로 완성된 질문뿐 아니라 실제 사용자가 입력할 수 있는 다양한 표현에서도 검색과 답변이 정상적으로 이루어지는지 확인합니다.
 
 ---
 
 # 6. 평가셋 주요 Column
 
-현재 주요 Column:
+주요 Column:
 
 ```text
 document_id
 question_id
-test_group
-intent_id
 category
 difficulty
-style
-expression_type
-variant_group
+test_group
 
 user_input
 reference
-reference_source
 reference_text
 expected_behavior
 
@@ -215,11 +227,14 @@ recall_at_1
 recall_at_3
 recall_at_5
 
-context_precision
-context_recall
 faithfulness
 response_relevancy
 factual_correctness
+
+recall_match_method
+recall_matched_rank
+recall_match_score
+ragas_status
 
 human_score
 failure_type
@@ -227,71 +242,37 @@ human_comment
 
 run_id
 git_commit
-source_file
 ```
 
----
+역할:
 
-# 7. Column 역할
+| Column                | 의미                  |
+| --------------------- | ------------------- |
+| `user_input`          | 실제 질문               |
+| `reference`           | 모범 답안               |
+| `reference_text`      | 검색되어야 하는 원문 근거      |
+| `retrieved_contexts`  | 실제 검색 Context       |
+| `response`            | 실제 챗봇 답변            |
+| `recall_at_1/3/5`     | Retrieval 평가        |
+| `faithfulness`        | 근거 기반 답변 여부         |
+| `response_relevancy`  | 질문 관련성              |
+| `factual_correctness` | Reference와 사실 일치 여부 |
+| `human_score`         | 오류 분석용 수기 점수        |
+| `failure_type`        | 실패 Stage            |
+| `run_id`              | 실험 버전               |
 
-질문:
-
-```text
-user_input
-```
-
-정답 기준:
-
-```text
-reference
-reference_text
-```
-
-실제 RAG 검색 결과:
-
-```text
-retrieved_chunk_ids
-retrieved_contexts
-```
-
-실제 답변:
+과거 파일의:
 
 ```text
-response
-```
-
-자동 평가:
-
-```text
-recall_at_1
-recall_at_3
-recall_at_5
-
 context_precision
 context_recall
-faithfulness
-response_relevancy
-factual_correctness
 ```
 
-사람 검수:
-
-```text
-human_score
-failure_type
-human_comment
-```
-
-실험 추적:
-
-```text
-run_id
-git_commit
-```
+Column은 현재 핵심 평가 Metric으로 사용하지 않습니다.
 
 ---
 
-# 8. expected_behavior
+# 7. expected_behavior
 
 문항별 기대 동작:
 
@@ -300,15 +281,15 @@ answer
 refuse
 ```
 
-개념:
+의미:
 
 ```text
 answer
-→ 문서 근거를 기반으로 답변해야 함
+→ 문서 근거를 기반으로 답변
 
 refuse
-→ 문서에 없는 정보이므로 추측하지 않고
-   확인할 수 없다고 안내해야 함
+→ 문서에 근거가 없으면 추측하지 않고
+   확인할 수 없다고 안내
 ```
 
 `unanswerable` 문항은 주로:
@@ -317,11 +298,11 @@ refuse
 expected_behavior = refuse
 ```
 
-형태로 관리합니다.
+로 관리합니다.
 
 ---
 
-# 9. evaluate_rag.py
+# 8. evaluate_rag.py
 
 파일:
 
@@ -336,47 +317,41 @@ Excel 질문 읽기
       ↓
 POST /api/chat
       ↓
-RAG Response 수집
+RAG 실행
       ↓
-Evidence 저장
+Retrieved Context 저장
       ↓
-Answer 저장
+Response 저장
       ↓
 run_id / git_commit 기록
       ↓
 Result Excel 저장
 ```
 
-이 Script는 평가 점수를 계산하는 파일이 아닙니다.
-
-주 목적은:
-
-```text
-RAG 실행 결과 수집
-```
-
-입니다.
+`evaluate_rag.py`는 **점수를 계산하는 Script가 아니라 RAG 실행 결과를 수집하는 Script**입니다.
 
 ---
 
-# 10. evaluate_rag.py 입력
+# 9. evaluate_rag.py 실행
 
-기본 Dataset:
+Backend와 RAG가 먼저 실행되어 있어야 합니다.
 
-```text
-GC
+고창:
+
+```bash
+python evaluation/evaluate_rag.py \
+  --dataset GC \
+  --announcement-id 15 \
+  --run-id GC_RUN_001
 ```
 
-입력 파일:
+서울 번동:
 
-```text
-evaluation/datasets/GC_FINAL_V1.xlsx
-```
-
-또는:
-
-```text
-evaluation/datasets/HC_FINAL_V1.xlsx
+```bash
+python evaluation/evaluate_rag.py \
+  --dataset BD \
+  --announcement-id 4 \
+  --run-id BD_RUN_001
 ```
 
 API:
@@ -385,253 +360,24 @@ API:
 POST /api/chat
 ```
 
-Request:
+Request 예:
 
 ```json
 {
   "announcementId": 15,
-  "question": "인터넷 신청 기간은 언제인가요?"
+  "question": "신청 기간은 언제인가요?"
 }
 ```
 
----
-
-# 11. evaluate_rag.py가 기대하는 API Response
-
-기본 형태:
-
-```json
-{
-  "answer": "...",
-  "grounded": true,
-  "evidence": [
-    {
-      "chunkId": 123,
-      "sectionTitle": "...",
-      "content": "...",
-      "score": 0.82
-    }
-  ]
-}
-```
-
-평가 Script는 이 중:
+결과 파일 예:
 
 ```text
-answer
-evidence
-```
-
-를 Excel에 기록합니다.
-
----
-
-# 12. Evidence 저장 형식
-
-`retrieved_chunk_ids`:
-
-```text
-123, 456, 789
-```
-
-`retrieved_contexts`:
-
-```text
-[rank=1 | chunkId=123 | section=... | score=...]
-Context Text
-
----
-
-[rank=2 | chunkId=456 | section=... | score=...]
-Context Text
-```
-
-형태로 저장합니다.
-
-이 값은 이후 Retrieval 평가와 실패 원인 분석에 사용합니다.
-
----
-
-# 13. RUN 관리
-
-코드 수정 전후 성능 비교를 위해 RUN 번호를 사용합니다.
-
-예:
-
-```text
-GC_RUN_001
-GC_RUN_002
-GC_RUN_003
-```
-
-화천:
-
-```text
-HC_RUN_001
-HC_RUN_002
-HC_RUN_003
-```
-
-현재 Script에서는 상단의:
-
-```python
-DEFAULT_RUN_NUMBER = "001"
-```
-
-값을 사용합니다.
-
-첫 평가:
-
-```python
-DEFAULT_RUN_NUMBER = "001"
-```
-
-코드 수정 후 두 번째 평가:
-
-```python
-DEFAULT_RUN_NUMBER = "002"
-```
-
-세 번째 평가:
-
-```python
-DEFAULT_RUN_NUMBER = "003"
+GC_FINAL_V1_RUN_001_result.xlsx
 ```
 
 ---
 
-# 14. RUN별 결과 파일
-
-GC RUN_001:
-
-```text
-evaluation/results/
-└── GC_FINAL_V1_RUN_001_result.xlsx
-```
-
-Metrics까지 실행:
-
-```text
-evaluation/results/
-├── GC_FINAL_V1_RUN_001_result.xlsx
-└── GC_FINAL_V1_RUN_001_scored.xlsx
-```
-
-RUN_002:
-
-```text
-GC_FINAL_V1_RUN_002_result.xlsx
-GC_FINAL_V1_RUN_002_scored.xlsx
-```
-
-이전 RUN 결과를 덮어쓰지 않습니다.
-
----
-
-# 15. evaluate_rag.py 실행
-
-프로젝트 Root:
-
-```bash
-cd /home/ubuntu/ddokbot/one-cycle
-```
-
-고창:
-
-```bash
-python evaluation/evaluate_rag.py \
-  --dataset GC \
-  --announcement-id 15
-```
-
-화천:
-
-```bash
-python evaluation/evaluate_rag.py \
-  --dataset HC \
-  --announcement-id <ANNOUNCEMENT_ID>
-```
-
-`announcement-id`는 실제 DB에 저장된 공고 ID를 사용합니다.
-
----
-
-# 16. 평가 전 Backend 확인
-
-`evaluate_rag.py`는 `/api/chat`을 호출하므로 Backend가 먼저 실행되어 있어야 합니다.
-
-Health:
-
-```bash
-curl -i \
-http://127.0.0.1:8000/api/health
-```
-
-Chat 직접 확인:
-
-```bash
-curl -i \
--X POST \
-http://127.0.0.1:8000/api/chat \
--H 'Content-Type: application/json' \
--d '{"announcementId":15,"question":"신청 기간은 언제인가?"}'
-```
-
-직접 Chat 호출이 실패하면 평가 Script부터 수정하지 않습니다.
-
-먼저 Backend/RAG 연결을 확인합니다.
-
----
-
-# 17. evaluate_rag.py 실패 유형
-
-## API Connection Error
-
-예:
-
-```text
-API 서버 연결 실패
-```
-
-확인:
-
-```text
-FastAPI 실행 여부
-Port 8000
-/api/chat
-EVAL_API_BASE_URL
-```
-
----
-
-## HTTP 422
-
-확인:
-
-```text
-announcementId
-question
-ChatRequest Schema
-```
-
----
-
-## HTTP 500
-
-확인:
-
-```text
-Backend Traceback
-RAG Retrieval
-Generation
-DB
-```
-
-평가 Script 문제가 아닐 수 있습니다.
-
----
-
-# 18. evaluate_metrics.py
+# 10. evaluate_metrics.py
 
 파일:
 
@@ -642,34 +388,32 @@ evaluation/evaluate_metrics.py
 역할:
 
 ```text
-evaluate_rag.py Result 읽기
+*_result.xlsx 읽기
       ↓
-Recall@K 계산
+Recall@1 / @3 / @5 계산
       ↓
 RAGAS 평가
       ↓
-Metric Column 기록
+Metric 저장
       ↓
-Scored Excel 저장
+*_scored.xlsx 저장
 ```
 
-입력:
+자동 평가를 크게 두 영역으로 나눕니다.
 
 ```text
-*_result.xlsx
-```
+Retrieval
+→ Recall@K
 
-출력:
-
-```text
-*_scored.xlsx
+Generation
+→ RAGAS
 ```
 
 ---
 
-# 19. Retrieval 평가
+# 11. Recall@K
 
-현재 기본 Retrieval Metric:
+현재 Retrieval Metric:
 
 ```text
 Recall@1
@@ -681,20 +425,28 @@ Recall@5
 
 ```text
 Recall@1
-→ 첫 번째 검색 결과 안에 정답 근거가 있는가
+→ Top-1 안에 필요한 원문 근거가 있는가
 
 Recall@3
-→ 상위 3개 검색 결과 안에 정답 근거가 있는가
+→ Top-3 안에 필요한 원문 근거가 있는가
 
 Recall@5
-→ 상위 5개 검색 결과 안에 정답 근거가 있는가
+→ Top-5 안에 필요한 원문 근거가 있는가
 ```
+
+검색 성능을 대표해서 설명할 때는 주로:
+
+```text
+Recall@3
+```
+
+를 사용합니다.
 
 ---
 
-# 20. 현재 Recall 계산 방식
+# 12. 현재 Recall 계산 방식
 
-현재 Script는 고정된 Gold Chunk ID가 아니라:
+현재 Recall은 Gold Chunk ID를 직접 비교하지 않고:
 
 ```text
 reference_text
@@ -702,132 +454,147 @@ reference_text
 retrieved_contexts
 ```
 
-를 자동 비교합니다.
+를 비교합니다.
 
-기본 Threshold:
-
-```text
-0.75
-```
-
-개념:
+방식:
 
 ```text
-reference_text와 Context의
-토큰 일치 + 문자열 유사도
-        ↓
-Threshold 이상
-        ↓
-해당 Top-K에서 Hit
+Hybrid Evidence Matching
++
+Combined Top-K Context
 ```
 
-따라서 현재 Recall은:
+주요 판단 요소:
 
 ```text
-Heuristic Recall
+정규화된 문자열 포함
+숫자 일치
+핵심 Token 일치
+문자열 유사도
+복수 Evidence 조합
 ```
 
-성격을 가집니다.
+예를 들어 정답에 필요한 정보가 Rank 1과 Rank 2에 나누어져 있어도 Top-3 Context를 결합했을 때 전체 근거가 확인되면 Recall@3 Hit로 판단할 수 있습니다.
 
-엄밀한 Gold Chunk 기반 Recall과는 다릅니다.
+Recall 분석용 Column:
+
+```text
+recall_match_method
+recall_matched_rank
+recall_match_score
+```
+
+이 값들은 **최종 성능 Metric이 아니라 Recall 판정 이유를 확인하기 위한 진단 정보**입니다.
+
+`reference_text`가 없는 Unanswerable 문항은 Recall 계산 대상에서 제외합니다.
 
 ---
 
-# 21. Recall Threshold
+# 13. RAGAS 자동 평가
 
-기본:
-
-```text
-0.75
-```
-
-실행 시 변경 가능:
-
-```bash
-python evaluation/evaluate_metrics.py \
-  --dataset GC \
-  --recall-threshold 0.8 \
-  --skip-ragas
-```
-
-Threshold를 RUN마다 임의로 바꾸면 비교 기준이 달라지므로,
-성능 비교 실험에서는 가능한 한 동일한 값을 유지합니다.
-
----
-
-# 22. Recall만 먼저 실행
-
-RAGAS 없이 Retrieval 결과만 빠르게 확인:
-
-```bash
-python evaluation/evaluate_metrics.py \
-  --dataset GC \
-  --skip-ragas
-```
-
-이 방식은:
+현재 사용하는 주요 RAGAS Metric은 3개입니다.
 
 ```text
-Recall@1
-Recall@3
-Recall@5
-```
-
-만 먼저 확인하고 싶을 때 사용합니다.
-
----
-
-# 23. RAGAS
-
-현재 자동 평가에 사용하는 주요 RAGAS Metric:
-
-```text
-Context Precision
-Context Recall
 Faithfulness
 Response Relevancy
 Factual Correctness
 ```
 
----
-
-# 24. RAGAS Metric 의미
-
-## Context Precision
-
-검색된 Context 중 실제 질문과 정답에 유용한 근거가 얼마나 앞쪽에 잘 배치되었는지 평가합니다.
-
----
-
-## Context Recall
-
-정답을 구성하는 데 필요한 근거가 검색 Context에 충분히 포함되었는지 평가합니다.
-
----
-
 ## Faithfulness
 
-최종 답변이 검색된 Context를 벗어나 임의로 내용을 생성하지 않았는지 평가합니다.
+```text
+Response
+↕
+Retrieved Context
+```
 
-Hallucination 확인에 중요한 지표입니다.
+검색된 근거에 기반해 답변했는지 평가합니다.
 
----
+즉, Context에 없는 내용을 임의로 생성했는지 확인합니다.
 
 ## Response Relevancy
 
-최종 답변이 사용자 질문에 얼마나 직접적으로 관련되어 있는지 평가합니다.
+```text
+User Question
+↕
+Response
+```
 
----
+답변이 질문의 핵심과 얼마나 관련되어 있는지 평가합니다.
 
 ## Factual Correctness
 
-생성 답변이 Reference Answer와 사실적으로 얼마나 일치하는지 평가합니다.
+```text
+Reference
+↕
+Response
+```
+
+생성 답변이 모범 답안과 사실적으로 얼마나 일치하는지 평가합니다.
+
+특히:
+
+```text
+숫자
+날짜
+시간
+금액
+조건
+대상
+예외
+```
+
+와 같은 정보 오류를 확인하는 데 중요합니다.
 
 ---
 
-# 25. RAGAS 실행
+# 14. 최종 자동 평가 기준
 
-예:
+DDOKBOT에서는 최종 정량 성능을 다음 자동 Metric으로 판단합니다.
+
+```text
+Retrieval
+├─ Recall@1
+├─ Recall@3
+└─ Recall@5
+
+Generation
+├─ Faithfulness
+├─ Response Relevancy
+└─ Factual Correctness
+```
+
+즉:
+
+```text
+Recall@K
+→ 필요한 근거를 검색했는가?
+
+Faithfulness
+→ 검색 근거를 벗어나지 않았는가?
+
+Response Relevancy
+→ 질문에 적절하게 답했는가?
+
+Factual Correctness
+→ Reference와 사실적으로 일치하는가?
+```
+
+를 각각 확인합니다.
+
+---
+
+# 15. evaluate_metrics.py 실행
+
+Recall만 먼저 확인:
+
+```bash
+python evaluation/evaluate_metrics.py \
+  --dataset GC \
+  --skip-ragas
+```
+
+RAGAS 포함 전체 평가:
 
 ```bash
 python evaluation/evaluate_metrics.py \
@@ -835,13 +602,23 @@ python evaluation/evaluate_metrics.py \
   --ragas-model <MODEL_NAME>
 ```
 
-RAGAS LLM 기본 Base URL:
+특정 RUN 파일을 사용하는 경우:
+
+```bash
+python evaluation/evaluate_metrics.py \
+  --dataset GC \
+  --xlsx evaluation/results/GC_FINAL_V1_RUN_001_result.xlsx \
+  --output evaluation/results/GC_FINAL_V1_RUN_001_scored.xlsx \
+  --ragas-model <MODEL_NAME>
+```
+
+RAGAS 기본 API:
 
 ```text
 http://127.0.0.1:8080/v1
 ```
 
-환경변수:
+주요 환경변수:
 
 ```text
 RAGAS_API_BASE_URL
@@ -852,78 +629,116 @@ RAGAS_EMBEDDING_MODEL
 
 ---
 
-# 26. Evaluation Dependencies
+# 16. 선택적 재평가
 
-평가 Script에서 사용하는 주요 Package:
+전체 평가를 다시 실행하지 않고 필요한 Metric 또는 문항만 재평가할 수 있습니다.
 
-```text
-openpyxl
-ragas
-openai
-sentence-transformers
-```
-
-RAGAS 없이 Recall만 실행해도:
-
-```text
-openpyxl
-```
-
-은 필요합니다.
-
-RAGAS 평가를 사용할 경우:
-
-```text
-ragas
-openai
-sentence-transformers
-```
-
-가 추가로 필요합니다.
-
-설치 여부 확인:
+## Factual Correctness만 실행
 
 ```bash
-python -m pip show \
-ragas \
-openai \
-sentence-transformers \
-openpyxl
+python evaluation/evaluate_metrics.py \
+  --dataset GC \
+  --ragas-model <MODEL_NAME> \
+  --factual-only
+```
+
+용도:
+
+```text
+Factual Correctness 이상값 확인
+Judge 모델 변경 테스트
+평가 Prompt 테스트
 ```
 
 ---
 
-# 27. RAGAS Package 오류
-
-예:
-
-```text
-Import "ragas" could not be resolved
-```
-
-가능성:
-
-```text
-현재 Python 환경에 ragas 미설치
-VS Code Interpreter 불일치
-```
-
-확인:
+## 특정 문항만 실행
 
 ```bash
-which python
-python -m pip show ragas
+python evaluation/evaluate_metrics.py \
+  --dataset GC \
+  --ragas-model <MODEL_NAME> \
+  --question-ids Q002,Q003,Q007
 ```
-
-VS Code에서는 실제 프로젝트 Python Interpreter를 선택합니다.
 
 ---
 
-# 28. Human Review
+## 한국어 Factual Correctness Prompt 적용
 
-자동 Metric만으로 최종 품질을 판단하지 않습니다.
+```bash
+python evaluation/evaluate_metrics.py \
+  --dataset GC \
+  --ragas-model <MODEL_NAME> \
+  --factual-only \
+  --adapt-factual-korean
+```
 
-현재 사람이 직접 입력하는 주요 Column:
+조합 예:
+
+```bash
+python evaluation/evaluate_metrics.py \
+  --dataset GC \
+  --ragas-model <MODEL_NAME> \
+  --factual-only \
+  --adapt-factual-korean \
+  --question-ids Q002,Q003,Q007
+```
+
+---
+
+# 17. 챗봇 모델과 Judge 모델
+
+RAG 답변 생성 모델과 RAGAS 평가용 Judge 모델은 같을 필요가 없습니다.
+
+```text
+RAG Answer Model
+→ 사용자 답변 생성
+
+RAGAS Judge Model
+→ 답변 품질 평가
+```
+
+Judge 모델에는 실제 서비스 모델보다 더 높은 성능의 모델을 사용할 수 있습니다.
+
+단, RUN 비교에서는 가능한 한 다음을 동일하게 유지합니다.
+
+```text
+Judge Model
+RAGAS Version
+Prompt 설정
+평가 Metric
+```
+
+그래야 Metric 변화가 실제 RAG 개선 때문인지 평가 조건 변경 때문인지 구분할 수 있습니다.
+
+---
+
+# 18. Human Review
+
+최종 성능 판단은 자동 Metric을 기준으로 합니다.
+
+Human Review의 목적은:
+
+```text
+자동 Metric이 낮은 이유 확인
+답변의 어떤 정보가 틀렸는지 확인
+실패 Stage 분류
+자동 평가 이상값 확인
+```
+
+입니다.
+
+즉:
+
+```text
+Automatic Metric
+→ 최종 정량 평가
+
+Human Review
+→ 오류 원인 분석
+```
+
+주요 Column:
 
 ```text
 human_score
@@ -931,92 +746,21 @@ failure_type
 human_comment
 ```
 
----
-
-# 29. human_score
-
-권장 기준:
+`human_score` 권장 기준:
 
 ```text
-2
-→ 정답
-
-1
-→ 부분 정답
-
-0
-→ 오답
+2 → 정답
+1 → 부분 정답
+0 → 오답
 ```
 
-예:
-
-```text
-Reference
-→ 8월 24일~25일, 10:00~16:00
-
-Response
-→ 8월 24일~25일
-```
-
-날짜는 맞지만 시간이 빠졌다면:
-
-```text
-human_score = 1
-```
-
-로 볼 수 있습니다.
+이 값은 최종 공식 성능 점수보다 **오류 패턴 확인용 보조 정보**로 사용합니다.
 
 ---
 
-# 30. human_comment
+# 19. Failure Analysis
 
-`human_comment`에는 점수만으로 알 수 없는 구체적인 이유를 기록합니다.
-
-예:
-
-```text
-날짜는 맞지만 접수시간 10:00~16:00이 누락됨
-```
-
-또는:
-
-```text
-검색 Context에는 정답 근거가 있었으나
-LLM이 최종 답변에 포함하지 않음
-```
-
-일반적으로:
-
-```text
-human_score = 1 또는 0
-```
-
-인 경우 작성하는 것을 권장합니다.
-
----
-
-# 31. failure_type
-
-대표적인 실패 유형:
-
-```text
-Parser
-Normalizer
-Structure
-Chunking
-Retrieval
-LLM/Prompt
-DB/API
-복합 원인
-```
-
-평가 결과가 낮다고 해서 바로 LLM 문제로 판단하지 않습니다.
-
----
-
-# 32. Failure Analysis 순서
-
-질문 하나가 실패했을 때 다음 순서로 확인합니다.
+점수가 낮은 문항은 다음 순서로 확인합니다.
 
 ```text
 Response
@@ -1036,188 +780,53 @@ Parsed Output
 Original Document
 ```
 
-핵심 질문:
+핵심:
 
 ```text
 정답 정보가 마지막으로 정상적으로 존재했던 Stage는 어디인가?
 ```
 
-그 다음 Stage를 실패 원인 후보로 봅니다.
+대표적인 판단:
+
+| 증상                         | 우선 확인                 |
+| -------------------------- | --------------------- |
+| 원문에는 있는데 Parsed 결과에 없음     | Parser                |
+| 정규화 후 값이 잘못 변경됨            | Normalizer            |
+| 제목·표·관계가 깨짐                | Structure             |
+| 필요한 정보가 Chunk에서 분리됨        | Chunking              |
+| 관련 Chunk가 검색되지 않음          | Embedding / Retrieval |
+| Context에는 근거가 있는데 답변이 틀림   | LLM / Prompt          |
+| 다른 공고가 검색되거나 Evidence가 누락됨 | DB / API              |
 
 ---
 
-# 33. LLM/Prompt 실패
+# 20. Unanswerable 평가
 
-조건:
-
-```text
-retrieved_contexts에 정확한 근거 존재
-        +
-response가 틀리거나 핵심 정보 누락
-```
-
-판단:
-
-```text
-failure_type = LLM/Prompt
-```
+문서에 없는 질문은 RAG가 임의로 답변하지 않아야 합니다.
 
 예:
 
 ```text
-Context
-→ 날짜 + 시간 모두 존재
-
-Response
-→ 날짜만 답변
-```
-
----
-
-# 34. Retrieval 실패
-
-조건:
-
-```text
-DB에는 정답 Chunk가 존재
-        +
-Top-K 검색 결과에 포함되지 않음
-```
-
-판단:
-
-```text
-failure_type = Retrieval
-```
-
-확인:
-
-```text
-query embedding
-vector similarity
-Top-K
-search text
-embedding model
-```
-
----
-
-# 35. Chunking 실패
-
-조건:
-
-```text
-Structured Output에는 정답 정보 존재
-        +
-Chunk에서 정보가 잘리거나 관계가 깨짐
-```
-
-판단:
-
-```text
-failure_type = Chunking
-```
-
-예:
-
-```text
-표 Header와 Value가 서로 다른 Chunk로 분리되어
-의미를 복원할 수 없음
-```
-
----
-
-# 36. Structure 실패
-
-조건:
-
-```text
-Parsed/Normalized 결과에는 정보가 정상
-        +
-Structured 결과에서 제목/표/관계가 잘못됨
-```
-
-판단:
-
-```text
-failure_type = Structure
-```
-
----
-
-# 37. Parser 실패
-
-조건:
-
-```text
-원문에는 정보가 존재
-        +
-Parsed JSON부터 정보가 누락/손상
-```
-
-판단:
-
-```text
-failure_type = Parser
-```
-
-Parser 문제가 확실하면 뒤의 Chunking/Retrieval부터 수정하지 않습니다.
-
----
-
-# 38. DB/API 실패
-
-예:
-
-```text
-정상 Chunk가 생성되었지만 DB 저장 누락
-
-다른 announcementId 데이터가 검색됨
-
-API Response 변환 과정에서 Evidence 누락
-```
-
-판단:
-
-```text
-failure_type = DB/API
-```
-
----
-
-# 39. Unanswerable 평가
-
-문서에 없는 질문은 일반 Answerable 질문과 동일하게 평가하지 않습니다.
-
-예:
-
-```text
-반려동물 키워도 되나요?
 주차비는 얼마인가요?
 관리비는 얼마인가요?
 가장 가까운 지하철역은 어디인가요?
-몇 층에 배정되나요?
 ```
 
-문서에 근거가 없다면 RAG는 추측하지 않아야 합니다.
-
-권장 동작:
+문서에 근거가 없다면:
 
 ```text
-문서에서 확인할 수 없습니다.
+해당 내용은 공고문에서 확인할 수 없습니다.
 ```
 
----
+와 같이 답변하는 것이 적절합니다.
 
-# 40. Correct Rejection
-
-Unanswerable 질문에서는 별도로 다음을 확인할 수 있습니다.
+필요하면 별도로:
 
 ```text
 Correct Rejection Rate
 ```
 
-개념:
+를 계산할 수 있습니다.
 
 ```text
 정상 거절한 Unanswerable 질문 수
@@ -1225,118 +834,11 @@ Correct Rejection Rate
 전체 Unanswerable 질문 수
 ```
 
-예:
-
-```text
-5개 중 4개 정상 거절
-→ Correct Rejection Rate = 80%
-```
-
-이 지표는 Hallucination 방지 성능을 설명할 때 유용합니다.
-
-현재 자동 Script에 집계가 없으면 Human Review 또는 별도 집계로 확인할 수 있습니다.
-
 ---
 
-# 41. 평가 실행 전체 순서
+# 21. RUN 관리
 
-## 1. Backend / RAG 실행 확인
-
-```text
-/api/health
-/api/chat
-```
-
----
-
-## 2. RUN 번호 확인
-
-두 Script의:
-
-```python
-DEFAULT_RUN_NUMBER = "001"
-```
-
-값을 확인합니다.
-
----
-
-## 3. RAG 결과 수집
-
-```bash
-python evaluation/evaluate_rag.py \
-  --dataset GC \
-  --announcement-id 15
-```
-
----
-
-## 4. Retrieval Metric 확인
-
-```bash
-python evaluation/evaluate_metrics.py \
-  --dataset GC \
-  --skip-ragas
-```
-
----
-
-## 5. RAGAS 실행
-
-```bash
-python evaluation/evaluate_metrics.py \
-  --dataset GC \
-  --ragas-model <MODEL_NAME>
-```
-
----
-
-## 6. Human Review
-
-```text
-human_score
-failure_type
-human_comment
-```
-
-입력.
-
----
-
-## 7. 실패 원인 분석
-
-```text
-LLM/Prompt
-Retrieval
-Chunking
-Structure
-Parser
-DB/API
-```
-
-분류.
-
----
-
-## 8. 코드 수정
-
-문제가 발생한 Stage만 우선 수정.
-
----
-
-## 9. 다음 RUN
-
-```python
-DEFAULT_RUN_NUMBER = "002"
-```
-
-로 변경.
-
-동일 평가셋으로 다시 평가합니다.
-
----
-
-# 42. RUN 비교
+RUN은 동일한 평가셋에서 코드나 설정이 달라진 실험 버전을 의미합니다.
 
 예:
 
@@ -1351,36 +853,35 @@ GC_RUN_003
 → Prompt 수정 후
 ```
 
-비교 항목:
+RUN 비교 시 주요 Metric:
 
 ```text
 Recall@1
 Recall@3
 Recall@5
 
-Context Precision
-Context Recall
 Faithfulness
 Response Relevancy
 Factual Correctness
-
-Human Score
-Correct Rejection Rate
 ```
+
+Human Review는 RUN별 오류 유형 변화 분석에 활용합니다.
 
 ---
 
-# 43. 평가셋 버전과 RUN의 차이
+# 22. Dataset Version과 RUN
 
-평가 질문 자체가 같으면:
+평가셋과 RUN은 구분해서 관리합니다.
 
 ```text
 GC_FINAL_V1.xlsx
+→ 평가 질문과 Reference의 버전
+
+GC_RUN_001
+→ 시스템 실험 버전
 ```
 
-를 계속 사용합니다.
-
-코드만 바뀌었을 때:
+코드만 변경했다면:
 
 ```text
 RUN_001
@@ -1390,57 +891,98 @@ RUN_003
 
 을 증가시킵니다.
 
-평가 질문/Reference 자체를 변경했을 때만:
+평가 질문이나 Reference를 실제로 변경했다면:
 
 ```text
 GC_FINAL_V2.xlsx
 ```
 
-처럼 Dataset Version을 올립니다.
+처럼 Dataset Version 증가를 검토합니다.
 
-즉:
+"고정 평가셋"은 모든 문서가 동일한 문항 구성을 가져야 한다는 뜻이 아닙니다.
 
 ```text
-V1 / V2
-→ 평가셋 버전
+GC와 BD의 문항 구성
+→ 달라도 됨
 
-RUN_001 / RUN_002
-→ 코드 실험 버전
+GC_RUN_001과 GC_RUN_002
+→ 같은 GC 평가셋 사용
+
+BD_RUN_001과 BD_RUN_002
+→ 같은 BD 평가셋 사용
 ```
-
-입니다.
 
 ---
 
-# 44. Git Commit 기록
+# 23. 문서별 결과 비교 주의
 
-`evaluate_rag.py`는 현재 Git 정보를 확인하여:
+문서마다 평가 문항 구성이 다를 수 있으므로 전체 평균만으로 문서 성능을 단순 비교하는 것은 주의해야 합니다.
 
-```text
-git_commit
-```
-
-을 각 평가 행에 기록합니다.
-
-목적:
+예를 들어 BD에 Robustness 문항이 10개 포함되어 있고 GC에는 없다면:
 
 ```text
-이 평가 결과가
-어떤 코드 상태에서 생성되었는지
-추적
+GC 93%
+BD 88%
 ```
 
-RUN 비교에서 매우 중요합니다.
+만 보고 GC가 무조건 더 좋은 성능이라고 판단하기 어렵습니다.
 
-가능하면 평가 직전에 변경사항을 Commit한 상태에서 실행합니다.
+필요하면 다음을 함께 확인합니다.
+
+```text
+전체 평균
++
+유형별 평균
+```
+
+예:
+
+```text
+Recall@3 전체       92%
+
+Easy                96%
+Medium              91%
+Hard                84%
+Robustness          87%
+```
 
 ---
 
-# 45. 결과 파일 Git 관리
+# 24. 전체 평가 실행 순서
 
-평가 결과는 실행할 때마다 생성되기 때문에 기본적으로 Git에서 제외하는 것을 권장합니다.
+```text
+1. Backend / RAG 실행 확인
+        ↓
+2. evaluate_rag.py 실행
+        ↓
+3. *_result.xlsx 생성
+        ↓
+4. evaluate_metrics.py --skip-ragas
+        ↓
+5. Recall 결과 확인
+        ↓
+6. RAGAS 전체 평가
+        ↓
+7. *_scored.xlsx 생성
+        ↓
+8. 자동 Metric 확인
+        ↓
+9. 낮거나 이상한 문항 Human Review
+        ↓
+10. Failure Analysis
+        ↓
+11. 코드 개선
+        ↓
+12. 다음 RUN 실행
+```
 
-`.gitignore` 예:
+---
+
+# 25. 결과 파일 Git 관리
+
+평가 결과는 실행할 때마다 생성되므로 기본적으로 Git에서 제외합니다.
+
+`.gitignore`:
 
 ```gitignore
 # Evaluation results
@@ -1448,364 +990,71 @@ evaluation/results/*
 !evaluation/results/.gitkeep
 ```
 
-평가셋 자체:
+평가 질문과 Reference가 들어 있는:
 
 ```text
 evaluation/datasets/
 ```
 
-은 Source of Truth 역할을 하므로 Git으로 관리할 수 있습니다.
+은 Source of Truth 역할을 하므로 Git으로 관리합니다.
 
 ---
 
-# 46. source_documents 목적
+# 26. 핵심 요약
 
-위치:
-
-```text
-evaluation/source_documents/
-```
-
-평가 Reference를 만든 원본 문서를 보존하기 위한 영역입니다.
-
-예:
-
-```text
-evaluation/source_documents/
-└── DOC_GC_001/
-    └── v1/
-        └── source.hwpx
-```
-
-목적:
-
-```text
-LH 원본이 변경/삭제되더라도
-평가 기준 문서를 다시 확인 가능
-```
-
-평가 Script가 이 파일을 직접 Parsing하는 것은 아닙니다.
-
-실제 평가는 DB에 등록된:
-
-```text
-announcementId
-```
-
-를 기준으로 `/api/chat`을 호출합니다.
-
----
-
-# 47. 평가 결과가 이상할 때
-
-## 모든 질문이 API ERROR
-
-확인:
-
-```text
-Backend
-/api/chat
-announcementId
-Port
-```
-
----
-
-## Evidence가 모두 없음
-
-확인:
-
-```text
-DB Active Processing Run
-ChunkSet
-Embeddings
-Retrieval
-announcement filtering
-```
-
----
-
-## Recall이 낮음
-
-확인:
-
-```text
-reference_text
-retrieved_contexts
-Chunk 품질
-Embedding
-Top-K
-```
-
----
-
-## Recall은 높은데 답변 점수가 낮음
-
-가능성:
-
-```text
-LLM/Prompt
-Context Builder
-Generation
-```
-
----
-
-## Faithfulness가 낮음
-
-가능성:
-
-```text
-Hallucination
-Prompt 제약 부족
-Context 외 정보 생성
-```
-
----
-
-## Factual Correctness가 낮음
-
-확인:
-
-```text
-Reference
-Response
-숫자/날짜/금액 누락
-조건 누락
-```
-
----
-
-# 48. 평가 데이터 수정 주의
-
-첫 공식 RUN 이후에는 비교 실험 중 평가 질문을 임의로 변경하지 않습니다.
-
-잘못된 Reference를 발견한 경우에는:
-
-```text
-왜 수정했는지 기록
-Dataset Version 증가 여부 검토
-```
-
-가 필요합니다.
-
-평가셋과 코드를 동시에 바꾸면:
-
-```text
-성능 변화가 코드 때문인지
-질문 변화 때문인지
-```
-
-구분하기 어렵습니다.
-
----
-
-# 49. 평가 확장 방향
-
-현재:
-
-```text
-2 documents × 60 questions
-```
-
-을 기본으로 사용합니다.
-
-이후 일반화 성능을 검증할 때는 질문 수를 무한히 늘리기보다:
-
-```text
-임대주택 문서 수 증가
-```
-
-를 우선 고려합니다.
-
-예:
-
-```text
-4~5 rental-housing notices
-×
-약 60 cases
-```
-
-형태로 확장할 수 있습니다.
-
-단 문서에 존재하지 않는 내용을 억지로 질문으로 만들지 않습니다.
-
----
-
-# 50. 중간발표용 평가 설명
-
-발표에서는 다음 흐름으로 설명할 수 있습니다.
-
-```text
-1. 실제 사용자가 자주 물을 질문을 중심으로 평가셋 구성
-2. 같은 의미의 표현 변형 포함
-3. 조건형/비교형/구어체 포함
-4. 문서에 없는 질문도 포함
-5. Retrieval과 Answer Generation을 분리 평가
-6. 동일 평가셋으로 코드 수정 전후 성능 비교
-```
-
-핵심:
-
-```text
-평가셋을 바꾸지 않고
-같은 질문으로 반복 측정
-```
-
-입니다.
-
----
-
-# 51. Evaluation Source of Truth
-
-| 영역 | Source of Truth |
-|---|---|
-| 평가 질문/Reference | `evaluation/datasets/*.xlsx` |
-| RAG 실행 수집 | `evaluation/evaluate_rag.py` |
-| Recall/RAGAS | `evaluation/evaluate_metrics.py` |
-| 평가 원본 문서 | `evaluation/source_documents/` |
-| 실행 결과 | `evaluation/results/` |
-| Chat API Contract | `backend/app/api/routes/chat.py`, `backend/app/schemas/chat.py` |
-| Runtime RAG | `rag/` |
-| Chunk/Pipeline | `pipeline/` |
-| DB Persistence | `backend/app/services/pipeline_persistence.py` |
-
----
-
-# 52. AI에게 Evaluation 작업을 맡길 때
-
-최소 전달:
-
-```text
-README.md
-docs/ARCHITECTURE.md
-docs/PROJECT_STRUCTURE.md
-docs/RAG.md
-docs/PIPELINE.md
-
-evaluation/
-```
-
-Retrieval 문제까지 포함하면 추가:
-
-```text
-rag/
-pipeline/chunking/
-pipeline/embedding/
-backend/app/services/pipeline_persistence.py
-```
-
-Generation 문제면 추가:
-
-```text
-rag/generation/
-rag/service.py
-backend/app/services/chat_service.py
-```
-
----
-
-# 53. AI가 Evaluation 수정 전 확인할 질문
-
-```text
-1. 평가셋을 바꾸는가, 평가 코드만 바꾸는가?
-2. Dataset Version을 올려야 하는가?
-3. RUN 번호만 올리면 되는가?
-4. Retrieval Metric 문제인가?
-5. Generation Metric 문제인가?
-6. Unanswerable 질문을 어떻게 처리하는가?
-7. 기존 RUN 결과를 덮어쓰지 않는가?
-8. 같은 기준으로 전후 비교가 가능한가?
-```
-
-평가 기준을 확인하지 않고 Dataset과 Script를 동시에 대폭 변경하지 않습니다.
-
----
-
-# 54. 전체 Evaluation 연결 구조
-
-```text
-GC_FINAL_V1.xlsx / HC_FINAL_V1.xlsx
-              │
-              ▼
-       evaluate_rag.py
-              │
-              ▼
-        POST /api/chat
-              │
-              ▼
-         Backend / RAG
-              │
-              ▼
-       Retrieval + Answer
-              │
-              ▼
- *_RUN_XXX_result.xlsx
-              │
-              ▼
-     evaluate_metrics.py
-              │
-        ┌─────┴─────┐
-        ▼           ▼
-    Recall@K      RAGAS
-        │           │
-        └─────┬─────┘
-              ▼
- *_RUN_XXX_scored.xlsx
-              │
-              ▼
-        Human Review
-              │
-              ▼
-       Failure Analysis
-              │
-              ▼
-       Code Improvement
-              │
-              ▼
-         Next RUN
-```
-
----
-
-# 55. 핵심 요약
-
-DDOKBOT Evaluation의 중심 원칙:
+DDOKBOT Evaluation의 핵심 구조:
 
 ```text
 Dataset
-→ 질문/정답 기준
+→ 질문 / Reference
 
 evaluate_rag.py
-→ 실제 RAG 실행 결과 수집
+→ RAG 실행 결과 수집
 
 evaluate_metrics.py
-→ Retrieval + Generation 자동 평가
+→ Recall@K + RAGAS 자동 평가
+
+Automatic Metric
+→ 최종 정량 성능 판단
 
 Human Review
-→ 자동 평가가 놓친 품질 확인
+→ 낮은 점수의 오류 원인 분석
 
 RUN
 → 코드 수정 전후 비교
 ```
 
-평가 결과가 낮을 때는 단순히 LLM 성능 문제라고 판단하지 않고:
+현재 Retrieval 평가:
 
 ```text
-Parser
-→ Normalizer
-→ Structure
-→ Chunking
-→ Embedding
-→ Retrieval
-→ LLM/Prompt
+Recall@1
+Recall@3
+Recall@5
 ```
 
-전체 흐름에서 **정답 정보가 마지막으로 정상적으로 존재했던 Stage**를 찾아 실패 원인을 분류합니다.
+현재 Recall 방식:
+
+```text
+Hybrid Evidence Matching
++
+Combined Top-K Context
+```
+
+현재 Generation 자동 평가:
+
+```text
+Faithfulness
+Response Relevancy
+Factual Correctness
+```
+
+평가셋은 문서별로 유형과 문항 수가 달라도 됩니다.
+
+다만 한 번 고정한 이후에는 동일 문서의 RUN 비교에서 같은 평가 질문과 Reference를 유지합니다.
 
 가장 중요한 원칙:
 
 ```text
-동일한 평가셋을 유지한 상태에서
-RUN만 증가시키며 코드 개선 전후를 비교합니다.
+동일한 평가셋과 동일한 평가 조건을 유지한 상태에서
+RUN만 증가시키며 코드 개선 전후의 성능을 비교한다.
 ```
