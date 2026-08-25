@@ -24,7 +24,7 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class GenerationConfig:
-    """llama.cpp 기반 Qwen 답변 생성 설정."""
+    """llama.cpp 기반 LLM 답변 생성 설정."""
 
     base_url: str = os.getenv(
         "LLAMA_BASE_URL",
@@ -35,21 +35,21 @@ class GenerationConfig:
 
     model_name: str = os.getenv(
         "LLAMA_MODEL",
-        "qwen",
+        "",
     ).strip()
 
-    temperature: float = 0.0
-    top_p: float = 1.0
-    max_tokens: int = 512
+    temperature: float = _env_float("LLAMA_TEMPERATURE", 0.0)
+    top_p: float = _env_float("LLAMA_TOP_P", 1.0)
+    max_tokens: int = _env_int("LLAMA_MAX_TOKENS", 1024)
 
     timeout_seconds: int = _env_int(
         "LLAMA_TIMEOUT_SECONDS",
         180,
     )
 
-    context_top_k: int = 5
+    context_top_k: int = _env_int("LLAMA_CONTEXT_TOP_K", 5)
 
-    max_chars_per_context: int = 6000
+    max_chars_per_context: int = _env_int("LLAMA_MAX_CONTEXT_CHARS", 6000)
 
     require_source_markers: bool = True
 

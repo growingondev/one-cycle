@@ -129,11 +129,14 @@ def build_source_contexts(
     ]
 
     contexts: list[SourceContext] = []
+    remaining_chars = config.max_chars_per_context
 
     for source_number, raw_result in enumerate(
         selected,
         start=1,
     ):
+        if remaining_chars <= 0:
+            break
         normalized = _unwrap_retrieval_result(
             raw_result
         )
@@ -148,13 +151,13 @@ def build_source_contexts(
                 f"{chunk_id}"
             )
 
-        if len(content) > config.max_chars_per_context:
+        if len(content) > remaining_chars:
             content = (
-                content[
-                    : config.max_chars_per_context
-                ]
+                content[:remaining_chars]
                 + "\n[이하 내용은 프롬프트 길이 제한으로 생략]"
             )
+
+        remaining_chars -= len(content)
 
         contexts.append(
             SourceContext(

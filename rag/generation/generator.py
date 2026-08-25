@@ -163,7 +163,7 @@ def _generate_answer_impl(
             raise
 
         raise GenerationError(
-            "Qwen 답변 생성에 실패했습니다.\n"
+            "LLM 답변 생성에 실패했습니다.\n"
             f"실제 오류: "
             f"{type(exc).__name__}: {exc}"
         ) from exc
