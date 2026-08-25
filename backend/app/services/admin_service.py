@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import math
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+from backend.app.models.error_log import ErrorLog
 
 from backend.app.schemas.admin import (
     AdminAnnouncementDetail,
@@ -24,10 +26,6 @@ from backend.app.schemas.admin import (
     ProcessingSummary,
     StructureSummary,
 )
-
-
-class ErrorStatusPersistenceUnavailable(RuntimeError):
-    pass
 
 
 def _total_pages(total: int, size: int) -> int:
@@ -62,6 +60,7 @@ def _announcement_item(row) -> AdminAnnouncementItem:
         id=row["id"],
         title=row["title"],
         region=row["region"],
+        notice_type=row["notice_type"],
         announcement_date=row["announcement_date"],
         application_start=_extract_period_value(
             period,
@@ -147,6 +146,7 @@ def list_admin_announcements(
                 a.id,
                 a.title,
                 a.region,
+                a.notice_type,
                 a.announcement_date,
                 a.publication_status,
                 a.created_at,
@@ -187,6 +187,7 @@ def get_admin_announcement(
                 a.title,
                 a.detail_url,
                 a.region,
+                a.notice_type,
                 a.announcement_date,
                 a.publication_status,
                 a.created_at,
@@ -584,68 +585,25 @@ def list_processing_runs(
     )
 
 
-def _error_union_sql() -> str:
+def _error_base_sql() -> str:
     return """
     SELECT
-        ('document:' || d.id::text) AS id,
-        a.id AS announcement_id,
+        el.id,
+        el.announcement_id,
         a.title AS announcement_title,
-        d.id AS document_id,
+        el.document_id,
         d.original_filename AS document_name,
-        'download' AS error_type,
-        NULL::text AS error_code,
-        'download' AS stage,
-        COALESCE(d.error_message, '문서 다운로드에 실패했습니다.') AS message,
-        'open' AS status,
-        NULL::text AS resolution,
-        d.created_at AS created_at,
-        NULL::timestamptz AS resolved_at
-    FROM documents d
-    JOIN announcements a ON a.id = d.announcement_id
-    WHERE d.download_status = 'failed'
-
-    UNION ALL
-
-    SELECT
-        ('processing:' || pr.id::text) AS id,
-        a.id AS announcement_id,
-        a.title AS announcement_title,
-        d.id AS document_id,
-        d.original_filename AS document_name,
-        'processing' AS error_type,
-        pr.error_code,
-        pr.error_stage AS stage,
-        COALESCE(pr.error_message, '문서 처리에 실패했습니다.') AS message,
-        'open' AS status,
-        NULL::text AS resolution,
-        COALESCE(pr.finished_at, pr.started_at, pr.created_at) AS created_at,
-        NULL::timestamptz AS resolved_at
-    FROM processing_runs pr
-    JOIN documents d ON d.id = pr.document_id
-    JOIN announcements a ON a.id = d.announcement_id
-    WHERE pr.execution_status = 'failed'
-
-    UNION ALL
-
-    SELECT
-        ('embedding:' || e.id::text) AS id,
-        a.id AS announcement_id,
-        a.title AS announcement_title,
-        d.id AS document_id,
-        d.original_filename AS document_name,
-        'embedding' AS error_type,
-        e.error_code,
-        'embedding' AS stage,
-        COALESCE(e.error_message, '임베딩 처리에 실패했습니다.') AS message,
-        'open' AS status,
-        NULL::text AS resolution,
-        e.created_at AS created_at,
-        NULL::timestamptz AS resolved_at
-    FROM embeddings e
-    JOIN chunks c ON c.id = e.chunk_id
-    JOIN documents d ON d.id = c.document_id
-    JOIN announcements a ON a.id = c.announcement_id
-    WHERE e.status = 'failed'
+        el.error_type,
+        el.error_code,
+        el.stage,
+        el.message,
+        el.status,
+        el.resolution,
+        el.created_at,
+        el.resolved_at
+    FROM error_logs el
+    LEFT JOIN announcements a ON a.id = el.announcement_id
+    LEFT JOIN documents d ON d.id = el.document_id
     """
 
 
@@ -667,30 +625,36 @@ def list_admin_errors(
 
     if search:
         conditions.append(
-            "(announcement_title ILIKE :search OR message ILIKE :search)"
+            "("
+            "COALESCE(a.title, '') ILIKE :search "
+            "OR COALESCE(d.original_filename, '') ILIKE :search "
+            "OR el.message ILIKE :search"
+            ")"
         )
         params["search"] = f"%{search}%"
     if error_type:
-        conditions.append("error_type = :error_type")
+        conditions.append("el.error_type = :error_type")
         params["error_type"] = error_type
     if error_status:
-        conditions.append("status = :error_status")
+        conditions.append("el.status = :error_status")
         params["error_status"] = error_status
     if occurred_from:
-        conditions.append("created_at::date >= :occurred_from")
+        conditions.append("el.created_at::date >= :occurred_from")
         params["occurred_from"] = occurred_from
     if occurred_to:
-        conditions.append("created_at::date <= :occurred_to")
+        conditions.append("el.created_at::date <= :occurred_to")
         params["occurred_to"] = occurred_to
 
     where = " AND ".join(conditions)
-    union = _error_union_sql()
+    base_sql = _error_base_sql()
 
     total = db.execute(
         text(
             f"""
             SELECT COUNT(*)
-            FROM ({union}) errors
+            FROM error_logs el
+            LEFT JOIN announcements a ON a.id = el.announcement_id
+            LEFT JOIN documents d ON d.id = el.document_id
             WHERE {where}
             """
         ),
@@ -700,10 +664,9 @@ def list_admin_errors(
     rows = db.execute(
         text(
             f"""
-            SELECT *
-            FROM ({union}) errors
+            {base_sql}
             WHERE {where}
-            ORDER BY created_at DESC, id DESC
+            ORDER BY el.created_at DESC, el.id DESC
             OFFSET :offset
             LIMIT :limit
             """
@@ -722,14 +685,13 @@ def list_admin_errors(
 
 def get_admin_error(
     db: Session,
-    error_id: str,
+    error_id: int,
 ) -> AdminErrorDetail | None:
     row = db.execute(
         text(
             f"""
-            SELECT *
-            FROM ({_error_union_sql()}) errors
-            WHERE id = :error_id
+            {_error_base_sql()}
+            WHERE el.id = :error_id
             """
         ),
         {"error_id": error_id},
@@ -740,19 +702,24 @@ def get_admin_error(
 
 def update_error_status(
     db: Session,
-    error_id: str,
+    error_id: int,
     status_value: str,
     resolution: str | None,
-) -> AdminErrorDetail:
-    """
-    현재 DB에는 errors 테이블 및 status/resolution/resolved_at 저장 컬럼이 없다.
+) -> AdminErrorDetail | None:
+    error_log = db.get(ErrorLog, error_id)
 
-    데이터를 임의로 다른 테이블에 끼워 넣지 않고 501로 명확히 알린다.
-    DB 담당자가 오류 상태 저장 구조를 추가하면 이 함수만 UPDATE 로직으로
-    교체하면 된다.
-    """
-    raise ErrorStatusPersistenceUnavailable(
-        "현재 DB 스키마에는 오류 status/resolution/resolved_at을 "
-        "영구 저장할 컬럼 또는 errors 테이블이 없습니다. "
-        "DB 모델 추가 후 PATCH API의 저장 로직을 연결해야 합니다."
+    if error_log is None:
+        return None
+
+    error_log.status = status_value
+    error_log.resolution = resolution
+    error_log.resolved_at = (
+        datetime.now(timezone.utc)
+        if status_value == "resolved"
+        else None
     )
+
+    db.commit()
+    db.refresh(error_log)
+
+    return get_admin_error(db, error_id)

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   CalendarDays,
   House,
@@ -14,7 +14,30 @@ import { UserLayout } from "../layout/UserLayout";
 import { StatusPill } from "../common/StatusPill";
 import { Icon } from "../common/Icons";
 import { API_BASE_URL } from "../../config";
+import { GlossaryTooltip } from "../common/GlossaryTooltip";
+// 💡 파라미터로 받은 glossaryData를 활용하여 매칭
+function renderTextWithGlossary(text: string, glossaryData: Record<string, string>) {
+  // 1. 단어 목록을 가져와서 글자 길이가 '긴' 순서대로 내림차순 정렬 (포함 단어 버그 방지)
+  const terms = Object.keys(glossaryData).sort((a, b) => b.length - a.length);
+  if (terms.length === 0) return text;
 
+  // 2. 혹시 단어에 괄호나 특수문자가 있을 경우 정규식이 깨지는 것을 방지 (안전 장치)
+  const escapedTerms = terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
+  const regex = new RegExp(`(${escapedTerms.join("|")})`, "g");
+  const parts = text.split(regex);
+
+  return parts.map((part, index) => {
+    if (glossaryData[part]) {
+      return (
+        <GlossaryTooltip key={index} term={part} definition={glossaryData[part]}>
+          {part}
+        </GlossaryTooltip>
+      );
+    }
+    return <span key={index}>{part}</span>;
+  });
+}
 
 /* =========================
    공통 유틸
@@ -122,6 +145,26 @@ function toDisplayText(
 }
 
 
+function compactCardValue(
+  value: unknown,
+  fallback: string,
+  maxLength = 220
+): string {
+  const text = toDisplayText(
+    value,
+    fallback
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength).trim()}…`;
+}
+
+
 /* =========================
    근거 모달
 ========================= */
@@ -204,7 +247,7 @@ function SummaryCard({
             {key}
           </b>
 
-          <span className="text-slate-900 font-medium text-[15px] lg:text-[17px] break-keep">
+          <span className="text-slate-900 font-medium text-[14px] lg:text-[15px] break-words whitespace-pre-line">
             {value}
           </span>
         </div>
@@ -253,8 +296,37 @@ export function DetailScreen({
   const [currentNotice, setCurrentNotice] = useState<any>(notice || null);
 
   // 💡 제출서류 근거 확인 토글을 위한 상태
-  const [showDocsEvidence, setShowDocsEvidence] = useState(false);
+const [showDocsEvidence, setShowDocsEvidence] = useState(false);
+const chatContainerRef = useRef<HTMLDivElement>(null);
+const [glossary, setGlossary] = useState<Record<string, string>>({});
 
+  useEffect(() => {
+    // 마운트 시 API를 한 번 호출하여 용어 사전을 메모리에 올려둡니다.
+    fetch(`${API_BASE_URL}/glossary`)
+      .then(res => res.json())
+      .then((data) => {
+        const glossaryMap: Record<string, string> = {};
+        if (Array.isArray(data)) {
+          data.forEach((item: any) => {
+            if (item.is_active !== false) { 
+              glossaryMap[item.term] = item.definition;
+            }
+          });
+        }
+        setGlossary(glossaryMap);
+      })
+      .catch(err => console.error("용어 사전 API 연동 실패:", err));
+  }, []);
+
+  useEffect(() => {
+    // 🟢 2. 창 전체가 아닌 '채팅창 내부'만 맨 아래로 내리도록 스크롤 로직 변경
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [messages]);
   /* =========================
      목록에서 전달받은 공고
   ========================= */
@@ -392,6 +464,7 @@ export function DetailScreen({
   const eligibility = keyInformation.eligibility ?? {};
   const incomeAssetCriteria = keyInformation.incomeAssetCriteria ?? keyInformation.income_asset_criteria ?? {};
   const requiredDocuments = keyInformation.requiredDocuments ?? keyInformation.required_documents ?? {};
+  const winnerAnnouncement = keyInformation.winnerAnnouncement ?? keyInformation.winner_announcement ?? {};
 
   // 데이터 보정 (크롤러의 새 데이터 적용)
   const displayAnnouncementDate = toDisplayText(
@@ -411,54 +484,116 @@ export function DetailScreen({
   /* =========================
      신청 일정
   ========================= */
+  const applicationPeriodDisplay =
+    applicationPeriod.start && applicationPeriod.end
+      ? `${applicationPeriod.start} ~ ${applicationPeriod.end}`
+      : compactCardValue(
+          applicationPeriod.summary,
+          "공고문 참조",
+          120
+        );
+
   const scheduleData: [string, string][] = [
-    ["게시일", displayAnnouncementDate],
-    ["마감일", toDisplayText(currentNotice.deadline_date, "-")],
-    ["운영 시간", toDisplayText(applicationPeriod.operating_hours, "공고문 참조")],
-    ["종료 조건", toDisplayText(applicationPeriod.end_condition, "공고문 참조")],
+    [
+      "게시일",
+      displayAnnouncementDate,
+    ],
+    [
+      "신청 기간",
+      applicationPeriodDisplay,
+    ],
+    [
+      "마감일",
+      compactCardValue(
+        currentNotice.deadlineDate ??
+          currentNotice.deadline_date ??
+          applicationPeriod.end,
+        "-",
+        80
+      ),
+    ],
+    [
+      "발표일",
+      compactCardValue(
+        winnerAnnouncement.announcement_date,
+        "공고문 참조",
+        80
+      ),
+    ],
   ];
 
-
-  /* =========================
-     공급 정보
-  ========================= */
-  const currentSupplyUnits = supplyInformation.current_supply_units;
-  const contractDeposit = supplyInformation.contract_deposit;
-  const priceUnit = supplyInformation.price_unit ?? "";
 
   const supplyData: [string, string][] = [
-    ["공급 위치", toDisplayText(supplyInformation.block ?? currentNotice.region, "공고문 참조")],
-    ["공고 유형", toDisplayText(currentNotice.notice_type || supplyInformation.housing_category, "공고문 참조")],
-    ["공급 세대", typeof currentSupplyUnits === "number" ? `${currentSupplyUnits.toLocaleString()}세대` : toDisplayText(currentSupplyUnits, "공고문 참조")],
-    ["입주 예정", toDisplayText(supplyInformation.move_in_expected, "공고문 참조")],
-    ["계약금", typeof contractDeposit === "number" ? `${contractDeposit.toLocaleString()}${priceUnit}` : toDisplayText(contractDeposit, "공고문 참조")],
+    [
+      "공급 위치",
+      compactCardValue(
+        currentNotice.region ??
+          supplyInformation.block,
+        "공고문 참조",
+        100
+      ),
+    ],
+    [
+      "공급 내용",
+      compactCardValue(
+        supplyInformation.summary,
+        "공고문 공급 정보를 확인하세요.",
+        230
+      ),
+    ],
   ];
 
 
-  /* =========================
-     신청 자격
-  ========================= */
   const eligibilityData: [string, string][] = [
-    ["신청 자격", toDisplayText(eligibility.summary, "공고문 세부 요건 참조")],
-    ["소득/자산", toDisplayText(incomeAssetCriteria.summary, "공고문 세부 요건 참조")],
+    [
+      "신청 자격",
+      compactCardValue(
+        eligibility.summary,
+        "공고문 세부 자격 요건을 확인하세요.",
+        230
+      ),
+    ],
+    [
+      "소득/자산",
+      compactCardValue(
+        incomeAssetCriteria.summary,
+        "공고문 소득·자산 기준을 확인하세요.",
+        230
+      ),
+    ],
   ];
 
 
-  /* =========================
-     제출 서류 (수정된 부분)
-  ========================= */
-  const personalContractExamples = Array.isArray(requiredDocuments.personal_contract_examples)
-    ? requiredDocuments.personal_contract_examples.map((item: unknown) => toDisplayText(item, "")).filter(Boolean)
+  const extractedDocumentItems = Array.isArray(
+    requiredDocuments.items
+  )
+    ? requiredDocuments.items
+        .map((item: unknown) =>
+          compactCardValue(
+            item,
+            "",
+            100
+          )
+        )
+        .filter(Boolean)
     : [];
 
-  const proxyContractNote = requiredDocuments.proxy_contract?.note;
+  const docsData: string[] =
+    extractedDocumentItems.length > 0
+      ? extractedDocumentItems
+      : [
+          compactCardValue(
+            requiredDocuments.summary,
+            "공고문 세부 제출서류를 확인하세요.",
+            180
+          ),
+        ];
 
-  const docsData: string[] = personalContractExamples.length > 0
-    ? [...personalContractExamples, ...(proxyContractNote ? [`대리계약: ${toDisplayText(proxyContractNote, "")}`] : [])]
-    : [toDisplayText(requiredDocuments.summary, "제출 서류 정보가 없습니다. 상세 공고문을 확인하세요.")];
-
-  // 💡 원본 근거 텍스트 (백엔드 구조에 맞춰 수정 가능. 현재는 fallback 제공)
-  const docsEvidenceText = requiredDocuments.evidence_text || "원본 HWP 발췌: 본 공고문에 안내된 필수 제출 서류는 공고일 이후 발급된 서류에 한하며, 자세한 내용은 원본 문서를 참조하시기 바랍니다.";
+  // Raw extracted text is shown only as evidence.
+  const docsEvidenceText =
+    requiredDocuments.evidence_text ??
+    requiredDocuments.text ??
+    "추출된 근거 정보가 없습니다."
 
 
   /* =========================
@@ -499,12 +634,12 @@ export function DetailScreen({
       {/* =====================
           메인 영역
       ====================== */}
-      <div className="grid grid-cols-1 xl:grid-cols-[340px_1fr] items-start gap-4 lg:gap-5">
+      <div className="grid grid-cols-1 xl:grid-cols-[380px_minmax(0,1fr)] items-start gap-4 lg:gap-5">
 
         {/* =====================
             핵심정보
         ====================== */}
-        <div className="bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm">
+        <div className="min-w-0 bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm">
           <div className="flex items-center justify-between cursor-pointer xl:cursor-default" onClick={() => setIsSummaryOpen(!isSummaryOpen)}>
             <h2 className="text-[17px] lg:text-[19px] font-bold text-slate-900">핵심 정보 요약</h2>
             <button className="xl:hidden text-slate-500 hover:text-slate-800 p-1">{isSummaryOpen ? <ChevronUp size={22} /> : <ChevronDown size={22} />}</button>
@@ -535,7 +670,7 @@ export function DetailScreen({
 
               {/* 버튼 클릭 시 노출되는 AI 원본 텍스트 */}
               {showDocsEvidence && (
-                <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg text-[13px] text-slate-700 leading-relaxed break-keep mt-4">
+                <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg text-[13px] text-slate-700 leading-relaxed whitespace-pre-wrap break-words mt-4 max-h-72 overflow-auto">
                   <b className="text-amber-700 block mb-1">🔍 AI 문서 추출 원본</b>
                   {toDisplayText(docsEvidenceText, "")}
                 </div>
@@ -549,11 +684,11 @@ export function DetailScreen({
         {/* =====================
             AI 채팅
         ====================== */}
-        <div className="bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm flex flex-col h-[600px] lg:h-[700px]">
+        <div className="min-w-0 bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm flex flex-col h-[600px] lg:h-[700px]">
           <h2 className="text-[17px] lg:text-[19px] font-bold text-slate-900 mb-1">AI에게 무엇이든 물어보세요</h2>
           <p className="text-[13px] lg:text-[14px] text-slate-500 mb-4">공고에 대해 궁금한 내용을 질문하면 AI가 답변해 드립니다.</p>
 
-          <div className="flex-1 overflow-auto px-2 py-4 bg-slate-50/50 rounded-lg border border-slate-100">
+          <div ref={chatContainerRef} className="flex-1 overflow-auto px-2 py-4 bg-slate-50/50 rounded-lg border border-slate-100">
             {messages.length === 0 && <div className="text-center text-slate-400 py-10 text-sm">질문을 입력하면 이곳에 AI 답변이 표시됩니다.</div>}
 
             {messages.map((message, index) => message.role === "user" ? (
@@ -566,7 +701,7 @@ export function DetailScreen({
                 <div className="w-8 h-8 rounded-full border-2 border-blue-500 text-blue-600 flex items-center justify-center text-[12px] font-black flex-shrink-0 bg-white shadow-sm">AI</div>
                 <div className="flex flex-col items-start max-w-[80%] lg:max-w-[70%]">
                   <div className="bg-white border border-slate-200 text-slate-800 text-[14px] lg:text-[15px] leading-relaxed px-4 py-3 rounded-2xl rounded-tl-sm shadow-sm whitespace-pre-wrap break-keep">
-                    {message.text}
+                    {renderTextWithGlossary(message.text, glossary)}
                     {message.evidence && message.evidence.length > 0 && (
                       <button onClick={() => setEvidence(message.evidence ?? [])} className="block mt-3 bg-blue-50 text-blue-600 text-[13px] font-bold px-3 py-1.5 rounded-md hover:bg-blue-100 transition-colors">근거 문단 보기</button>
                     )}
@@ -575,6 +710,7 @@ export function DetailScreen({
                 </div>
               </div>
             ))}
+          
           </div>
 
           <div className="mt-4">

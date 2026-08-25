@@ -35,13 +35,30 @@ except ImportError:
 HWPX_READER_CLASS = "kr.dogfoot.hwpxlib.reader.HWPXReader"
 HWPX_TEXT_CLASS_SUFFIX = ".paragraph.T"
 HWPX_TABLE_CLASS_SUFFIX = ".Table"
+HWPX_COMPOSE_CLASS_SUFFIX = ".paragraph.Compose"
 
 
-# 한컴 전용 글꼴(PUA)에서 확인된 네모 안 숫자 매핑입니다.
-# 업로드된 청주지북 HWPX에서 U+F02D6은 네모 안 숫자 12로 표시됩니다.
-HANGUL_PUA_NUMBER_MAP: dict[str, str] = {
-    "\U000F02D6": "12",
-}
+# Parser에서는 PUA/Compose의 의미를 해석하지 않습니다.
+# 원본 글리프와 codepoint만 보존하며 숫자 변환은 Normalizer에서 수행합니다.
+HANGUL_PUA_NUMBER_MAP: dict[str, str] = {}
+HANGUL_COMPOSE_NUMBER_MAP: dict[str, str] = {}
+
+
+
+# 필요할 때만 켜는 진단 옵션입니다. 실제 복원 로직과는 독립적입니다.
+DEBUG_SPECIAL_CHARACTERS = False
+
+
+def _is_private_use_char(char: str) -> bool:
+    if not char:
+        return False
+
+    codepoint = ord(char)
+    return (
+        0xE000 <= codepoint <= 0xF8FF
+        or 0xF0000 <= codepoint <= 0xFFFFD
+        or 0x100000 <= codepoint <= 0x10FFFD
+    )
 
 
 def _normalize_group_label(value: str) -> str:
@@ -49,7 +66,7 @@ def _normalize_group_label(value: str) -> str:
 
 
 def _replace_pua_numbers(text: str) -> tuple[str, list[dict[str, str]]]:
-    """한컴 PUA 숫자를 일반 숫자로 치환하고 치환 기록을 반환합니다."""
+    """PUA를 변환하지 않고 원문 및 codepoint 기록만 반환합니다."""
     value = str(text or "")
     replacements: list[dict[str, str]] = []
 
@@ -128,6 +145,46 @@ def recover_table_item_numbers(
     if not cells:
         return
 
+    # 0단계: 셀 문단에서 검증된 Compose 복원값을 anchor 메타데이터로 승격합니다.
+    for cell in cells:
+        paragraphs = cell.get("paragraphs", [])
+        if not isinstance(paragraphs, list):
+            continue
+
+        verified_compose = []
+        for paragraph in paragraphs:
+            if not isinstance(paragraph, dict):
+                continue
+            recoveries = paragraph.get("compose_recoveries", [])
+            if not isinstance(recoveries, list):
+                continue
+            verified_compose.extend(
+                recovery
+                for recovery in recoveries
+                if isinstance(recovery, dict)
+                and recovery.get("recovered") is True
+                and recovery.get("method") == "compose_map"
+                and recovery.get("mapped_value")
+                and float(recovery.get("confidence", 0.0)) >= 1.0
+            )
+
+        if not verified_compose:
+            continue
+
+        current_text = str(cell.get("text", ""))
+        prefix_match = re.match(r"^\s*(\d+)(?:\s|[-]|$)", current_text)
+        if not prefix_match:
+            continue
+
+        cell.setdefault("raw_text", current_text)
+        cell["number_recovery"] = {
+            "recovered": True,
+            "method": "compose_map",
+            "prefix": prefix_match.group(1),
+            "confidence": 1.0,
+            "items": verified_compose,
+        }
+
     # 1단계: 알려진 PUA 문자만 직접 치환합니다.
     for cell in cells:
         raw_text = str(cell.get("text", ""))
@@ -194,7 +251,7 @@ def recover_table_item_numbers(
                 continue
             if (
                 recovery.get("recovered") is True
-                and recovery.get("method") == "pua_map"
+                and recovery.get("method") in {"pua_map", "compose_map"}
                 and recovery.get("prefix")
                 and float(recovery.get("confidence", 0.0)) >= 1.0
             ):
@@ -435,6 +492,187 @@ def _extract_unknown_java_text(item: Any, *, depth: int = 0) -> str:
     return "" if _looks_like_java_object_repr(value) else value
 
 
+def _compose_codepoints(value: str) -> list[str]:
+    return [
+        f"U+{ord(char):05X}"
+        for char in str(value or "")
+        if _is_private_use_char(char)
+    ]
+
+
+def extract_text_from_compose(
+    compose_item: Any,
+    *,
+    context: ParseContext | None = None,
+    source: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any] | None]:
+    """Compose RunItem의 원문 문자열을 손실 없이 보존합니다.
+
+    Parser의 역할은 HWPX 내부 표현을 읽는 데까지로 제한합니다.
+    PUA/Compose 글리프가 어떤 숫자를 의미하는지는 여기서 해석하지 않고,
+    codepoint와 원문 문자열만 metadata에 기록합니다.
+    실제 숫자 변환은 Normalizer 단계에서 수행합니다.
+    """
+    if compose_item is None:
+        return "", None
+
+    raw_value = _extract_unknown_java_text(compose_item)
+    if not raw_value:
+        return "", None
+
+    codepoints = _compose_codepoints(raw_value)
+
+    recovery: dict[str, Any] = {
+        "raw_value": raw_value,
+        "codepoints": codepoints,
+        "mapped_value": "",
+        "recovered": False,
+        "method": "compose_preserved",
+        "confidence": 1.0,
+    }
+
+    if codepoints and context is not None:
+        context.warn(
+            "HWPX_COMPOSE_PRESERVED",
+            "Compose 글리프를 원문 그대로 보존했습니다. 의미 변환은 Normalizer에서 수행합니다.",
+            source={
+                **(source or {}),
+                "raw_value": raw_value,
+                "codepoints": codepoints,
+            },
+        )
+
+    return raw_value, recovery
+
+
+def _debug_hwpx_text_item(
+    text_item: Any,
+    *,
+    source: dict[str, Any] | None = None,
+) -> None:
+    """HWPX T 객체 내부의 PUA 및 비표준 텍스트 객체를 진단합니다."""
+    if not DEBUG_SPECIAL_CHARACTERS or text_item is None:
+        return
+
+    diagnostics: list[dict[str, Any]] = []
+
+    try:
+        item_count = int(text_item.countOfItems())
+    except Exception:
+        return
+
+    for item_index in range(item_count):
+        try:
+            item = text_item.getItem(item_index)
+        except Exception:
+            continue
+
+        class_name = java_class_name(item)
+        value = ""
+
+        if class_name.endswith(".NormalText"):
+            try:
+                raw = item.text()
+                value = "" if raw is None else str(raw)
+            except Exception:
+                value = ""
+        else:
+            value = _extract_unknown_java_text(item)
+
+        pua_values = [
+            {
+                "position": index,
+                "character": repr(char),
+                "codepoint": f"U+{ord(char):05X}",
+            }
+            for index, char in enumerate(value)
+            if _is_private_use_char(char)
+        ]
+
+        is_special_object = not any(
+            class_name.endswith(suffix)
+            for suffix in (".NormalText", ".FWSpace", ".LineBreak", ".Tab")
+        )
+
+        if pua_values or is_special_object:
+            diagnostics.append(
+                {
+                    "item_index": item_index,
+                    "class_name": class_name,
+                    "value": value,
+                    "pua": pua_values,
+                }
+            )
+
+    if not diagnostics:
+        return
+
+    print()
+    print("=" * 80)
+    print("[HWPX T 객체 진단]")
+    print("source:", source or {})
+
+    for item in diagnostics:
+        print(
+            f"item_index={item['item_index']}",
+            f"class={item['class_name']}",
+        )
+        print("value:", repr(item["value"]))
+        for pua in item["pua"]:
+            print(
+                "  PUA:",
+                f"position={pua['position']}",
+                f"character={pua['character']}",
+                f"codepoint={pua['codepoint']}",
+            )
+
+    print("=" * 80)
+
+
+def _debug_hwpx_run_item(
+    item: Any,
+    *,
+    source: dict[str, Any],
+) -> None:
+    """T/표가 아닌 HWPX RunItem의 저장 형태를 콘솔에 출력합니다."""
+    if not DEBUG_SPECIAL_CHARACTERS or item is None:
+        return
+
+    class_name = java_class_name(item)
+
+    if (
+        class_name.endswith(HWPX_TEXT_CLASS_SUFFIX)
+        or class_name.endswith(HWPX_TABLE_CLASS_SUFFIX)
+    ):
+        return
+
+    lowered = class_name.lower()
+    extracted = _extract_unknown_java_text(item)
+
+    interesting_class = any(
+        token in lowered
+        for token in (
+            "overlap",
+            "overlapping",
+            "compose",
+            "character",
+            "char",
+            "text",
+        )
+    )
+
+    if not interesting_class and not extracted:
+        return
+
+    print()
+    print("=" * 80)
+    print("[HWPX RunItem 진단]")
+    print("source:", source)
+    print("class:", class_name)
+    print("extracted:", repr(extracted))
+    print("=" * 80)
+
+
 def _repair_text_with_xml(library_text: str, xml_text: str) -> tuple[str, bool]:
     """라이브러리 결과에서 빠진 문자만 XML 원문으로 보완합니다."""
     library_text = library_text or ""
@@ -468,6 +706,11 @@ def extract_text_from_t(
 ) -> str:
     if text_item is None:
         return ""
+
+    _debug_hwpx_text_item(
+        text_item,
+        source=source,
+    )
 
     try:
         if text_item.isOnlyText():
@@ -555,6 +798,7 @@ def extract_cell_paragraphs(
             continue
 
         paragraph_parts: list[str] = []
+        compose_recoveries: list[dict[str, Any]] = []
 
         for run_index in range(run_count):
             try:
@@ -569,33 +813,59 @@ def extract_cell_paragraphs(
                 except Exception:
                     continue
 
-                if not java_class_name(item).endswith(HWPX_TEXT_CLASS_SUFFIX):
+                item_source = {
+                    **source,
+                    "cell_paragraph_index": paragraph_index,
+                    "run_index": run_index,
+                    "item_index": item_index,
+                    "location": "table_cell",
+                }
+                class_name = java_class_name(item)
+
+                _debug_hwpx_run_item(
+                    item,
+                    source=item_source,
+                )
+
+                if class_name.endswith(HWPX_TEXT_CLASS_SUFFIX):
+                    text_value = extract_text_from_t(
+                        item,
+                        context=context,
+                        source=item_source,
+                    )
+                    if text_value:
+                        paragraph_parts.append(text_value)
                     continue
 
-                text = extract_text_from_t(
-                    item,
-                    context=context,
-                    source={
-                        **source,
-                        "cell_paragraph_index": paragraph_index,
-                        "run_index": run_index,
-                        "item_index": item_index,
-                    },
-                )
-                if text:
-                    paragraph_parts.append(text)
+                if class_name.endswith(HWPX_COMPOSE_CLASS_SUFFIX):
+                    compose_text, recovery = extract_text_from_compose(
+                        item,
+                        context=context,
+                        source=item_source,
+                    )
+                    if compose_text:
+                        paragraph_parts.append(compose_text)
+                    if recovery is not None:
+                        compose_recoveries.append({
+                            **recovery,
+                            "run_index": run_index,
+                            "item_index": item_index,
+                        })
+                    continue
+
+                # 표는 별도의 nested table 탐색 단계에서 처리합니다.
 
         paragraph_text = "".join(paragraph_parts)
         if paragraph_text.strip():
-            paragraphs_data.append(
-                {
-                    "paragraph_index": paragraph_index,
-                    "text": paragraph_text,
-                }
-            )
+            paragraph_data: dict[str, Any] = {
+                "paragraph_index": paragraph_index,
+                "text": paragraph_text,
+            }
+            if compose_recoveries:
+                paragraph_data["compose_recoveries"] = compose_recoveries
+            paragraphs_data.append(paragraph_data)
 
     return paragraphs_data
-
 
 def find_nested_tables_in_hwpx_cell(
     cell: Any,
@@ -882,6 +1152,7 @@ def parse_hwpx(
     hwpx_jar_path: str | Path | None,
     hwpx_file_path: str | Path,
     *,
+    original_filename: str | None = None,
     max_nested_depth: int = 10,
     strict: bool = False,
 ) -> dict[str, Any]:
@@ -910,6 +1181,9 @@ def parse_hwpx(
         engine="hwpxlib",
         jar_path=jar_path,
     )
+
+    if original_filename:
+        document["document"]["filename"] = original_filename
 
     try:
         sections = hwpx_file.sectionXMLFileList()
@@ -979,21 +1253,47 @@ def parse_hwpx(
                         "item_index": item_index,
                     }
 
+                    _debug_hwpx_run_item(
+                        item,
+                        source={
+                            "section_index": section_index,
+                            "paragraph_index": paragraph_index,
+                            **position,
+                            "location": "top_level",
+                        },
+                    )
+
+                    item_source = {
+                        "section_index": section_index,
+                        "paragraph_index": paragraph_index,
+                        **position,
+                        "location": "top_level",
+                    }
+
                     if class_name.endswith(HWPX_TEXT_CLASS_SUFFIX):
                         text = extract_text_from_t(
                             item,
                             context=context,
-                            source={
-                                "section_index": section_index,
-                                "paragraph_index": paragraph_index,
-                                **position,
-                            },
+                            source=item_source,
                         )
                         if text:
                             if segment_start is None:
                                 segment_start = position
                             segment_end = position
                             text_parts.append(text)
+                        continue
+
+                    if class_name.endswith(HWPX_COMPOSE_CLASS_SUFFIX):
+                        compose_text, _ = extract_text_from_compose(
+                            item,
+                            context=context,
+                            source=item_source,
+                        )
+                        if compose_text:
+                            if segment_start is None:
+                                segment_start = position
+                            segment_end = position
+                            text_parts.append(compose_text)
                         continue
 
                     if not class_name.endswith(HWPX_TABLE_CLASS_SUFFIX):
@@ -1105,6 +1405,11 @@ def main() -> None:
         help="생략 시 환경변수 또는 libs/hwpx의 단일 JAR를 자동 탐색합니다.",
     )
     parser.add_argument("--file_path", required=True)
+    parser.add_argument(
+        "--original-filename",
+        default=None,
+        help="JSON에 기록할 실제 원본 파일명",
+    )
     parser.add_argument("--output_path", required=True)
     parser.add_argument("--max_nested_depth", type=int, default=10)
     parser.add_argument("--strict", action="store_true")
@@ -1113,6 +1418,7 @@ def main() -> None:
     result = parse_hwpx(
         hwpx_jar_path=args.hwpx_jar_path,
         hwpx_file_path=args.file_path,
+        original_filename=args.original_filename,
         max_nested_depth=args.max_nested_depth,
         strict=args.strict,
     )

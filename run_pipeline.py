@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import subprocess
 import sys
+import zipfile
 from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from config.paths import (
     OUTPUT_ROOT,
@@ -41,6 +46,9 @@ HWPX_JAR_PATH = PARSER_DIR / "libs" / "hwpx" / "hwpxlib-1.0.8.jar"
 
 DocumentGroups = dict[str, dict[str, list[Path]]]
 
+OLE2_SIGNATURE = bytes.fromhex("D0 CF 11 E0 A1 B1 1A E1")
+PARSER_ALIAS_DIR = OUTPUT_DIR / "_parser_aliases"
+
 
 def ensure_directories() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -55,25 +63,116 @@ def get_document_id(file_path: Path) -> str:
     return file_path.stem
 
 
-def find_test_documents() -> dict[str, list[Path]]:
-    if not TEST_DOCUMENT_DIR.exists():
-        return {"hwp": [], "hwpx": []}
+def _looks_like_hwpx_zip(file_path: Path) -> bool:
+    if not zipfile.is_zipfile(file_path):
+        return False
 
-    hwp_files = sorted(
+    try:
+        with zipfile.ZipFile(file_path, "r") as archive:
+            names = {
+                name.replace("\\", "/").lower()
+                for name in archive.namelist()
+            }
+
+            if "contents/content.hpf" in names:
+                return True
+
+            if any(
+                name.startswith("contents/section")
+                and name.endswith(".xml")
+                for name in names
+            ):
+                return True
+
+            if "mimetype" in names:
+                try:
+                    mimetype = (
+                        archive.read("mimetype")
+                        .decode("utf-8", errors="ignore")
+                        .strip()
+                        .lower()
+                    )
+                    if "hwp" in mimetype:
+                        return True
+                except KeyError:
+                    pass
+
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+    return False
+
+
+def detect_actual_document_format(file_path: Path) -> str:
+    try:
+        with file_path.open("rb") as file:
+            header = file.read(8)
+    except OSError:
+        return "unknown"
+
+    if header.startswith(OLE2_SIGNATURE):
+        return "hwp"
+
+    if _looks_like_hwpx_zip(file_path):
+        return "hwpx"
+
+    return "unknown"
+
+
+def _candidate_document_files() -> list[Path]:
+    if not TEST_DOCUMENT_DIR.exists():
+        return []
+
+    return sorted(
         path
         for path in TEST_DOCUMENT_DIR.rglob("*")
-        if path.is_file() and path.suffix.lower() == ".hwp"
+        if path.is_file()
+        and path.suffix.lower() in {".hwp", ".hwpx"}
     )
-    hwpx_files = sorted(
-        path
-        for path in TEST_DOCUMENT_DIR.rglob("*")
-        if path.is_file() and path.suffix.lower() == ".hwpx"
-    )
+
+
+def find_test_documents() -> dict[str, list[Path]]:
+    documents: dict[str, list[Path]] = {
+        "hwp": [],
+        "hwpx": [],
+    }
+
+    for path in _candidate_document_files():
+        actual_format = detect_actual_document_format(path)
+
+        if actual_format in documents:
+            documents[actual_format].append(path)
 
     return {
-        "hwp": hwp_files,
-        "hwpx": hwpx_files,
+        "hwp": sorted(documents["hwp"]),
+        "hwpx": sorted(documents["hwpx"]),
     }
+
+
+def find_format_mismatches() -> list[tuple[Path, str, str]]:
+    mismatches: list[tuple[Path, str, str]] = []
+
+    for path in _candidate_document_files():
+        extension_format = path.suffix.lower().lstrip(".")
+        actual_format = detect_actual_document_format(path)
+
+        if (
+            actual_format in {"hwp", "hwpx"}
+            and extension_format != actual_format
+        ):
+            mismatches.append(
+                (path, extension_format, actual_format)
+            )
+
+    return mismatches
+
+
+def find_unknown_format_documents() -> list[Path]:
+    return [
+        path
+        for path in _candidate_document_files()
+        if detect_actual_document_format(path) == "unknown"
+    ]
 
 
 def group_test_documents() -> DocumentGroups:
@@ -128,11 +227,30 @@ def print_document_summary() -> None:
     print("=" * 70)
     print("테스트 문서 자동 탐색 결과")
     print("=" * 70)
-    print(f"HWP 파일  : {len(documents['hwp'])}개")
-    print(f"HWPX 파일 : {len(documents['hwpx'])}개")
+    print(f"실제 HWP 형식  : {len(documents['hwp'])}개")
+    print(f"실제 HWPX 형식 : {len(documents['hwpx'])}개")
     print(f"문서 그룹 : {len(groups)}개")
     print(f"분석 가능 그룹 : {processable_count}개")
     print(f"HWP/HWPX 비교 가능 그룹 : {comparable_count}개")
+
+    mismatches = find_format_mismatches()
+    unknown_files = find_unknown_format_documents()
+
+    if mismatches:
+        print()
+        print("[확장자/실제 형식 불일치]")
+        for path, extension_format, actual_format in mismatches:
+            print(
+                f"- {path.name}: "
+                f".{extension_format} → 실제 {actual_format.upper()}"
+            )
+
+    if unknown_files:
+        print()
+        print("[지원 형식 판별 실패]")
+        for path in unknown_files:
+            print(f"- {path}")
+
     print()
 
     if not groups:
@@ -162,8 +280,6 @@ def validate_project_files() -> bool:
     documents = find_test_documents()
     groups = group_test_documents()
 
-    # Parser → Normalizer → Structure까지는 현재 필수 단계입니다.
-    # Chunking/Embedding은 팀원이 아직 구현 중이어도 앞 단계 실행을 막지 않습니다.
     required_files = [
         NORMALIZER_PATH,
         STRUCTURE_RUNNER_PATH,
@@ -217,11 +333,28 @@ def run_command(command: list[str]) -> bool:
     print(" ".join(str(item) for item in command))
     print("-" * 70)
 
+    # 하위 Python 스크립트를 파일 경로로 직접 실행하면
+    # sys.path[0]이 해당 스크립트 폴더가 되어 프로젝트 루트의
+    # config, backend 등의 패키지를 찾지 못할 수 있습니다.
+    # 모든 subprocess에 프로젝트 루트를 PYTHONPATH로 전달합니다.
+    env = os.environ.copy()
+    existing_pythonpath = env.get("PYTHONPATH", "").strip()
+
+    if existing_pythonpath:
+        env["PYTHONPATH"] = (
+            str(BASE_DIR)
+            + os.pathsep
+            + existing_pythonpath
+        )
+    else:
+        env["PYTHONPATH"] = str(BASE_DIR)
+
     try:
         subprocess.run(
             command,
             cwd=str(BASE_DIR),
             check=True,
+            env=env,
         )
         return True
     except subprocess.CalledProcessError as error:
@@ -244,6 +377,43 @@ def get_output_path(document_id: str, document_format: str) -> Path:
     return paths.parsed / f"{document_format}.json"
 
 
+@contextmanager
+def parser_compatible_input(
+    file_path: Path,
+    expected_format: str,
+    document_id: str,
+) -> Iterator[Path]:
+    expected_suffix = f".{expected_format}"
+
+    if file_path.suffix.lower() == expected_suffix:
+        yield file_path
+        return
+
+    alias_dir = PARSER_ALIAS_DIR / document_id
+    alias_dir.mkdir(parents=True, exist_ok=True)
+
+    alias_path = alias_dir / f"{file_path.stem}{expected_suffix}"
+
+    print()
+    print("[WARNING] 확장자와 실제 문서 형식이 다릅니다.")
+    print(f"원본: {file_path}")
+    print(f"실제 형식: {expected_format.upper()}")
+    print(f"Parser용 임시 파일: {alias_path}")
+
+    try:
+        shutil.copy2(file_path, alias_path)
+        yield alias_path
+    finally:
+        try:
+            alias_path.unlink(missing_ok=True)
+        except OSError as error:
+            print(
+                "[WARNING] Parser 임시 파일 삭제 실패:",
+                alias_path,
+                error,
+            )
+
+
 def parse_hwp_file(file_path: Path, document_id: str) -> bool:
     output_path = get_output_path(document_id, "hwp")
 
@@ -253,18 +423,32 @@ def parse_hwp_file(file_path: Path, document_id: str) -> bool:
     print(f"입력: {file_path}")
     print(f"출력: {output_path}")
 
-    return run_command(
-        [
-            sys.executable,
-            str(HWP_PARSER_PATH),
-            "--hwp_jar_path",
-            str(HWP_JAR_PATH),
-            "--file_path",
-            str(file_path),
-            "--output_path",
-            str(output_path),
-        ]
-    )
+    actual_format = detect_actual_document_format(file_path)
+    if actual_format != "hwp":
+        print()
+        print(
+            "[ERROR] HWP parser 대상 파일의 실제 형식이 HWP가 아닙니다:",
+            actual_format,
+        )
+        return False
+
+    with parser_compatible_input(
+        file_path,
+        "hwp",
+        document_id,
+    ) as parser_input:
+        return run_command(
+            [
+                sys.executable,
+                str(HWP_PARSER_PATH),
+                "--hwp_jar_path",
+                str(HWP_JAR_PATH),
+                "--file_path",
+                str(parser_input),
+                "--output_path",
+                str(output_path),
+            ]
+        )
 
 
 def parse_hwpx_file(file_path: Path, document_id: str) -> bool:
@@ -276,19 +460,32 @@ def parse_hwpx_file(file_path: Path, document_id: str) -> bool:
     print(f"입력: {file_path}")
     print(f"출력: {output_path}")
 
-    return run_command(
-        [
-            sys.executable,
-            str(HWPX_PARSER_PATH),
-            "--hwpx_jar_path",
-            str(HWPX_JAR_PATH),
-            "--file_path",
-            str(file_path),
-            "--output_path",
-            str(output_path),
-        ]
-    )
+    actual_format = detect_actual_document_format(file_path)
+    if actual_format != "hwpx":
+        print()
+        print(
+            "[ERROR] HWPX parser 대상 파일의 실제 형식이 HWPX가 아닙니다:",
+            actual_format,
+        )
+        return False
 
+    with parser_compatible_input(
+        file_path,
+        "hwpx",
+        document_id,
+    ) as parser_input:
+        return run_command(
+            [
+                sys.executable,
+                str(HWPX_PARSER_PATH),
+                "--hwpx_jar_path",
+                str(HWPX_JAR_PATH),
+                "--file_path",
+                str(parser_input),
+                "--output_path",
+                str(output_path),
+            ]
+        )
 
 
 def run_parser_for_format(document_format: str) -> bool:
@@ -329,10 +526,16 @@ def run_parser_for_format(document_format: str) -> bool:
                 document_id,
             )
 
-        if result:
+        if result is True:
             success += 1
         else:
             fail += 1
+            print(
+                f"[ERROR] {document_format.upper()} 파싱 실패:",
+                document_id,
+                file_path,
+                f"(반환값={result!r})",
+            )
 
     print()
     print(
@@ -340,22 +543,53 @@ def run_parser_for_format(document_format: str) -> bool:
         f"- 성공: {success}, 실패: {fail}"
     )
 
-    return fail == 0
+    result = fail == 0
+
+    print(
+        f"[DEBUG] run_parser_for_format({document_format!r}) "
+        f"반환값: {result!r}"
+    )
+
+    return result
 
 
 def run_hwp_parser() -> bool:
-    return run_parser_for_format("hwp")
+    result = run_parser_for_format("hwp")
+    print(f"[DEBUG] run_hwp_parser 반환값: {result!r}")
+    return result
 
 
 def run_hwpx_parser() -> bool:
-    return run_parser_for_format("hwpx")
+    result = run_parser_for_format("hwpx")
+    print(f"[DEBUG] run_hwpx_parser 반환값: {result!r}")
+    return result
 
 
 def run_all_parsers() -> bool:
+    print()
+    print("=" * 70)
+    print("Parser 전체 실행")
+    print("=" * 70)
+
     hwp_ok = run_hwp_parser()
     hwpx_ok = run_hwpx_parser()
 
-    return hwp_ok and hwpx_ok
+    print()
+    print(
+        "[Parser 결과] "
+        f"HWP={hwp_ok!r}, "
+        f"HWPX={hwpx_ok!r}"
+    )
+
+    all_ok = bool(
+        hwp_ok is True
+        and hwpx_ok is True
+    )
+
+    print(f"[Parser 전체 결과] {all_ok!r}")
+
+    return all_ok
+
 
 def run_compare() -> None:
     if not COMPARE_PARSER_PATH.exists():
@@ -456,7 +690,6 @@ def normalize_file(input_path: Path) -> bool:
     )
 
 
-
 def run_all_items(
     *,
     title: str,
@@ -505,6 +738,7 @@ def normalize_all() -> bool:
         ),
     )
 
+
 def find_normalized_json_files() -> list[Path]:
     return find_stage_files(stage_name="normalized", filename="")
 
@@ -540,7 +774,6 @@ def structure_file(input_path: Path) -> bool:
     )
 
 
-
 def structure_all() -> bool:
     return run_all_items(
         title="전체 JSON 구조화",
@@ -552,13 +785,8 @@ def structure_all() -> bool:
         ),
     )
 
-def find_structured_json_files() -> list[Path]:
-    """청킹에 사용할 Structure 최종 결과를 찾습니다.
 
-    우선순위:
-    1. Step 4 값 정규화 결과
-    2. Step 3 구조화 결과(이전 실행 결과 호환용)
-    """
+def find_structured_json_files() -> list[Path]:
     value_normalized = find_stage_files(
         stage_name="structured",
         filename="step4-1_value_normalized.json",
@@ -606,7 +834,6 @@ def chunk_file(input_path: Path) -> bool:
     )
 
 
-
 def chunk_all() -> bool:
     if not CHUNKING_RUNNER_PATH.exists():
         print()
@@ -626,6 +853,7 @@ def chunk_all() -> bool:
         ),
     )
 
+
 def embedding_result_exists(
     document_id: str,
     document_format: str,
@@ -640,17 +868,6 @@ def embedding_result_exists(
 
 
 def find_chunk_json_files() -> list[Path]:
-    """
-    공고별 대표 Chunk JSON 하나만 선택합니다.
-
-    우선순위:
-    1. HWPX
-    2. HWP
-
-    Parser/Normalizer/Structure/Chunk 결과는 형식별로 모두 보존하지만,
-    실제 검색용 임베딩은 공고당 대표 형식 하나만 생성합니다.
-    """
-
     selected_files: list[Path] = []
     groups = group_test_documents()
 
@@ -733,8 +950,6 @@ def embed_all() -> bool:
     return result
 
 
-
-
 def persist_pipeline_outputs() -> bool:
     backend_dir = BASE_DIR / "backend"
 
@@ -811,12 +1026,15 @@ def run_full_pipeline() -> bool:
     print("전체 Document Pipeline 시작")
     print("=" * 70)
 
-    if not run_all_parsers():
+    parser_ok = run_all_parsers()
+
+    print()
+    print(f"[DEBUG] run_full_pipeline parser_ok={parser_ok!r}")
+
+    if parser_ok is not True:
         print("[ERROR] Parser 단계 실패 - Pipeline 중단")
         return False
 
-    # HWP/HWPX 비교는 검증용 보조 단계이므로
-    # 이후 처리의 필수 입력은 아닙니다.
     run_compare()
 
     if not normalize_all():
@@ -845,6 +1063,7 @@ def run_full_pipeline() -> bool:
     print("=" * 70)
 
     return True
+
 
 def print_menu() -> None:
     print()

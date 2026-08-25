@@ -57,7 +57,7 @@ def reprocess_document(document_id: int):
 
 
 def retry_error(
-    error_id: str,
+    error_id: int,
     document_id: int,
     stage: str | None,
 ):

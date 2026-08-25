@@ -39,12 +39,12 @@ export function UserLayout({ screen, go, showToast, children }: { screen: Screen
         
         {/* 사이드바 하단 안내 박스 */}
         <div className="mt-auto border border-slate-200 rounded-xl p-5 bg-slate-50">
-          <b className="text-[15px] text-slate-800">안내</b>
-          <p className="text-sm text-slate-500 mt-3 leading-relaxed">
-            LH 청약플러스의 분양주택 공고를 AI가 쉽게 이해할 수 있도록 도와드립니다.
+          <b className="text-[18px] text-slate-800">안내</b>
+          <p className="text-sm text-slate-700 mt-3 leading-relaxed">
+            LH 청약플러스의 임대주택 공고를 AI가 쉽게 이해할 수 있도록 도와드립니다.
           </p>
-          <button onClick={() => { showToast("새 창을 엽니다."); openLH(); }} className="w-full mt-4 bg-blue-100 text-blue-600 font-bold text-sm py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-blue-200 transition-colors">
-            LH 청약플러스 바로가기 <Icon name="ext" size={16} />
+          <button onClick={() => { showToast("새 창을 엽니다."); openLH(); }} className="w-full mt-3 bg-blue-100 text-blue-700 font-bold text-sm py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-blue-200 transition-colors">
+            LH 청약플러스 바로가기 <Icon name="ext" size={25} />
           </button>
         </div>
       </aside>

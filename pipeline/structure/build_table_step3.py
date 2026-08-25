@@ -1587,7 +1587,7 @@ def analyze_table(
         analysis = {
             **base,
             "status": (
-                "unresolved"
+                "skipped"
             ),
             "reason": reason,
             "layout": None,
@@ -1600,7 +1600,7 @@ def analyze_table(
         mapping = {
             **base,
             "status": (
-                "unresolved"
+                "skipped"
             ),
             "reason": reason,
             "records": [],
@@ -1683,7 +1683,7 @@ def analyze_table(
     mapping_status = (
         analysis_status
         if records
-        else "unresolved"
+        else "skipped"
     )
 
     mapping = {

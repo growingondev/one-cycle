@@ -28,6 +28,11 @@ def get_announcements(
     search: str | None = Query(default=None),
     region: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
+    sort_order: str = Query(
+        default="latest",
+        alias="sort",
+        pattern="^(latest|oldest)$",
+    ),
     db: Session = Depends(get_db),
 ) -> AnnouncementListResponse:
     try:
@@ -38,6 +43,7 @@ def get_announcements(
             search=search,
             region=region,
             status_filter=status_filter,
+            sort_order=sort_order,
         )
     except SQLAlchemyError as exc:
         raise HTTPException(
