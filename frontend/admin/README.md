@@ -1,6 +1,6 @@
 # 🛠️ 관리자 페이지 API 연동 가이드
 
- 관리자 페이지 프론트엔드 UI 화면 및 상태 관리 로직 구현이 완료되어 API 연동을 위한 가이드를 전달해 드립니다.
+관리자 페이지 프론트엔드 UI 화면 및 상태 관리 로직 구현이 완료되어 API 연동을 위한 가이드를 전달해 드립니다.
 
 ## 📌 공통 연동 안내
 * 프론트엔드 코드 내에 `// 🔓 [실제 API 연동 시 주석 해제]` 주석이 달린 부분을 검색하시면 연동 지점을 바로 찾으실 수 있습니다.
@@ -56,3 +56,35 @@
 * **요청 형태:** `/api/admin/errors/{id}/notes`
 * **요청 Body:** `{ "note": "메모내용" }`
 * **기대 응답:** DB에 저장된 시간(`Date`)과 작성자(`Actor`) 정보가 포함된 완성된 메모 객체를 리턴해 주시면 프론트 UI에 즉시 반영됩니다.
+
+---
+
+## 4. 📖 용어 사전 관리 (New)
+**관련 파일:** `src/pages/GlossaryAdmin.tsx`
+
+### [GET] 용어 목록 조회 및 검색
+* **위치:** `GlossaryAdmin.tsx` 내 `useEffect` 및 `fetchTerms` 함수 
+* **호출 시점:** 페이지 로드 및 검색/필터 조건 변경 시
+* **요청 Query:** `page`, `size`, `search` (용어+설명 통합검색), `category`, `is_active`
+* **기대 응답:** 페이징 및 필터링이 적용된 객체 `{ items: [...], total, total_pages }` 리턴 요망
+
+### [POST] 신규 용어 추가
+* **위치:** `GlossaryAdmin.tsx` 내 `handleSave` 함수
+* **요청 형태:** `/api/admin/glossary`
+* **요청 Body:** `{ "term": "...", "definition": "...", "category": "...", "is_active": true }`
+* **참고:** `term` 중복 시 409 Conflict 에러 반환 요망 (프론트에서 중복 알림 처리)
+
+### [PUT] 기존 용어 수정
+* **위치:** `GlossaryAdmin.tsx` 내 `handleSave` 함수
+* **요청 형태:** `/api/admin/glossary/{id}`
+* **요청 Body:** 수정된 전체 필드 전송 (`term`, `definition`, `category`, `is_active`)
+
+### [PATCH] 활성화 상태(ON/OFF) 토글
+* **위치:** `GlossaryAdmin.tsx` 내 `toggleStatus` 함수
+* **요청 형태:** `/api/admin/glossary/{id}/status`
+* **요청 Body:** `{ "is_active": boolean }`
+
+### [DELETE] 용어 영구 삭제
+* **위치:** `GlossaryAdmin.tsx` 내 `handleDelete` 함수
+* **요청 형태:** `/api/admin/glossary/{id}`
+* **동작:** DB에서 Hard Delete 처리 요망
