@@ -49,3 +49,11 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+
+# Evaluation results
+evaluation/results/*
+!evaluation/results/.gitkeep
+
+# Evaluation pipeline outputs
+evaluation/outputs/*
+!evaluation/outputs/.gitkeep
