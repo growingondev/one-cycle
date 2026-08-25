@@ -79,6 +79,14 @@ class DocumentRoleServiceTest(unittest.TestCase):
             DOCUMENT_ROLE_SUPPORTING,
         )
 
+    def test_supporting_generic_submission_documents(self):
+        self.assertEqual(
+            classify_document_role(
+                "붙임_제출서류양식.hwpx"
+            ),
+            DOCUMENT_ROLE_SUPPORTING,
+        )
+
     def test_supporting_english_required_documents(self):
         self.assertEqual(
             classify_document_role(
