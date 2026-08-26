@@ -32,6 +32,7 @@ SUPPORTING_KEYWORDS = (
     "확약서",
     "확인서",
     "작성서류",
+    "제출서류",
     "required_documents",
     "supplement",
 )

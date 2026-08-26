@@ -1,58 +1,43 @@
-# DDOKBOT Database Architecture
+# Database Architecture
 
-> 이 문서는 DDOKBOT의 PostgreSQL + pgvector 데이터 구조와  
-> Pipeline Persistence, Active Dataset, Runtime RAG 사이의 연결을 설명합니다.
->
-> 새로운 개발자 또는 AI가 다음 내용을 이해할 수 있도록 작성되었습니다.
->
-> - 어떤 ORM Model이 존재하는지
-> - Pipeline 결과가 어떤 순서로 DB에 저장되는지
-> - ProcessingRun과 ChunkSet이 왜 존재하는지
-> - Active 상태가 Runtime RAG 검색에 어떻게 영향을 주는지
-> - pgvector Embedding이 어디에 저장되는지
-> - Alembic Migration을 어디에서 관리하는지
-> - DB 관련 문제가 발생하면 어느 파일을 확인해야 하는지
+> 기준 시점: **2026-08-25**
+> Stack: PostgreSQL 16 + pgvector + SQLAlchemy + Alembic
+> 목적: One-Cycle의 현재 DB 구조, Persistence, Active Dataset, Runtime RAG 연결을 설명한다.
 
 ---
 
 # 1. Database Stack
 
-현재 DDOKBOT의 Database Stack:
-
 ```text
 PostgreSQL
-+
-pgvector
-+
-SQLAlchemy
-+
-Alembic
++ pgvector
++ SQLAlchemy
++ Alembic
 ```
 
 역할:
 
 ```text
-PostgreSQL
-→ Application 데이터 저장
-
-pgvector
-→ Embedding Vector 저장 및 Similarity Search
-
-SQLAlchemy
-→ Python ORM / DB Session
-
-Alembic
-→ DB Schema Migration 관리
+PostgreSQL  → Application / 운영 데이터
+pgvector    → Embedding vector 및 cosine similarity
+SQLAlchemy  → ORM / Session
+Alembic     → Schema migration
 ```
+
+AWS에서는 PostgreSQL + pgvector를 Docker로 실행한다.
 
 ---
 
-# 2. 관련 디렉터리
+# 2. 주요 DB 코드
 
 ```text
 backend/app/db/
 backend/app/models/
+backend/app/services/collection_service.py
 backend/app/services/pipeline_persistence.py
+backend/app/services/key_information_service.py
+backend/app/services/collection_publish_service.py
+backend/app/services/error_log_service.py
 
 migrations/
 alembic.ini
@@ -63,1428 +48,622 @@ infra/postgres/init/01-enable-vector.sql
 
 ---
 
-# 3. Database Connection
-
-DB Session 관련 코드:
+# 3. 주요 Model
 
 ```text
-backend/app/db/session.py
+Admin
+CollectionRun
+Announcement
+Document
+ProcessingRun
+ProcessingArtifact
+DocumentStructure
+ChunkSet
+Chunk
+Embedding
+KeyInformation
+ErrorLog
+SystemState
 ```
 
-SQLAlchemy Base:
-
-```text
-backend/app/db/base.py
-```
-
-Application과 RAG 모두 동일한 Backend DB Session 구성을 사용합니다.
-
-개념:
-
-```text
-Backend Service
-      │
-      ├────────────┐
-      ▼            ▼
-SQLAlchemy      RAG Pipeline
-      │            │
-      └─────┬──────┘
-            ▼
-       PostgreSQL
-```
-
-RAG 내부에서 별도의 독립적인 DB 연결 설정을 새로 만들지 않고,
-공통 `SessionLocal`을 사용하는 구조입니다.
+실제 column / constraint / FK의 최종 기준은 ORM Model과 Alembic migration이다.
 
 ---
 
-# 4. Database Models
-
-현재 ORM Model 위치:
-
-```text
-backend/app/models/
-```
-
-현재 확인된 주요 Model:
-
-```text
-admin.py
-announcement.py
-chunk.py
-chunk_set.py
-collection_run.py
-document.py
-document_structure.py
-embedding.py
-error_log.py
-key_information.py
-processing_artifact.py
-processing_run.py
-system_state.py
-```
-
-실제 Column과 Foreign Key의 최종 기준은 각 Model 파일입니다.
-
----
-
-# 5. 전체 데이터 관계 개념
-
-현재 시스템을 이해할 때 핵심 관계는 다음과 같습니다.
+# 4. 핵심 데이터 관계
 
 ```text
 CollectionRun
-     │
-     ▼
-Announcement
-     │
-     ▼
-Document
-     │
-     ├────────────────────┐
-     │                    │
-     ▼                    ▼
-ProcessingRun       DocumentStructure
-     │
-     ▼
-ChunkSet
-     │
-     ▼
-Chunk
-     │
-     ▼
-Embedding
-```
-
-추가 Application 데이터:
-
-```text
-KeyInformation
-Admin
-ErrorLog
-SystemState
-ProcessingArtifact
-```
-
-정확한 Foreign Key 방향은 ORM Model을 Source of Truth로 확인합니다.
-
----
-
-# 6. CollectionRun
-
-파일:
-
-```text
-backend/app/models/collection_run.py
-```
-
-역할:
-
-공고 데이터가 어느 수집/등록 실행 단위에 속하는지를 표현하기 위한 Model입니다.
-
-개념:
-
-```text
-Collection Run
-      ↓
-Announcements
-```
-
-Runtime RAG에서는 `system_state`의 Active Collection과 연결하여
-현재 서비스 대상 공고를 제한할 수 있습니다.
-
----
-
-# 7. Announcement
-
-파일:
-
-```text
-backend/app/models/announcement.py
-```
-
-서비스에서 사용자에게 노출되는 공고 단위입니다.
-
-예:
-
-```text
-공고 ID = 1
-```
-
-Frontend가 Chat 요청을 보낼 때:
-
-```json
-{
-  "announcementId": 1
-}
-```
-
-처럼 이 공고 ID를 전달합니다.
-
-Runtime RAG는 이 ID를 검색 범위 조건으로 사용합니다.
-
----
-
-# 8. Document
-
-파일:
-
-```text
-backend/app/models/document.py
-```
-
-Announcement와 연결된 실제 문서 단위입니다.
-
-개념:
-
-```text
+    ↓
 Announcement
     ↓
 Document
+    ↓
+ProcessingRun
+    ├→ DocumentStructure
+    └→ ChunkSet
+          ↓
+         Chunk
+          ↓
+       Embedding
+
+Announcement
+    ↓
+KeyInformation
+
+SystemState
+    ↓
+active_collection_run_id
+
+ErrorLog
+→ CollectionRun / Announcement / Document / ProcessingRun 선택 연결
 ```
 
-하나의 공고에 실제 HWP/HWPX 문서가 연결될 수 있으며,
-Pipeline Processing은 Document를 중심으로 실행됩니다.
+`Chunk`는 RAG 검색 범위 제한을 단순하게 하기 위해 `announcement_id`와 `document_id`도 직접 가진다.
 
 ---
 
-# 9. ProcessingRun
+# 5. CollectionRun
 
-파일:
+수집 한 번을 하나의 snapshot/run으로 저장한다.
 
-```text
-backend/app/models/processing_run.py
-```
-
-특정 Document에 대해 Pipeline을 실행한 한 번의 처리 결과를 나타냅니다.
-
-예:
+대표 상태:
 
 ```text
-Document 1
- ├── ProcessingRun 1
- ├── ProcessingRun 2
- ├── ProcessingRun 3
- ├── ProcessingRun 4
- └── ProcessingRun 5
+running
+success
+partial
+failed
 ```
 
-현재 실제 검증에서 다음 상태가 확인되었습니다.
+대표 count:
 
 ```text
-id=1 active=False
-id=2 active=False
-id=3 active=False
-id=4 active=False
-id=5 active=True
+total_announcement_count
+successful_announcement_count
+failed_announcement_count
 ```
 
-즉 동일 문서를 여러 번 재처리하더라도 과거 결과를 즉시 삭제하는 대신
-별도의 ProcessingRun으로 보관할 수 있습니다.
+중요:
+
+현재 `CollectionRun`에는 다음 column이 없다.
+
+```text
+is_published
+published_at
+```
+
+서비스 공개 상태는 `SystemState.active_collection_run_id`로 관리한다.
 
 ---
 
-# 10. ProcessingRun이 필요한 이유
+# 6. Announcement
 
-문서를 다시 Pipeline 처리하면 기존 데이터를 바로 덮어쓰는 방식보다
-새 ProcessingRun을 생성하는 방식이 안전합니다.
+LH 공고 한 건.
 
-개념:
+같은 LH 공고라도 서로 다른 CollectionRun에 속하면 서로 다른 수집 snapshot으로 존재할 수 있다.
 
-```text
-Old ProcessingRun
-      │
-      │ 아직 서비스 중
-      ▼
-Active = TRUE
-
-새 Pipeline 실행
-      ↓
-New ProcessingRun
-      ↓
-Validation
-      ↓
-DB Write
-      ↓
-Activation
-      ↓
-Old Run Active = FALSE
-New Run Active = TRUE
-```
-
-이 구조를 사용하면 새 데이터가 완전히 준비되기 전에
-기존 서비스 데이터를 잃지 않을 수 있습니다.
+사용자 API는 모든 Announcement가 아니라 **Active Collection**에 속한 Announcement를 조회한다.
 
 ---
 
-# 11. ProcessingArtifact
+# 7. Document
 
-파일:
+Announcement 첨부 HWP/HWPX 문서.
+
+주요 개념:
 
 ```text
-backend/app/models/processing_artifact.py
+original_filename
+document_format
+storage_path
+download_status
+document_role
 ```
 
-Pipeline 실행 과정에서 생성되는 처리 Artifact와 관련된 정보를 관리하는 Model입니다.
+현재 `document_role`:
 
-정확한 Artifact 종류와 Column 정의는 해당 Model 및 Persistence 코드를 확인합니다.
+```text
+primary
+supporting
+unknown
+```
+
+모든 HWP/HWPX Document를 DB에 저장하지만,
+현재 AI 전체 처리 대상은 `primary + download completed`다.
 
 ---
 
-# 12. DocumentStructure
+# 8. ProcessingRun
 
-파일:
+Document 한 번의 처리 실행 결과.
 
-```text
-backend/app/models/document_structure.py
-```
-
-Structure Pipeline 결과와 관련된 데이터를 DB에 보관하기 위한 영역입니다.
-
-Pipeline 흐름:
+같은 Document를 재처리해도 기존 결과를 덮어쓰지 않고 새 ProcessingRun을 만들 수 있다.
 
 ```text
-Normalized Document
-      ↓
-Structure Pipeline
-      ↓
-Structured Result
-      ↓
-Persistence
-      ↓
-DocumentStructure
+Document
+├→ ProcessingRun A (old / inactive)
+└→ ProcessingRun B (new / active)
 ```
+
+대표 정상 조건:
+
+```text
+execution_status = succeeded
+verification_status = pass
+is_active = true
+```
+
+## Timestamp 주의
+
+현재 ProcessingRun은 실제 Parser 시작 시점이 아니라 Persistence 단계에서 만들어진다.
+
+따라서 `started_at`, `finished_at`은 전체 Pipeline wall-clock 시간으로 해석하면 안 된다.
+
+실제 document 87 재처리에서도 DB timestamp와 실제 처리 시간이 동일한 의미가 아님을 확인했다.
 
 ---
 
-# 13. ChunkSet
+# 9. DocumentStructure
 
-파일:
-
-```text
-backend/app/models/chunk_set.py
-```
-
-특정 ProcessingRun에서 생성된 Chunk들의 집합입니다.
-
-개념:
+특정 ProcessingRun의 구조화 결과를 저장한다.
 
 ```text
 ProcessingRun
-      ↓
+→ DocumentStructure
+```
+
+문서 처리 알고리즘이 ORM에 직접 임의 INSERT하는 것이 아니라,
+Pipeline 산출물을 Backend Persistence가 검증해 저장한다.
+
+---
+
+# 10. ChunkSet
+
+특정 ProcessingRun의 Chunk 결과 묶음.
+
+```text
+ProcessingRun
+→ ChunkSet
+→ Chunk N
+```
+
+`ChunkSet`은 Chunking 전략 그 자체가 아니라 **특정 Chunking 실행 결과의 버전 단위**다.
+
+대표 상태:
+
+```text
+status = completed
+is_active = true
+chunk_count = 실제 Chunk 수
+```
+
+---
+
+# 11. Chunk
+
+RAG 검색 실제 단위.
+
+주요 성격:
+
+```text
+external_chunk_key
+chunk_index
+announcement_id
+document_id
+document_format
+content_type
+section_path
+title
+content
+search_text
+embedding_text
+source_reference
+metadata
+status
+```
+
+`chunks.id`는 DB 내부 PK,
+`external_chunk_key`는 Pipeline/RAG 추적용 key다.
+
+---
+
+# 12. Embedding
+
+각 Chunk에 대응하는 pgvector Vector.
+
+현재 검증 기준:
+
+```text
+model      BAAI/bge-m3
+dimension  1024
+normalized true
+status     completed
+```
+
+Publish 시 primary Document의 모든 Chunk에 정상 Embedding이 있는지 확인한다.
+
+---
+
+# 13. KeyInformation
+
+Announcement 상세 화면용 구조화 핵심정보.
+
+대표 필드:
+
+```text
+application_period
+eligibility
+supply_information
+income_asset_criteria
+required_documents
+winner_announcement
+contact_information
+```
+
+용도는 RAG와 다르다.
+
+```text
+KeyInformation
+→ 사용자 핵심정보 카드
+
+Chunk + Embedding
+→ RAG Retrieval
+```
+
+현재 문서 처리에서 실제 추출 / 저장까지 연결되어 있다.
+
+KeyInformation은 Structure / Verification 결과를 입력으로 사용한다.
+
+---
+
+# 14. ErrorLog
+
+Crawler / Pipeline / RAG / LLM 운영 오류를 공통 형태로 저장한다.
+
+공통 진입점:
+
+```python
+record_error(...)
+```
+
+반환:
+
+```text
+error_id
+```
+
+관련 ID가 일부만 전달되면 DB 관계를 통해 상위 연결을 검증 / 보완한다.
+
+---
+
+# 15. SystemState / Active Collection
+
+Singleton 상태의 핵심 값:
+
+```text
+active_collection_run_id
+```
+
+의미:
+
+```text
+수집 성공
+≠
+서비스 공개 완료
+```
+
+새 Collection이 문서 처리 / Embedding / 검증을 통과한 뒤 Publish되어야 사용자 서비스 대상이 된다.
+
+현재 전체 신규 수집 경로에서는 Integration Service가 `CollectionRun.status = success`이고 `analysis_document_ids` 처리 결과의 `failed_count = 0`일 때 `publish_collection_run(collection_run_id)`을 자동 호출한다.
+
+실제 Publish validation과 `SystemState.active_collection_run_id` 전환은 `collection_publish_service.py`가 담당한다.
+
+개별 공고 재수집은 자동 Publish하지 않는다.
+
+---
+
+# 16. Persistence 실제 순서
+
+현재 Document Processor의 전체 실행:
+
+```text
+Parser
+→ Normalizer
+→ Structure + Verification
+→ Chunking
+→ Embedding
+→ persist_document_outputs()
+```
+
+`persist_document_outputs()` 저장 대상:
+
+```text
+ProcessingRun
+DocumentStructure
 ChunkSet
-      ↓
-Chunks
-```
-
-ChunkSet에도 Active 상태가 존재합니다.
-
-Runtime RAG에서는:
-
-```text
-ProcessingRun.is_active = TRUE
-AND
-ChunkSet.is_active = TRUE
-```
-
-인 데이터를 대상으로 검색합니다.
-
----
-
-# 14. Chunk
-
-파일:
-
-```text
-backend/app/models/chunk.py
-```
-
-RAG Retrieval의 실제 검색 단위입니다.
-
-Pipeline:
-
-```text
-Structured Document
-      ↓
-Chunking
-      ↓
 Chunk
-```
-
-DB에는 Chunk의 의미를 유지할 수 있도록 다음 성격의 정보가 저장됩니다.
-
-```text
-Chunk ID
-Announcement relation
-Document relation
-ChunkSet relation
-Document Format
-Content Type
-Section Path
-Title
-Content
-Search Text
-Source Reference
-Status
-```
-
-정확한 Column 이름과 타입은 `chunk.py`를 최종 기준으로 확인합니다.
-
----
-
-# 15. External Chunk Key
-
-Pipeline에서 생성한 Chunk ID와 DB의 내부 Primary Key는 서로 다른 개념입니다.
-
-예:
-
-```text
-DB 내부 ID
-5
-
-외부 Chunk Key
-계약금1_000_청주지북_..._sec_0019_tbl_0020
-```
-
-Runtime API의 Evidence에서는 사람이 추적 가능한 외부 Chunk Key가 반환될 수 있습니다.
-
-개념:
-
-```text
-chunks.id
-→ DB 내부 관계용
-
-chunks.external_chunk_key
-→ Pipeline/RAG 추적용
-```
-
----
-
-# 16. Embedding
-
-파일:
-
-```text
-backend/app/models/embedding.py
-```
-
-각 Chunk에 대응하는 Vector를 저장합니다.
-
-개념:
-
-```text
-Chunk
-  ↓
 Embedding
 ```
 
-현재 확인된 Embedding:
+그 다음:
 
 ```text
-Model
-BAAI/bge-m3
-
-Dimension
-1024
-
-Normalized
-TRUE
+Structure / Verification 기반 KeyInformation 추출
+→ KeyInformation upsert
+→ activate_processing_run()
 ```
+
+## 논리적 의존성
+
+```text
+Structure + Verification
+├→ KeyInformation
+└→ Chunking → Embedding
+```
+
+KeyInformation이 물리적으로 Embedding 뒤에 저장되는 것은
+현재 ProcessingRun ID를 먼저 확보하기 위한 실행 순서 때문이다.
 
 ---
 
-# 17. pgvector
+# 17. Activation
 
-PostgreSQL에 Vector 검색 기능을 제공하기 위해 pgvector를 사용합니다.
-
-초기화 SQL:
+새 결과를 바로 서비스 데이터로 만들지 않는다.
 
 ```text
-infra/postgres/init/01-enable-vector.sql
+새 ProcessingRun
+→ Persistence
+→ 검증
+→ KeyInformation
+→ Activation
 ```
 
-Runtime RAG에서는 pgvector cosine distance 연산을 사용합니다.
+Activation 시:
 
-개념:
+```text
+기존 active ProcessingRun → false
+신규 ProcessingRun        → true
+
+기존 active ChunkSet      → false
+신규 ChunkSet             → true
+```
+
+새 결과 실패 시 기존 정상 데이터를 유지한다.
+
+---
+
+# 18. Collection Publish
+
+`publish_collection_run(id)`는:
+
+```text
+Collection validation
+→ SystemState row lock
+→ active_collection_run_id 변경
+```
+
+을 수행한다.
+
+Publish는 CollectionRun에 별도 `published` flag를 기록하는 방식이 아니다.
+
+Primary 검증:
+
+```text
+download completed
+active ProcessingRun
+succeeded
+verification pass
+active completed ChunkSet
+Chunk count 정합성
+모든 Chunk completed
+모든 Chunk에 정상 BGE-M3 Embedding
+dimension 1024
+normalized true
+```
+
+Supporting은 현재 처리 validation을 하지 않는다.
+
+Unknown Document가 존재하면 Publish를 막는다.
+
+HWP/HWPX primary가 없는 공고는 metadata-only로 Publish 허용될 수 있다.
+
+---
+
+# 19. Runtime RAG DB Join
+
+현재 `rag/db_pipeline.py`는 개념적으로:
+
+```text
+SystemState
+→ Active CollectionRun
+→ Announcement
+→ Chunk
+→ ChunkSet(active)
+→ ProcessingRun(active)
+→ Embedding
+```
+
+을 사용한다.
+
+필터:
+
+```text
+요청 announcement_id
+Chunk.status = completed
+ChunkSet.is_active = true
+ProcessingRun.is_active = true
+Embedding.status = completed
+Embedding.model_name = 현재 query model
+Embedding.dimension = 1024
+Embedding.normalized = true
+Embedding.embedding IS NOT NULL
+```
+
+pgvector cosine distance:
 
 ```sql
 embedding <=> query_vector
 ```
 
-Similarity는 현재 DB RAG Pipeline에서 개념적으로:
+Similarity:
 
 ```text
 1 - cosine distance
 ```
 
-형태로 계산합니다.
-
 ---
 
-# 18. Document Embedding → DB
+# 20. AWS 실제 데이터 검증
 
-Offline Pipeline:
+2026-08-25 실제 LH 수집:
 
 ```text
-Chunk
-  ↓
-BAAI/bge-m3
-  ↓
-1024-d Vector
-  ↓
-Pipeline Output
-  ↓
-pipeline_persistence.py
-  ↓
-embeddings table
+Announcement  50
+Document      88
+primary       48
+supporting    40
+unknown        0
 ```
 
----
-
-# 19. Query Embedding → DB Search
-
-Runtime:
+Primary 처리:
 
 ```text
-Question
-  ↓
-BAAI/bge-m3
-  ↓
-1024-d Query Vector
-  ↓
-pgvector
-  ↓
-Stored Chunk Embeddings
-  ↓
-Top-K Similarity
+48 / 48 succeeded
 ```
 
-따라서:
+검색 데이터:
 
 ```text
-Document Embedding Model
-Query Embedding Model
-Vector Dimension
-Normalization 방식
+Chunk       14,047
+Embedding   14,047
 ```
 
-이 서로 호환되어야 합니다.
-
----
-
-# 20. KeyInformation
-
-파일:
+Publish:
 
 ```text
-backend/app/models/key_information.py
+CollectionRun id = 1
+SystemState.active_collection_run_id = 1
 ```
 
-공고문에서 추출한 주요 구조화 정보를 저장하기 위한 영역입니다.
-
-이 Model이 존재한다고 해서 현재 모든 Key Information Composer 기능이 완성되어 있다는 의미는 아닙니다.
-
-현재 프로젝트에서는 Key Information 관련 기능이 추가 검증/보완 대상입니다.
-
-정확한 현재 사용 여부는:
+단일 재처리 검증:
 
 ```text
-backend/app/services/
-pipeline/structure/
-```
+document_id = 87
 
-참조 관계를 확인합니다.
+old ProcessingRun id=48
+→ is_active=false
 
----
-
-# 21. SystemState
-
-파일:
-
-```text
-backend/app/models/system_state.py
-```
-
-현재 서비스가 어떤 Collection/DataSet을 Active로 사용해야 하는지 나타내는 상태 Model입니다.
-
-Runtime Retrieval에서 확인된 구조:
-
-```text
-system_state
-      ↓
-active_collection_run_id
-      ↓
-collection_run
-      ↓
-announcement
-```
-
-즉 DB에 Announcement가 존재한다고 해서
-모든 Announcement가 현재 Runtime 서비스 대상이 되는 것은 아닐 수 있습니다.
-
----
-
-# 22. Runtime Retrieval의 DB Join 개념
-
-현재 `rag/db_pipeline.py`에서 사용하는 검색 구조를 개념적으로 표현하면:
-
-```text
-SystemState
-    │
-    ▼
-Active CollectionRun
-    │
-    ▼
-Announcement
-    │
-    ▼
-Chunk
-    │
-    ▼
-ChunkSet
-    │
-    ▼
-ProcessingRun
-    │
-    ▼
-Embedding
-```
-
-검색 필터:
-
-```text
-선택 announcement_id
-
-ChunkSet.is_active = TRUE
-
-ProcessingRun.is_active = TRUE
-
-Chunk.status = completed
-
-Embedding.status = completed
-
-Embedding.model_name = 현재 Query Embedding Model
-
-Embedding.dimension = 1024
-
-Embedding.normalized = TRUE
-
-Embedding Vector IS NOT NULL
-```
-
-실제 SQL의 최종 기준:
-
-```text
-rag/db_pipeline.py
+new ProcessingRun id=49
+→ succeeded
+→ verification=pass
+→ is_active=true
 ```
 
 ---
 
-# 23. Active ProcessingRun과 Active ChunkSet
+# 21. Alembic
 
-Runtime 검색에서 가장 중요한 조건 중 하나입니다.
-
-정상적인 서비스 데이터:
+현재 로컬 확인:
 
 ```text
-ProcessingRun.is_active = TRUE
-ChunkSet.is_active = TRUE
+alembic heads
+→ 7564ce797c61 (head)
 ```
 
-예:
+현재 단일 head다.
 
-```text
-processing_run_id = 5
-processing_run_active = True
-
-chunk_set_id = 5
-chunk_set_active = True
-
-chunk_count = 291
-```
-
-이 상태라면 해당 Processing 결과가 Runtime RAG 검색 대상입니다.
-
----
-
-# 24. Persistence 과정
-
-관련 코드:
-
-```text
-backend/app/services/pipeline_persistence.py
-```
-
-전체 흐름:
-
-```text
-Pipeline Outputs
-      ↓
-Validation
-      ↓
-Registered Document 확인
-      ↓
-ProcessingRun 생성
-      ↓
-DocumentStructure 저장
-      ↓
-ChunkSet 생성
-      ↓
-Chunk 저장
-      ↓
-Embedding 저장
-      ↓
-Commit
-```
-
----
-
-# 25. Persistence Dry Run
-
-실제 DB에 쓰기 전에 검증합니다.
-
-```bash
-cd /home/ubuntu/ddokbot/one-cycle
-
-PYTHONPATH=. \
-/home/ubuntu/ddokbot/venvs/one-cycle-backend/bin/python \
--m backend.app.services.pipeline_persistence \
---announcement-key announcement_001
-```
-
-정상 확인 예:
-
-```text
-DRY RUN: PASS
-DB WRITE: NO
-```
-
-Dry Run에서 확인되는 주요 항목:
-
-```text
-announcement_key
-document format
-filename
-schema version
-verification
-chunk count
-embedding model
-dimension
-embedding count
-announcement DB ID
-document DB ID
-```
-
----
-
-# 26. Persistence Write
-
-실제 DB 저장:
-
-```bash
-cd /home/ubuntu/ddokbot/one-cycle
-
-PYTHONPATH=. \
-/home/ubuntu/ddokbot/venvs/one-cycle-backend/bin/python \
--m backend.app.services.pipeline_persistence \
---announcement-key announcement_001 \
---write
-```
-
-현재 확인된 정상 예:
-
-```text
-processing_run_id: 5
-document_structure_id: 5
-chunk_set_id: 5
-
-written_chunks: 291
-written_embeddings: 291
-
-DB WRITE: PASS
-ACTIVE SWITCH: NO
-```
-
-중요:
-
-DB Write 성공과 Active 전환은 별개입니다.
-
----
-
-# 27. Activation
-
-새 ProcessingRun을 실제 서비스 대상으로 전환할 때:
-
-```text
-activate_processing_run()
-```
-
-을 사용합니다.
-
-예:
-
-```bash
-cd /home/ubuntu/ddokbot/one-cycle
-
-PYTHONPATH=. \
-/home/ubuntu/ddokbot/venvs/one-cycle-backend/bin/python - <<'PY'
-from backend.app.services.pipeline_persistence import (
-    activate_processing_run,
-)
-
-result = activate_processing_run(5)
-
-for key, value in result.items():
-    print(f"{key}: {value}")
-PY
-```
-
-정상 예:
-
-```text
-processing_run_id: 5
-document_id: 1
-chunk_set_id: 5
-chunks: 291
-embeddings: 291
-deactivated_runs: [4]
-```
-
----
-
-# 28. Activation의 의미
-
-Activation은 개념적으로:
-
-```text
-OLD
-ProcessingRun 4
-Active = TRUE
-
-NEW
-ProcessingRun 5
-Active = FALSE
-```
-
-를:
-
-```text
-OLD
-ProcessingRun 4
-Active = FALSE
-
-NEW
-ProcessingRun 5
-Active = TRUE
-```
-
-로 전환합니다.
-
-관련 ChunkSet도 새 ProcessingRun과 일치하는 Active 상태가 되어야 합니다.
-
----
-
-# 29. 왜 Write와 Activation을 분리하는가
-
-DB Write 직후 자동으로 서비스 데이터를 교체하면
-잘못된 Pipeline 결과가 즉시 사용자에게 노출될 수 있습니다.
-
-따라서:
-
-```text
-Write
- ↓
-검증
- ↓
-Activation
-```
-
-을 분리합니다.
-
-이 방식은 운영 안정성을 높입니다.
-
----
-
-# 30. DB Connection Test
-
-가장 간단한 연결 확인:
-
-```bash
-cd /home/ubuntu/ddokbot/one-cycle
-
-PYTHONPATH=. \
-/home/ubuntu/ddokbot/venvs/one-cycle-backend/bin/python - <<'PY'
-from sqlalchemy import text
-from backend.app.db.session import engine
-
-with engine.connect() as conn:
-    value = conn.execute(
-        text("SELECT 1")
-    ).scalar_one()
-
-print("[OK] DB CONNECTION:", value)
-PY
-```
-
-정상:
-
-```text
-[OK] DB CONNECTION: 1
-```
-
----
-
-# 31. DB 연결 실패 시 확인 순서
-
-```text
-1. PostgreSQL Process/Container 실행 여부
-2. .env Database 설정
-3. backend/app/core/config.py
-4. backend/app/db/session.py
-5. DB User
-6. DB Password
-7. Host
-8. Port
-9. Database Name
-```
-
-예전에 실제로 확인된 오류:
-
-```text
-password authentication failed
-```
-
-이 경우 Pipeline/RAG 코드를 수정하는 것이 아니라
-DB 인증 설정을 확인합니다.
-
----
-
-# 32. Alembic
-
-DB Schema Version 관리:
-
-```text
-alembic.ini
-migrations/
-```
-
-구조:
-
-```text
-migrations/
-├── env.py
-├── script.py.mako
-└── versions/
-```
-
----
-
-# 33. 현재 Migration 영역
-
-현재 Migration 파일 이름 기준으로 다음 구조가 순차적으로 추가되었습니다.
-
-```text
-Announcements
-
-Collection Runs
-Documents
-
-Processing Runs
-Processing Artifacts
-
-Chunk / Embedding Schema
-
-Document Structures
-Key Information
-
-Active Dataset State
-
-Admin
-Error Log
-```
-
-정확한 Revision 순서와 Schema 내용은:
-
-```text
-migrations/versions/
-```
-
-의 실제 Alembic Revision을 확인합니다.
-
----
-
-# 34. Model 변경 시 Migration
-
-ORM Model만 수정하고 끝내면 안 됩니다.
-
-기본 원칙:
+Schema 변경 시 원칙:
 
 ```text
 Model 변경
-    ↓
-Alembic Migration 작성
-    ↓
-Migration Review
-    ↓
-alembic upgrade head
-    ↓
-DB Schema 적용
+→ Migration 작성
+→ alembic heads 확인
+→ migration review
+→ upgrade 테스트
+→ 코드 / 테스트 / 문서와 함께 PR
 ```
+
+이번 `제출서류` Document Role keyword 수정은 **Schema 변경이 아니므로 Migration이 필요 없다.**
 
 ---
 
-# 35. alembic.ini 위치
+# 22. DB 상태 확인 기준
 
-현재:
-
-```text
-/home/ubuntu/ddokbot/one-cycle/alembic.ini
-```
-
-이 위치가 정상입니다.
-
-`alembic.ini`는:
-
-```text
-DB 데이터 파일 X
-Backend Model 파일 X
-```
-
-입니다.
-
-역할:
-
-```text
-Alembic CLI Configuration
-```
-
-따라서 Project Root에 두는 것이 일반적인 구조입니다.
-
----
-
-# 36. pgvector 초기화
-
-파일:
-
-```text
-infra/postgres/init/01-enable-vector.sql
-```
-
-PostgreSQL Container 초기화 시 pgvector Extension을 사용할 수 있도록 설정합니다.
-
-DB를 새로 만드는 경우 pgvector Extension이 존재하는지 반드시 확인합니다.
-
----
-
-# 37. Runtime RAG와 DB 관계
-
-Runtime RAG는:
-
-```text
-outputs/
-```
-
-를 직접 검색하지 않습니다.
-
-현재 서비스 구조:
-
-```text
-outputs/
-   ↓
-Persistence
-   ↓
-PostgreSQL
-   ↓
-Runtime RAG
-```
-
-즉 Pipeline 산출물은 Persistence 이후 DB 검색 데이터로 전환됩니다.
-
----
-
-# 38. DB에 데이터는 있는데 RAG 검색이 안 되는 경우
-
-다음 순서로 확인합니다.
-
-```text
-1. Announcement ID가 맞는가?
-2. Announcement가 Active Collection에 속하는가?
-3. Document가 연결되어 있는가?
-4. Active ProcessingRun이 존재하는가?
-5. Active ChunkSet이 존재하는가?
-6. Chunk Status가 completed인가?
-7. Embedding Status가 completed인가?
-8. Embedding Model이 일치하는가?
-9. Dimension이 1024인가?
-10. normalized가 TRUE인가?
-11. Embedding Vector가 NULL이 아닌가?
-```
-
----
-
-# 39. Active Run 확인 예
-
-```bash
-PYTHONPATH=. \
-/home/ubuntu/ddokbot/venvs/one-cycle-backend/bin/python - <<'PY'
-from sqlalchemy import select
-from backend.app.db.session import SessionLocal
-from backend.app.models import ProcessingRun
-
-with SessionLocal() as db:
-    rows = db.scalars(
-        select(ProcessingRun)
-        .where(
-            ProcessingRun.document_id == 1
-        )
-        .order_by(
-            ProcessingRun.id
-        )
-    ).all()
-
-for row in rows:
-    print(
-        "id=", row.id,
-        "active=", row.is_active,
-    )
-PY
-```
-
-정상적으로는 동일 Document에 대해
-최종 서비스 대상 Run 하나만 Active가 되어야 합니다.
-
----
-
-# 40. Active ChunkSet 확인
-
-개념 SQL:
+DB 연결:
 
 ```sql
-SELECT
-    pr.id,
-    pr.is_active,
-    cs.id,
-    cs.is_active,
-    COUNT(c.id)
-FROM processing_runs pr
-JOIN chunk_sets cs
-  ON cs.processing_run_id = pr.id
-JOIN chunks c
-  ON c.chunk_set_id = cs.id
-WHERE pr.document_id = :document_id
-  AND pr.is_active = TRUE
-  AND cs.is_active = TRUE
-GROUP BY
-    pr.id,
-    pr.is_active,
-    cs.id,
-    cs.is_active;
+SELECT 1;
 ```
 
-목적:
+Active Collection:
+
+```sql
+SELECT active_collection_run_id
+FROM system_state
+WHERE id = 1;
+```
+
+RAG 검색 문제 시 순서:
 
 ```text
-현재 Runtime 서비스 대상 Chunk 수 확인
+1. Active Collection인가
+2. 요청 Announcement가 해당 Collection에 속하는가
+3. primary Document가 정상 처리됐는가
+4. active ProcessingRun인가
+5. active ChunkSet인가
+6. Chunk completed인가
+7. Embedding completed인가
+8. model / dimension / normalized가 맞는가
 ```
 
 ---
 
-# 41. Chunk와 Embedding Count
+# 23. Runtime 서비스 포트
 
-Persistence 검증에서 중요한 조건:
+AWS 기준:
 
-```text
-Chunk Count
-=
-Embedding Count
-```
-
-예:
-
-```text
-chunks: 291
-embeddings: 291
-```
-
-Chunk 291개인데 Embedding이 290개라면
-Runtime 검색 전에 Persistence/Embedding Pipeline을 확인해야 합니다.
+| Service | Port |
+|---|---:|
+| PostgreSQL | 5432 |
+| FastAPI | 18000 |
+| llama.cpp | 8080 |
+| User Vite | 5173 |
+| Admin Vite | 3000 |
 
 ---
 
-# 42. Embedding Integrity
+# 24. Source of Truth
 
-현재 정상 검증 예:
-
-```text
-model: BAAI/bge-m3
-dimension: 1024
-
-embedding_count: 291
-
-norm_min ≈ 1.0
-norm_max ≈ 1.0
-```
-
-L2 Normalized Vector이므로 norm이 약 1.0이어야 합니다.
-
----
-
-# 43. DB Schema를 변경할 때 영향 범위
-
-## Chunk Column 변경
-
-확인:
-
-```text
-backend/app/models/chunk.py
-backend/app/services/pipeline_persistence.py
-rag/db_pipeline.py
-backend/app/schemas/
-migrations/
-```
-
----
-
-## Embedding Column 변경
-
-확인:
-
-```text
-backend/app/models/embedding.py
-pipeline/embedding/
-pipeline_persistence.py
-rag/retrieval/query_embedding.py
-rag/db_pipeline.py
-migrations/
-```
-
----
-
-## ProcessingRun 구조 변경
-
-확인:
-
-```text
-processing_run.py
-chunk_set.py
-pipeline_persistence.py
-rag/db_pipeline.py
-admin_service.py
-migrations/
-```
-
----
-
-## Announcement 구조 변경
-
-확인:
-
-```text
-announcement.py
-announcement_service.py
-schemas/announcement.py
-routes/announcements.py
-rag/db_pipeline.py
-frontend/user/
-migrations/
-```
-
----
-
-# 44. Database와 Frontend의 관계
-
-Frontend는 Database에 직접 연결하지 않습니다.
-
-항상:
-
-```text
-Frontend
-   ↓
-FastAPI
-   ↓
-Service
-   ↓
-Database
-```
-
-구조입니다.
-
-예:
-
-```text
-ListScreen
-  ↓
-GET /api/announcements
-  ↓
-Announcement Service
-  ↓
-Database
-```
-
----
-
-# 45. Database와 Pipeline의 관계
-
-Pipeline 역시 가능하면 ORM/DB 세부 구현에 직접 섞이지 않습니다.
-
-구조:
-
-```text
-pipeline/
-   ↓
-Pipeline Output
-   ↓
-pipeline_persistence.py
-   ↓
-Database
-```
-
-이 경계를 유지하면 Pipeline 알고리즘과 DB 저장 정책을 독립적으로 수정하기 쉬워집니다.
-
----
-
-# 46. Database와 RAG의 관계
-
-RAG는 현재 DB에 저장된 Chunk와 Embedding을 Runtime Retrieval 대상으로 사용합니다.
-
-```text
-PostgreSQL
-   ↓
-rag/db_pipeline.py
-   ↓
-Retrieved Chunks
-   ↓
-Generation
-```
-
-따라서:
-
-```text
-Pipeline Output만 존재
-DB Persistence 안 함
-```
-
-상태에서는 Runtime RAG 검색 대상이 아닐 수 있습니다.
-
----
-
-# 47. DB 문제 진단 Matrix
-
-| 증상 | 우선 확인 |
+| 영역 | 기준 |
 |---|---|
-| DB 연결 자체 실패 | `.env`, `session.py`, PostgreSQL |
-| Announcement 목록 없음 | `announcements`, Collection 상태 |
-| Chunk 없음 | Persistence, ChunkSet |
-| Embedding 없음 | Embedding Pipeline, Persistence |
-| Vector 검색 결과 없음 | Active 상태, Model, Dimension |
-| 이전 데이터가 검색됨 | ProcessingRun/ChunkSet Active |
-| 새 Pipeline 결과가 검색 안 됨 | Activation |
-| Vector Dimension 오류 | Embedding Model/DB Schema |
-| Migration 오류 | `alembic.ini`, `migrations/` |
-
----
-
-# 48. AI에게 DB 문제를 맡길 때 제공할 파일
-
-최소:
-
-```text
-README.md
-docs/ARCHITECTURE.md
-docs/PROJECT_STRUCTURE.md
-docs/PIPELINE.md
-docs/RAG.md
-docs/DATABASE.md
-
-backend/app/db/
-backend/app/models/
-backend/app/services/pipeline_persistence.py
-
-migrations/
-alembic.ini
-
-rag/db_pipeline.py
-```
-
-Infrastructure 문제라면 추가:
-
-```text
-infra/
-.env.example
-```
-
-실제 `.env`에는 Secret이 포함될 수 있으므로
-AI나 외부 사람에게 그대로 공유하기 전에 값을 반드시 확인합니다.
-
----
-
-# 49. Database Source of Truth
-
-| 영역 | Source of Truth |
-|---|---|
-| DB Connection | `backend/app/db/session.py` |
-| SQLAlchemy Base | `backend/app/db/base.py` |
-| ORM Models | `backend/app/models/` |
+| DB Session | `backend/app/db/session.py` |
+| ORM | `backend/app/models/` |
+| Collection Persistence | `backend/app/services/collection_service.py` |
 | Pipeline Persistence | `backend/app/services/pipeline_persistence.py` |
+| KeyInformation | `backend/app/services/key_information_service.py` |
+| Publish | `backend/app/services/collection_publish_service.py` |
 | Runtime Retrieval SQL | `rag/db_pipeline.py` |
-| Migration Config | `alembic.ini` |
-| Migration Environment | `migrations/env.py` |
-| Schema History | `migrations/versions/` |
-| PostgreSQL Infra | `infra/docker-compose.yml` |
-| pgvector Init | `infra/postgres/init/01-enable-vector.sql` |
+| Migration | `migrations/versions/` |
+| Infra | `infra/docker-compose.yml` |
 
 ---
 
-# 50. 핵심 요약
-
-현재 DDOKBOT의 DB 흐름은 다음과 같습니다.
+# 25. 핵심 원칙
 
 ```text
-HWP/HWPX
-   ↓
-Pipeline
-   ↓
-Chunks + Embeddings
-   ↓
-Persistence
-   ↓
-ProcessingRun
-   ↓
-ChunkSet
-   ↓
-Chunks
-   ↓
-Embeddings
-   ↓
-Activation
-   ↓
-PostgreSQL + pgvector
-   ↓
-Runtime RAG
+1. DB Write와 Activation은 다른 단계다.
+
+2. ProcessingRun / ChunkSet은 재처리 버전과
+   안전한 서비스 전환을 위한 구조다.
+
+3. Collection Publish는 SystemState의
+   active_collection_run_id 전환이다.
+
+4. Runtime RAG는 Active Collection +
+   active ProcessingRun + active ChunkSet +
+   정상 Embedding을 검색한다.
+
+5. ORM을 변경하면 Migration이 필요하지만,
+   단순 분류 keyword 변경에는 Migration이 필요 없다.
 ```
-
-가장 중요한 개념은 다음 세 가지입니다.
-
-```text
-1. DB Write와 Activation은 별개다.
-
-2. Runtime RAG는 Active ProcessingRun과
-   Active ChunkSet을 검색 대상으로 사용한다.
-
-3. Pipeline Output이 존재한다고 해서
-   Runtime RAG에서 자동으로 검색 가능한 것은 아니다.
-   Persistence와 Activation까지 완료되어야 한다.
-```
-
-DB 관련 문제를 수정할 때는 Pipeline, Backend, RAG 전체를 한꺼번에 변경하지 말고
-먼저 문제가 다음 중 어디인지 구분합니다.
-
-```text
-Connection
-Schema
-Persistence
-Activation
-Retrieval
-```
-
-그 다음 해당 계층만 수정합니다.
