@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 
 export interface GlossaryItem {
   id: number;
@@ -8,21 +8,11 @@ export interface GlossaryItem {
   is_active: boolean;
 }
 
-// 💡 페이지네이션 테스트를 위해 더미 데이터를 조금 더 늘렸습니다.
-const initialDummyData: GlossaryItem[] = [
-  { id: 1, term: '무주택세대구성원', definition: '세대원 전원이 주택을 소유하고 있지 않은 세대의 구성원입니다.', category: '청약/자격', is_active: true },
-  { id: 2, term: '기준중위소득', definition: '보건복지부장관이 고시하는 국민 전체 가구 소득의 중간값입니다.', category: '소득/자산', is_active: true },
-  { id: 3, term: '전용면적', definition: '아파트 등 공동주택에서 실제 주거에 사용되는 내부 면적입니다.', category: '주택/면적', is_active: true },
-  { id: 4, term: '행복주택', definition: '청년, 신혼부부 등을 위해 직장/학교가 가까운 곳에 저렴하게 공급하는 임대주택입니다.', category: '주택/유형', is_active: false },
-  { id: 5, term: '가점제', definition: '무주택기간, 부양가족 수 등을 점수로 계산해 점수가 높은 순으로 선정하는 방식입니다.', category: '청약/당첨', is_active: true },
-  { id: 6, term: '국민임대', definition: '무주택 저소득층의 주거안정을 위해 최장 30년간 임대하는 주택입니다.', category: '주택/유형', is_active: true },
-  { id: 7, term: '총자산', definition: '부동산, 자동차, 금융자산, 일반자산을 모두 합산한 후 부채를 차감한 자산입니다.', category: '소득/자산', is_active: true },
-];
-
 const PAGE_SIZE = 5; // 한 페이지에 보여줄 개수
 
 export default function GlossaryAdmin() {
-  const [terms, setTerms] = useState<GlossaryItem[]>(initialDummyData);
+  // 💡 1. 가라 데이터 삭제 후 초기값을 빈 배열([])로 변경
+  const [terms, setTerms] = useState<GlossaryItem[]>([]);
   
   // 검색 및 필터 State
   const [keyword, setKeyword] = useState('');
@@ -32,9 +22,8 @@ export default function GlossaryAdmin() {
   const [page, setPage] = useState(1);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<GlossaryItem | null>(null);
-  const [formData, setFormData] = useState({ term: '', definition: '', category: '', is_active: true });
+  const [formData, setFormData] = useState({ term: '', definition: '', category: '청약/자격', is_active: true });
 
-  // 💡 토스트(Toast) 알림 State
   const [toast, setToast] = useState<{ message: string; id: number } | null>(null);
   const showToast = (message: string) => {
     const id = Date.now();
@@ -42,7 +31,28 @@ export default function GlossaryAdmin() {
     setTimeout(() => setToast((t) => (t?.id === id ? null : t)), 2500);
   };
 
-  // 💡 필터링, 통계, 페이지네이션 계산 로직
+  // 💡 2. 백엔드 DB에서 데이터 불러오기 (GET)
+  const fetchGlossary = async () => {
+    try {
+      // ⚠️ 백엔드 팀원이 설정한 조회용 API 주소로 맞춰주세요. (예: /api/glossary)
+      const response = await fetch('/api/glossary'); 
+      if (response.ok) {
+        const data = await response.json();
+        setTerms(data);
+      } else {
+        showToast('데이터를 불러오는데 실패했습니다.');
+      }
+    } catch (error) {
+      console.error(error);
+      showToast('서버와 연결할 수 없습니다.');
+    }
+  };
+
+  // 화면이 처음 켜질 때 딱 한 번 데이터 불러오기 실행
+  useEffect(() => {
+    fetchGlossary();
+  }, []);
+
   const { paginatedTerms, totalPages, stats } = useMemo(() => {
     let filtered = terms;
     if (keyword) {
@@ -56,9 +66,7 @@ export default function GlossaryAdmin() {
       filtered = filtered.filter(t => t.is_active === isActive);
     }
 
-    // 페이지네이션 계산
     const totalPagesCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-    // 현재 페이지가 전체 페이지보다 크면 1페이지로 조정
     const currentPage = page > totalPagesCount ? 1 : page; 
     const startIndex = (currentPage - 1) * PAGE_SIZE;
     const paginated = filtered.slice(startIndex, startIndex + PAGE_SIZE);
@@ -91,40 +99,84 @@ export default function GlossaryAdmin() {
     setEditingItem(null);
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  // 💡 3. 데이터 저장/수정 (POST / PUT)
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.term || !formData.definition) {
       showToast('용어와 설명을 모두 입력해주세요.');
       return;
     }
 
-    if (editingItem) {
-      setTerms(terms.map(t => t.id === editingItem.id ? { ...t, ...formData } : t));
-      showToast('용어가 성공적으로 수정되었습니다.');
-    } else {
-      const newItem = { id: Date.now(), ...formData };
-      setTerms([newItem, ...terms]);
-      setPage(1); // 새 용어 추가 시 1페이지로 이동
-      showToast('새로운 용어가 추가되었습니다.');
+    try {
+      if (editingItem) {
+        // 기존 데이터 수정 (PUT)
+        const response = await fetch(`/api/glossary/${editingItem.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(formData)
+        });
+        
+        if (response.ok) {
+          setTerms(terms.map(t => t.id === editingItem.id ? { ...t, ...formData } : t));
+          showToast('용어가 성공적으로 수정되었습니다.');
+        }
+      } else {
+        // 새 데이터 추가 (POST)
+        const response = await fetch('/api/glossary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(formData)
+        });
+        
+        if (response.ok) {
+          const newItem = await response.json(); // DB에서 생성된 id를 포함한 데이터 받기
+          setTerms([newItem, ...terms]);
+          setPage(1);
+          showToast('새로운 용어가 추가되었습니다.');
+        }
+      }
+      closeModal();
+    } catch (error) {
+      showToast('저장 중 오류가 발생했습니다.');
     }
-    closeModal();
   };
 
-  const handleDelete = (id: number) => {
+  // 💡 4. 데이터 삭제 (DELETE)
+  const handleDelete = async (id: number) => {
     if (window.confirm('정말로 이 용어를 삭제하시겠습니까?')) {
-      setTerms(terms.filter(t => t.id !== id));
-      showToast('용어가 삭제되었습니다.');
+      try {
+        const response = await fetch(`/api/glossary/${id}`, { method: 'DELETE' });
+        if (response.ok) {
+          setTerms(terms.filter(t => t.id !== id));
+          showToast('용어가 삭제되었습니다.');
+        }
+      } catch (error) {
+        showToast('삭제 중 오류가 발생했습니다.');
+      }
     }
   };
 
-  const toggleStatus = (id: number, currentStatus: boolean) => {
-    setTerms(terms.map(t => t.id === id ? { ...t, is_active: !t.is_active } : t));
-    showToast(`상태가 ${currentStatus ? 'OFF' : 'ON'}로 변경되었습니다.`);
+  // 💡 5. 활성화 상태 토글 (PATCH)
+  const toggleStatus = async (id: number, currentStatus: boolean) => {
+    try {
+      const response = await fetch(`/api/glossary/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: !currentStatus })
+      });
+      
+      if (response.ok) {
+        setTerms(terms.map(t => t.id === id ? { ...t, is_active: !currentStatus } : t));
+        showToast(`상태가 ${currentStatus ? 'OFF' : 'ON'}로 변경되었습니다.`);
+      }
+    } catch (error) {
+      showToast('상태 변경 중 오류가 발생했습니다.');
+    }
   };
 
   return (
     <main className="content relative">
-      {/* 💡 토스트 메시지 UI */}
+      {/* 토스트 메시지 UI */}
       {toast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] bg-slate-800 text-white px-6 py-3 rounded-xl shadow-2xl text-[14px] font-bold flex items-center gap-2 animate-[fadeIn_0.2s_ease-out]">
           <span>🔔</span> {toast.message}
@@ -150,7 +202,8 @@ export default function GlossaryAdmin() {
           className="input wide" 
           placeholder="용어 또는 설명 검색" 
           value={keyword} 
-          onChange={(e) => { setKeyword(e.target.value); setPage(1); }} 
+          onChange={(e) => { setKeyword(e.target.value); setPage(1); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') setPage(1); }} 
         />
         <select className="select" value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); }}>
           <option value="">카테고리 전체</option>
@@ -159,6 +212,7 @@ export default function GlossaryAdmin() {
           <option value="주택/면적">주택/면적</option>
           <option value="주택/유형">주택/유형</option>
           <option value="청약/당첨">청약/당첨</option>
+          <option value="비용/계약">비용/계약</option>
         </select>
         <select className="select" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
           <option value="">활성화 상태 전체</option>
@@ -219,7 +273,7 @@ export default function GlossaryAdmin() {
           </table>
         </div>
         
-        {/* 💡 페이지네이션 UI */}
+        {/* 페이지네이션 UI */}
         {totalPages > 1 && (
           <div className="pagination">
             {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
@@ -235,7 +289,7 @@ export default function GlossaryAdmin() {
         )}
       </section>
 
-      {/* 모달 유지 */}
+      {/* 모달 */}
       {isModalOpen && (
         <div className="mobile-overlay show" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
           <div className="card" style={{ width: '100%', maxWidth: '500px', margin: '20px', padding: '32px' }}>
