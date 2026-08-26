@@ -63,10 +63,28 @@ Chunk
 Embedding
 KeyInformation
 ErrorLog
+Glossary
 SystemState
 ```
 
 실제 column / constraint / FK의 최종 기준은 ORM Model과 Alembic migration이다.
+
+## Glossary
+
+용어 사전은 다른 Collection 데이터와 독립된 운영 테이블이다.
+
+```text
+glossary
+├─ id PK
+├─ term VARCHAR(200) NOT NULL UNIQUE
+├─ definition TEXT NOT NULL
+├─ category VARCHAR(100) NOT NULL
+├─ is_active BOOLEAN NOT NULL DEFAULT true
+├─ created_at
+└─ updated_at
+```
+
+초기 Seed는 40개이며 `term` 기준 중복 없이 재실행 가능하도록 관리한다.
 
 ---
 
@@ -570,7 +588,7 @@ new ProcessingRun id=49
 
 ```text
 alembic heads
-→ 7564ce797c61 (head)
+→ 3d70b82ff082 (head)
 ```
 
 현재 단일 head다.

@@ -316,6 +316,7 @@ Document list/detail       PASS
 Document download          PASS
 ProcessingRun API          존재
 Error list/detail          PASS
+Glossary list              PASS (local runtime)
 ```
 
 주의:
@@ -332,6 +333,7 @@ Announcement recollect     연결
 Document reprocess         연결
 Error retry                ERROR_RETRY_RUNNER 미연결
 Collection publish         Admin API 없음
+Glossary CRUD              PASS (local runtime)
 ```
 
 ---
@@ -397,10 +399,10 @@ Parser → BGE-M3 CUDA Embedding → Persistence → KeyInformation → Activati
 
 # 14. Backend / DB Contract Test
 
-현재 `feature/backend-db-update` 핵심 suite:
+현재 `feature/backend-integration` 핵심 suite:
 
 ```text
-48 / 48 PASS
+63 / 63 PASS
 ```
 
 검증 범위:
@@ -414,6 +416,7 @@ Pipeline Persistence 보호
 Collection Publish
 Document Role
 Integration Service
+Glossary contracts / API
 ```
 
 추가한 회귀:
@@ -439,7 +442,7 @@ unknown 재분류 / 관리자 검토
 문서 처리 Background Job / Queue
 ProcessingRun 실제 wall-clock timestamp 개선
 Collection Publish Admin API 여부 결정
-Glossary DB/API
+Glossary AWS migration/seed + Frontend API integration
 ```
 
 RAG/Chat 별도:

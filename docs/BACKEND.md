@@ -411,6 +411,7 @@ llm
 GET  /api/announcements
 GET  /api/announcements/{id}
 POST /api/chat
+GET  /api/glossary
 ```
 
 ## 관리자
@@ -436,6 +437,13 @@ GET   /api/admin/errors
 GET   /api/admin/errors/{id}
 PATCH /api/admin/errors/{id}/status
 POST  /api/admin/errors/{id}/retry
+
+Glossary
+GET    /api/admin/glossary
+POST   /api/admin/glossary
+PUT    /api/admin/glossary/{id}
+PATCH  /api/admin/glossary/{id}/status
+DELETE /api/admin/glossary/{id}
 ```
 
 주의:
@@ -524,10 +532,10 @@ Parser부터 CUDA Embedding, DB Persistence, KeyInformation, Activation까지 �
 
 # 13. 테스트 기준
 
-현재 `feature/backend-db-update`에서 Backend / DB 핵심 suite:
+현재 `feature/backend-integration`에서 Backend / DB 핵심 suite:
 
 ```text
-48 / 48 PASS
+63 / 63 PASS
 ```
 
 포함:
@@ -537,6 +545,7 @@ Backend contracts
 Collection publish
 Document role
 Integration service
+Glossary contracts / API
 ```
 
 `tests/backend` 전체 discover는 현재 develop 기준 KeyInformation `application_period` 관련 기존 실패 3건이 존재한다.
