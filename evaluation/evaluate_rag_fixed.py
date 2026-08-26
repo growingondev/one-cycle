@@ -31,7 +31,7 @@ DEFAULT_RUN_NUMBER = "001"
 
 
 # ============================================================
-# 고정 평가 Dataset ↔ 문서 ID 매핑
+# 고정 평가 Dataset ↔ 문서 ID
 # ============================================================
 
 FIXED_DOCUMENT_IDS = {
@@ -141,6 +141,32 @@ def require_columns(
         )
 
 
+def is_successful_response(
+    value,
+) -> bool:
+    """
+    이미 정상 답변이 저장된 행인지 확인한다.
+
+    정상 답변:
+        response가 비어 있지 않고
+        [FIXED_RAG_ERROR]로 시작하지 않는 경우
+    """
+
+    text = str(
+        value or ""
+    ).strip()
+
+    if not text:
+        return False
+
+    if text.startswith(
+        "[FIXED_RAG_ERROR]"
+    ):
+        return False
+
+    return True
+
+
 # ============================================================
 # Git
 # ============================================================
@@ -248,6 +274,45 @@ def format_evidence(
 
 
 # ============================================================
+# LLM 서버 장애 판별
+# ============================================================
+
+def is_fatal_llm_server_error(
+    exc: Exception,
+) -> bool:
+    """
+    이후 문항을 계속 실행해도 전부 실패할 가능성이 높은
+    llama-server 장애인지 판별한다.
+
+    예:
+    - OOM으로 서버 프로세스 종료
+    - Connection refused
+    - Remote end closed connection
+    - 모델 로딩 중 503
+    """
+
+    text = (
+        f"{type(exc).__name__}: {exc}"
+        .lower()
+    )
+
+    fatal_markers = [
+        "connection refused",
+        "remote end closed connection",
+        "서버에 연결할 수 없습니다",
+        "loading model",
+        "status=503",
+        "code=503",
+        "connection reset",
+    ]
+
+    return any(
+        marker in text
+        for marker in fatal_markers
+    )
+
+
+# ============================================================
 # CLI
 # ============================================================
 
@@ -310,6 +375,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    parser.add_argument(
+        "--rerun-success",
+        action="store_true",
+        help=(
+            "이미 정상 답변이 있는 문항도 "
+            "다시 실행합니다."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -321,10 +395,8 @@ def main() -> None:
 
     args = parse_args()
 
-    dataset = (
-        normalize_dataset_name(
-            args.dataset
-        )
+    dataset = normalize_dataset_name(
+        args.dataset
     )
 
     document_id = (
@@ -334,7 +406,7 @@ def main() -> None:
     )
 
     # --------------------------------------------------------
-    # 평가셋 입력 경로
+    # 원본 평가셋
     # --------------------------------------------------------
 
     input_path = (
@@ -358,10 +430,6 @@ def main() -> None:
         )
     )
 
-    # --------------------------------------------------------
-    # Top-K 검사
-    # --------------------------------------------------------
-
     if (
         args.top_k is not None
         and args.top_k <= 0
@@ -371,7 +439,7 @@ def main() -> None:
         )
 
     # --------------------------------------------------------
-    # 일부 문항만 실행
+    # 특정 문항 선택
     # --------------------------------------------------------
 
     selected_question_ids = None
@@ -384,21 +452,38 @@ def main() -> None:
             if item.strip()
         }
 
-    # --------------------------------------------------------
-    # 결과 폴더 생성
-    # --------------------------------------------------------
-
     RESULT_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    # --------------------------------------------------------
-    # Excel 읽기
-    # --------------------------------------------------------
+    # ========================================================
+    # 중요:
+    # 기존 결과 파일이 있으면 그 파일을 이어서 사용한다.
+    # ========================================================
+
+    if result_path.is_file():
+
+        workbook_source = (
+            result_path
+        )
+
+        print(
+            "[RESUME] 기존 결과 파일을 이어서 사용합니다."
+        )
+
+    else:
+
+        workbook_source = (
+            input_path
+        )
+
+        print(
+            "[NEW] 원본 평가셋에서 새 결과를 시작합니다."
+        )
 
     wb = load_workbook(
-        input_path
+        workbook_source
     )
 
     if args.sheet not in wb.sheetnames:
@@ -410,10 +495,8 @@ def main() -> None:
         args.sheet
     ]
 
-    columns = (
-        find_columns(
-            ws
-        )
+    columns = find_columns(
+        ws
     )
 
     require_columns(
@@ -434,6 +517,10 @@ def main() -> None:
     )
 
     processed = 0
+    skipped = 0
+    failed = 0
+
+    server_stopped = False
 
     # --------------------------------------------------------
     # 실행 정보
@@ -457,6 +544,10 @@ def main() -> None:
 
     print(
         f"input       : {input_path}"
+    )
+
+    print(
+        f"workbook    : {workbook_source}"
     )
 
     print(
@@ -486,10 +577,6 @@ def main() -> None:
         ws.max_row + 1,
     ):
 
-        # ----------------------------------------------------
-        # question_id
-        # ----------------------------------------------------
-
         question_id = str(
             ws.cell(
                 row=row,
@@ -500,17 +587,12 @@ def main() -> None:
             or ""
         ).strip()
 
-        # 지정한 문항이 아니면 Skip
         if (
             selected_question_ids
             and question_id
             not in selected_question_ids
         ):
             continue
-
-        # ----------------------------------------------------
-        # user_input
-        # ----------------------------------------------------
 
         question = str(
             ws.cell(
@@ -523,6 +605,34 @@ def main() -> None:
         ).strip()
 
         if not question:
+            continue
+
+        # ====================================================
+        # 이미 성공한 문항은 유지
+        # ====================================================
+
+        existing_response = (
+            ws.cell(
+                row=row,
+                column=columns[
+                    "response"
+                ],
+            ).value
+        )
+
+        if (
+            not args.rerun_success
+            and is_successful_response(
+                existing_response
+            )
+        ):
+            print(
+                f"\n[{question_id}] "
+                "이미 정상 답변 존재 → SKIP"
+            )
+
+            skipped += 1
+
             continue
 
         print(
@@ -539,19 +649,16 @@ def main() -> None:
         # ====================================================
 
         try:
-            result = (
-                answer_question(
-                    dataset=dataset,
-                    question=question,
-                    top_k=args.top_k,
-                )
+
+            result = answer_question(
+                dataset=dataset,
+                question=question,
+                top_k=args.top_k,
             )
 
-            evidence = (
-                result.get(
-                    "evidence",
-                    [],
-                )
+            evidence = result.get(
+                "evidence",
+                [],
             )
 
             chunk_ids, contexts = (
@@ -560,10 +667,7 @@ def main() -> None:
                 )
             )
 
-            # -----------------------------------------------
-            # 검색 Chunk ID
-            # -----------------------------------------------
-
+            # 검색 Chunk
             ws.cell(
                 row=row,
                 column=columns[
@@ -572,10 +676,7 @@ def main() -> None:
                 value=chunk_ids,
             )
 
-            # -----------------------------------------------
             # 검색 Context
-            # -----------------------------------------------
-
             ws.cell(
                 row=row,
                 column=columns[
@@ -584,10 +685,7 @@ def main() -> None:
                 value=contexts,
             )
 
-            # -----------------------------------------------
-            # 생성 답변
-            # -----------------------------------------------
-
+            # 답변
             answer = str(
                 result.get(
                     "answer",
@@ -613,16 +711,24 @@ def main() -> None:
                 f"{answer[:120]}"
             )
 
+            processed += 1
+
         # ====================================================
         # 실패
         # ====================================================
 
         except Exception as exc:
 
-            print(
-                "  [실패] "
+            failed += 1
+
+            error_text = (
                 f"{type(exc).__name__}: "
                 f"{exc}"
+            )
+
+            print(
+                "  [실패] "
+                f"{error_text}"
             )
 
             ws.cell(
@@ -632,10 +738,52 @@ def main() -> None:
                 ],
                 value=(
                     "[FIXED_RAG_ERROR] "
-                    f"{type(exc).__name__}: "
-                    f"{exc}"
+                    f"{error_text}"
                 ),
             )
+
+            # -----------------------------------------------
+            # 현재 실패 문항까지 즉시 저장
+            # -----------------------------------------------
+
+            wb.save(
+                result_path
+            )
+
+            # -----------------------------------------------
+            # llama-server 자체 장애면
+            # 뒤 문항을 실행하지 않고 즉시 중단
+            # -----------------------------------------------
+
+            if is_fatal_llm_server_error(
+                exc
+            ):
+
+                server_stopped = True
+
+                print()
+                print(
+                    "=" * 78
+                )
+                print(
+                    "[평가 중단]"
+                )
+                print(
+                    "LLM 서버 연결 장애가 발생했습니다."
+                )
+                print(
+                    "이후 문항은 실행하지 않습니다."
+                )
+                print(
+                    "Gemma 서버를 재시작한 뒤 "
+                    "같은 명령을 다시 실행하면 "
+                    "성공한 문항은 자동으로 건너뜁니다."
+                )
+                print(
+                    "=" * 78
+                )
+
+                break
 
         # ----------------------------------------------------
         # 수행 시간
@@ -658,10 +806,7 @@ def main() -> None:
                 value=elapsed_ms,
             )
 
-        # ----------------------------------------------------
         # Run ID
-        # ----------------------------------------------------
-
         ws.cell(
             row=row,
             column=columns[
@@ -673,10 +818,7 @@ def main() -> None:
             ),
         )
 
-        # ----------------------------------------------------
         # Git Commit
-        # ----------------------------------------------------
-
         ws.cell(
             row=row,
             column=columns[
@@ -685,10 +827,7 @@ def main() -> None:
             value=current_commit,
         )
 
-        # ----------------------------------------------------
-        # 원본 고정 문서 경로
-        # ----------------------------------------------------
-
+        # 원본 문서
         if "source_file" in columns:
             ws.cell(
                 row=row,
@@ -702,22 +841,21 @@ def main() -> None:
                 ),
             )
 
-        processed += 1
-
-        # ----------------------------------------------------
-        # 질문 하나 처리할 때마다 저장
-        #
-        # 평가 중간에 서버가 종료되어도
-        # 이미 처리한 결과를 최대한 보존한다.
-        # ----------------------------------------------------
+        # ====================================================
+        # 질문 하나 끝날 때마다 즉시 저장
+        # ====================================================
 
         wb.save(
             result_path
         )
 
     # ========================================================
-    # 완료
+    # 마지막 저장
     # ========================================================
+
+    wb.save(
+        result_path
+    )
 
     print()
 
@@ -726,16 +864,33 @@ def main() -> None:
     )
 
     print(
-        "고정 문서 RAG 결과 수집 완료"
+        "고정 문서 RAG 결과 수집 종료"
     )
 
     print(
-        f"처리 문항 수 : {processed}"
+        f"신규 성공 : {processed}"
     )
 
     print(
-        f"결과 파일   : {result_path}"
+        f"기존 성공 SKIP : {skipped}"
     )
+
+    print(
+        f"실패 : {failed}"
+    )
+
+    print(
+        f"결과 파일 : {result_path}"
+    )
+
+    if server_stopped:
+        print(
+            "상태 : LLM 서버 장애로 중단"
+        )
+    else:
+        print(
+            "상태 : 정상 완료"
+        )
 
     print(
         "=" * 78
