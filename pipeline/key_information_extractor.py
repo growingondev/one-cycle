@@ -627,8 +627,16 @@ def _is_valid_supply_section(
         "supply_price",
         "rental_condition",
         "housing_information",
+        # Structure domain_rules.json에서 실제 사용하는 topic
+        "supply_target",
+        "supply_scale",
     }
     supply_categories = {"supply", "housing", "price"}
+
+    # 다른 용도로 이미 명확히 분류된 Section은 본문에 공급 관련 단어가
+    # 우연히 포함되어도 공급정보 후보로 재사용하지 않는다.
+    if category and category not in supply_categories:
+        return False
 
     strong_topic = topic in supply_topics
     title_match = _contains_keyword(
@@ -1311,97 +1319,195 @@ def _best_summary_line(
 def _build_eligibility_summary(
     matches: list[dict[str, Any]],
 ) -> str:
-    return _best_summary_line(
-        matches,
-        (
-            "\uBB34\uC8FC\uD0DD",
-            "\uC2E0\uCCAD\uC790\uACA9",
-            "\uC785\uC8FC\uC790",
-        ),
-        (
-            "\uBB34\uC8FC\uD0DD\uC138\uB300\uAD6C\uC131\uC6D0",
-            "\uB9CC19\uC138",
-            "\uAC70\uC8FC",
-            "\uBAA8\uC9D1\uACF5\uACE0\uC77C",
-        ),
-        220,
-    )
+    best: tuple[int, int, str] | None = None
+
+    for index, line in enumerate(_summary_lines(matches)):
+        cleaned = re.sub(r"^\s*[•▪■※*-]+\s*", "", line).strip()
+        normalized = _normalized_match_text(cleaned)
+
+        if not any(
+            _normalized_match_text(keyword) in normalized
+            for keyword in (
+                "무주택",
+                "신청자격",
+                "입주자격",
+                "모집공고일 현재",
+                "모두 갖춘 자",
+            )
+        ):
+            continue
+
+        score = 0
+        positive_weights = {
+            "모집공고일 현재": 35,
+            "무주택세대구성원": 35,
+            "무주택자로서": 30,
+            "아래의 요건": 25,
+            "모두 갖춘 자": 30,
+            "만19세": 15,
+            "거주": 10,
+            "청약종합저축": 10,
+            "신청자격": 10,
+            "입주자격": 10,
+        }
+        negative_weights = {
+            "자격 해당여부는": 50,
+            "이해를 돕기 위한": 50,
+            "참고자료": 40,
+            "확인하시기 바랍니다": 35,
+            "자세한 내용": 25,
+            "페이지": 15,
+        }
+
+        for keyword, weight in positive_weights.items():
+            if _normalized_match_text(keyword) in normalized:
+                score += weight
+
+        for keyword, weight in negative_weights.items():
+            if _normalized_match_text(keyword) in normalized:
+                score -= weight
+
+        candidate = (score, -index, _compact_summary(cleaned, 220))
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+
+    return best[2] if best is not None else ""
 
 
 def _build_supply_summary(
     matches: list[dict[str, Any]],
 ) -> str:
-    selected: list[str] = []
+    best: tuple[int, int, str] | None = None
 
-    for line in _summary_lines(matches):
-        normalized = (
-            _normalized_match_text(line)
+    for index, line in enumerate(_summary_lines(matches)):
+        cleaned = re.sub(r"^\s*[•▪■※*-]+\s*", "", line).strip()
+        normalized = _normalized_match_text(cleaned)
+
+        data_keywords = (
+            "세대",
+            "호수",
+            "주택형",
+            "전용면적",
+            "공급면적",
+            "임대보증금",
+            "월임대료",
+        )
+        data_count = sum(
+            1
+            for keyword in data_keywords
+            if _normalized_match_text(keyword) in normalized
         )
 
-        has_candidate = (
-            _normalized_match_text(
-                "\uC608\uBE44\uC785\uC8FC\uC790"
-            )
-            in normalized
-        )
+        # '공급대상 변경' 같은 안내문은 공급 데이터가 아니다.
+        if data_count == 0:
+            continue
 
-        has_households = (
-            _normalized_match_text(
-                "\uC138\uB300"
-            )
-            in normalized
-        )
-
-        if (
-            has_candidate
-            and has_households
+        if any(
+            _normalized_match_text(keyword) in normalized
+            for keyword in ("입주자격", "신청자격", "선정이 불가")
         ):
-            selected.append(
-                _compact_summary(
-                    line,
-                    160,
-                )
-            )
+            continue
 
-        if len(selected) >= 2:
-            break
+        # 표가 셀 단위로 풀린 경우의 단독 헤더는 요약으로 사용하지 않는다.
+        if len(cleaned) < 12 or not re.search(r"\d", cleaned):
+            continue
 
-    if selected:
-        return " / ".join(selected)
+        score = data_count * 25
+        for keyword, weight in {
+            "공급대상": 15,
+            "모집호수": 30,
+            "공급호수": 30,
+            "예비입주자": 15,
+            "임대보증금": 20,
+            "월임대료": 20,
+        }.items():
+            if _normalized_match_text(keyword) in normalized:
+                score += weight
 
-    return _best_summary_line(
-        matches,
-        (
-            "\uACF5\uAE09",
-            "\uC138\uB300",
-        ),
-        (
-            "\uACF5\uAE09\uB300\uC0C1",
-            "\uBAA8\uC9D1\uD638\uC218",
-            "\uC608\uBE44\uC785\uC8FC\uC790",
-        ),
-        220,
-    )
+        for keyword, weight in {
+            "입주자격": 40,
+            "신청자격": 40,
+            "새로 계약": 30,
+            "최대 거주기간": 25,
+            "제출서류": 40,
+            "면제": 50,
+            "변경이 불가": 50,
+            "감액": 30,
+            "증액": 30,
+            "용도로만 쓰이는": 50,
+            "공용면적": 40,
+            "불법양도": 60,
+            "전대자": 60,
+            "선정이 불가": 50,
+            "신청자의 세대구성원": 40,
+        }.items():
+            if _normalized_match_text(keyword) in normalized:
+                score -= weight
+
+        if score <= 0:
+            continue
+
+        candidate = (score, -index, _compact_summary(cleaned, 220))
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+
+    return best[2] if best is not None else ""
 
 
 def _build_income_asset_summary(
     matches: list[dict[str, Any]],
 ) -> str:
-    return _best_summary_line(
-        matches,
-        (
-            "\uC18C\uB4DD",
-            "\uC790\uC0B0",
-        ),
-        (
-            "\uAD00\uACC4\uC5C6\uC774",
-            "\uC18C\uB4DD\uAE30\uC900",
-            "\uC790\uC0B0\uAE30\uC900",
-            "\uCD1D\uC790\uC0B0",
-            "\uC790\uB3D9\uCC28",
-        ),
-        220,
-    )
+    best: tuple[int, int, str] | None = None
+
+    for index, line in enumerate(_summary_lines(matches)):
+        cleaned = re.sub(r"^\s*[•▪■※*-]+\s*", "", line).strip()
+        cleaned = re.sub(r"^\s*\d+[.)]?\s*", "", cleaned).strip()
+        cleaned = re.sub(
+            r"\[(?:완화조건|배제조건)\]\s*",
+            "",
+            cleaned,
+        ).strip()
+        normalized = _normalized_match_text(cleaned)
+
+        has_income = _normalized_match_text("소득") in normalized
+        has_asset = any(
+            _normalized_match_text(keyword) in normalized
+            for keyword in ("자산", "총자산", "자동차")
+        )
+        if not has_income and not has_asset:
+            continue
+
+        score = 0
+        positive_weights = {
+            "소득기준": 25,
+            "자산기준": 25,
+            "총자산": 25,
+            "자동차가액": 25,
+            "이하": 15,
+            "초과": 15,
+            "배제": 20,
+            "관계없이": 20,
+            "소유하고 있지 않을 것": 25,
+        }
+        negative_weights = {
+            "참고자료": 40,
+            "확인하시기 바랍니다": 30,
+            "자세한 내용": 20,
+        }
+
+        for keyword, weight in positive_weights.items():
+            if _normalized_match_text(keyword) in normalized:
+                score += weight
+
+        for keyword, weight in negative_weights.items():
+            if _normalized_match_text(keyword) in normalized:
+                score -= weight
+
+        candidate = (score, -index, _compact_summary(cleaned, 220))
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+
+    return best[2] if best is not None else ""
 
 
 def _extract_document_items(
@@ -1680,6 +1786,7 @@ _DATE_WITH_TIME_PATTERN = re.compile(
     r"(?P<year>\d{2,4})[.\-/년]\s*"
     r"(?P<month>\d{1,2})[.\-/월]\s*"
     r"(?P<day>\d{1,2})(?:일)?"
+    r"\s*\.?"
     r"(?:\s*\([^)]*\))?"
     r"\s*"
     r"(?:(?P<ampm>오전|오후)\s*)?"
@@ -1692,11 +1799,15 @@ _DATE_WITH_TIME_PATTERN = re.compile(
 
 _DATE_RANGE_PATTERN = re.compile(
     r"[‘’']?"
-    r"(?P<start_year>\d{2,4})[.\-/]\s*"
-    r"(?P<start_month>\d{1,2})[.\-/]\s*"
-    r"(?P<start_day>\d{1,2})"
+    # 시작일:
+    # 2026.09.10 / 2026-09-10 / 2026/09/10 / 2026년 9월 10일
+    r"(?P<start_year>\d{2,4})(?:[.\-/]|년)\s*"
+    r"(?P<start_month>\d{1,2})(?:[.\-/]|월)\s*"
+    r"(?P<start_day>\d{1,2})(?:일)?"
+    r"\s*\.?"
     r"(?:\s*\([^)]*\))?"
     r"\s*"
+    # 시간은 범위 인식을 위해 읽되, 최종 카드 값에는 저장하지 않는다.
     r"(?:(?P<start_ampm>오전|오후)\s*)?"
     r"(?P<start_hour>\d{1,2})?"
     r"(?::|시)?\s*"
@@ -1704,9 +1815,12 @@ _DATE_RANGE_PATTERN = re.compile(
     r"(?:분)?"
     r"\s*(?:~|∼|～|부터)\s*"
     r"[‘’']?"
-    r"(?:(?P<end_year>\d{2,4})[.\-/]\s*)?"
-    r"(?P<end_month>\d{1,2})[.\-/]\s*"
-    r"(?P<end_day>\d{1,2})"
+    # 종료 연도는 생략 가능하며, 생략 시 시작 연도를 상속한다.
+    # 9.11 / 9-11 / 9/11 / 9월 11일 모두 허용한다.
+    r"(?:(?P<end_year>\d{2,4})(?:[.\-/]|년)\s*)?"
+    r"(?P<end_month>\d{1,2})(?:[.\-/]|월)\s*"
+    r"(?P<end_day>\d{1,2})(?:일)?"
+    r"\s*\.?"
     r"(?:\s*\([^)]*\))?"
     r"\s*"
     r"(?:(?P<end_ampm>오전|오후)\s*)?"
@@ -1765,10 +1879,8 @@ def _format_date_time(
         f"{month:02d}-"
         f"{day:02d}"
     )
-
-    if time_value:
-        return f"{date_value}T{time_value}"
-
+    # 핵심정보 카드에는 시간대를 노출하지 않고 날짜만 저장한다.
+    # time_value는 원문의 날짜·시간 범위를 정확히 인식하기 위해 파싱만 한다.
     return date_value
 
 
@@ -2325,27 +2437,6 @@ def _build_generic_field(
     }
 
 
-def _build_supply_information(
-    matches: list[
-        dict[str, Any]
-    ],
-) -> dict[str, Any]:
-    """최종 공급정보 생성 전에 후보 Section을 한 번 더 검증한다."""
-
-    valid_matches = [
-        match
-        for match in matches
-        if _is_valid_supply_section(
-            match["_section"]
-        )
-    ]
-
-    return _build_generic_field(
-        "supply_information",
-        valid_matches,
-    )
-
-
 def _build_application_period(
     matches: list[
         dict[str, Any]
@@ -2409,13 +2500,23 @@ def _build_supply_information(
         dict[str, Any]
     ],
 ) -> dict[str, Any]:
+    """최종 공급정보 생성 전에 후보 Section을 한 번 더 검증한다."""
+
+    valid_matches = [
+        match
+        for match in matches
+        if _is_valid_supply_section(
+            match["_section"]
+        )
+    ]
+
     result = _build_generic_field(
         "supply_information",
-        matches,
+        valid_matches,
     )
     result["summary"] = (
         _build_supply_summary(
-            matches
+            valid_matches
         )
     )
     return result
