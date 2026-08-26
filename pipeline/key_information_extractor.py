@@ -232,6 +232,35 @@ INCOME_ASSET_KEYWORDS = FIELD_RULES[
 
 
 # ============================================================
+# supply_information 검증 규칙
+# ============================================================
+SUPPLY_TITLE_KEYWORDS = (
+    "공급정보", "공급 정보", "공급대상", "공급 대상",
+    "공급계획", "공급 계획", "공급내역", "공급 내역",
+    "공급현황", "공급 현황", "주택공급", "주택 공급",
+    "주택형별", "임대조건", "임대 조건",
+)
+
+SUPPLY_DATA_KEYWORDS = (
+    "주택형", "전용면적",
+    "공급호수", "공급 호수", "모집호수", "모집 호수",
+    "공급세대", "공급 세대", "공급세대수", "공급 세대수",
+    "모집세대", "모집 세대", "모집세대수", "모집 세대수",
+    "임대보증금", "임대 보증금", "월임대료", "월 임대료",
+    "임대조건", "임대 조건",
+    "공급위치", "공급 위치", "건설위치", "건설 위치",
+)
+
+SUPPLY_EXCLUSION_KEYWORDS = (
+    "개인정보 수집", "개인정보 이용", "개인정보 제공", "개인정보 처리",
+    "민감정보 수집", "민감정보 이용", "민감정보 활용",
+    "동의 거부", "동의여부", "동의 여부",
+    "제3자 제공", "개인정보의 제3자",
+    "보유·이용 기간", "보유 이용 기간",
+)
+
+
+# ============================================================
 # JSON
 # ============================================================
 def _load_json(path: Path) -> dict[str, Any]:
@@ -556,11 +585,97 @@ def _domain_info(
     )
 
 
+def _count_keyword_matches(
+    text: str,
+    keywords: Iterable[str],
+) -> int:
+    normalized_text = _normalized_match_text(text)
+    matched: set[str] = set()
+
+    for keyword in keywords:
+        normalized_keyword = _normalized_match_text(keyword)
+        if normalized_keyword and normalized_keyword in normalized_text:
+            matched.add(normalized_keyword)
+
+    return len(matched)
+
+
+def _is_valid_supply_section(
+    section: dict[str, Any],
+) -> bool:
+    """실제 공급정보 특징과 제외 문맥을 함께 사용해 supply Section을 검증한다."""
+
+    title_text = " ".join(
+        _deduplicate_texts(
+            (
+                _clean_text(section.get("title")),
+                _clean_text(section.get("normalized_title")),
+                _clean_text(section.get("search_title")),
+            )
+        )
+    )
+
+    body_text = _section_direct_text(section)
+    full_text = f"{title_text} {body_text}"
+
+    category, topic, _ = _domain_info(section)
+
+    supply_topics = {
+        "supply_information",
+        "supply_plan",
+        "housing_supply",
+        "supply_price",
+        "rental_condition",
+        "housing_information",
+    }
+    supply_categories = {"supply", "housing", "price"}
+
+    strong_topic = topic in supply_topics
+    title_match = _contains_keyword(
+        title_text,
+        SUPPLY_TITLE_KEYWORDS,
+    )
+    data_evidence_count = _count_keyword_matches(
+        full_text,
+        SUPPLY_DATA_KEYWORDS,
+    )
+    excluded_context = _contains_keyword(
+        full_text,
+        SUPPLY_EXCLUSION_KEYWORDS,
+    )
+
+    # 개인정보/민감정보/동의 문맥은 공급이라는 표현이 우연히 들어갈 수 있다.
+    # 실제 공급 데이터 특징이 충분하지 않으면 공급정보에서 제외한다.
+    if excluded_context and data_evidence_count < 2:
+        return False
+
+    # Structure의 구체적인 supply topic은 강한 근거로 사용한다.
+    if strong_topic:
+        return True
+
+    # 제목 자체가 명확한 공급정보 제목이면 인정한다.
+    if title_match:
+        return True
+
+    # 넓은 category만 있는 경우 실제 공급 데이터 특징을 함께 요구한다.
+    if category in supply_categories:
+        return data_evidence_count >= 1
+
+    # domain 분류가 없는 fallback은 실제 공급 데이터 특징이 2개 이상일 때만 인정한다.
+    return data_evidence_count >= 2
+
+
 def _score_section_for_field(
     section: dict[str, Any],
     field: str,
 ) -> int:
     rule = FIELD_RULES[field]
+
+    if (
+        field == "supply_information"
+        and not _is_valid_supply_section(section)
+    ):
+        return 0
 
     category, topic, confidence = (
         _domain_info(section)
@@ -1687,6 +1802,27 @@ def _build_generic_field(
             matches
         ),
     }
+
+
+def _build_supply_information(
+    matches: list[
+        dict[str, Any]
+    ],
+) -> dict[str, Any]:
+    """최종 공급정보 생성 전에 후보 Section을 한 번 더 검증한다."""
+
+    valid_matches = [
+        match
+        for match in matches
+        if _is_valid_supply_section(
+            match["_section"]
+        )
+    ]
+
+    return _build_generic_field(
+        "supply_information",
+        valid_matches,
+    )
 
 
 def _build_application_period(
