@@ -331,6 +331,29 @@ def score_domain_rule(
         score += weight
         matched.extend({"keyword": hit, "source": source_name, "weight": weight} for hit in hits)
 
+    # 같은 표현이 한 위치에서 반복되는 것보다 제목·본문·표 헤더처럼 서로
+    # 독립적인 위치에서 함께 발견되는 것을 더 강한 근거로 본다.
+    positive_sources = {
+        item["source"]
+        for item in matched
+        if item["source"] in {"title", "parent_title", "table_header", "content"}
+    }
+    minimum_sources = max(2, int(weights.get("evidence_bonus_min_sources", 2)))
+    if len(positive_sources) >= minimum_sources:
+        per_source_bonus = int(weights.get("evidence_source_bonus", 0))
+        max_bonus = int(weights.get("evidence_source_bonus_max", per_source_bonus * 2))
+        bonus = min(
+            max_bonus,
+            per_source_bonus * (len(positive_sources) - minimum_sources + 1),
+        )
+        if bonus:
+            score += bonus
+            matched.append({
+                "keyword": "+".join(sorted(positive_sources)),
+                "source": "evidence_bonus",
+                "weight": bonus,
+            })
+
     title_compact = compact_text(str(sources.get("title") or ""))
     for keyword in rule.get("title_keywords") or []:
         if title_compact and title_compact == compact_text(str(keyword)):
