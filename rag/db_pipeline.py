@@ -75,9 +75,8 @@ class DBRAGPipeline:
             )
 
         loaded_model = load_bge_m3_model(
-            model_name=(
-                retrieval_config.embedding_model_name
-            ),
+            model_name=retrieval_config.embedding_model_name,
+            model_path=retrieval_config.embedding_model_path,
             use_fp16=retrieval_config.use_fp16,
             require_cuda=retrieval_config.require_cuda,
             device_index=retrieval_config.device_index,

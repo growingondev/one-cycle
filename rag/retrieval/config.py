@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +17,16 @@ class RetrievalConfig:
     rrf_k: int = 60
     outputs_root: Path = OUTPUT_ROOT
     format_priority: tuple[str, ...] = DEFAULT_FORMAT_PRIORITY
-    embedding_model_name: str = "BAAI/bge-m3"
+    embedding_model_name: str = os.getenv(
+        "EMBEDDING_MODEL_NAME",
+        "BAAI/bge-m3",
+    ).strip()
+
+    embedding_model_path: str = os.getenv(
+        "EMBEDDING_MODEL_PATH",
+        "BAAI/bge-m3",
+    ).strip()
+
     query_batch_size: int = 1
     query_max_length: int = 8192
     use_fp16: bool = True
