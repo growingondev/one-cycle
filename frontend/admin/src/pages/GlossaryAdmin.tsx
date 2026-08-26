@@ -1,4 +1,7 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+// 💡 프로젝트 환경에 맞게 API_BASE_URL 또는 api helper를 import 하세요.
+// import { API_BASE_URL } from '../../config'; 
+const API_BASE_URL = '/api'; // 임시 설정 (실제 환경에 맞게 수정)
 
 export interface GlossaryItem {
   id: number;
@@ -8,22 +11,25 @@ export interface GlossaryItem {
   is_active: boolean;
 }
 
-const PAGE_SIZE = 5; // 한 페이지에 보여줄 개수
+const PAGE_SIZE = 5;
 
 export default function GlossaryAdmin() {
-  // 💡 1. 가라 데이터 삭제 후 초기값을 빈 배열([])로 변경
   const [terms, setTerms] = useState<GlossaryItem[]>([]);
   
-  // 검색 및 필터 State
+  // 검색, 필터, 페이징 State
   const [keyword, setKeyword] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  
   const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+
+  // 모달 및 폼 State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<GlossaryItem | null>(null);
-  const [formData, setFormData] = useState({ term: '', definition: '', category: '청약/자격', is_active: true });
+  const [formData, setFormData] = useState({ term: '', definition: '', category: '', is_active: true });
 
+  // 토스트 알림 State
   const [toast, setToast] = useState<{ message: string; id: number } | null>(null);
   const showToast = (message: string) => {
     const id = Date.now();
@@ -31,57 +37,41 @@ export default function GlossaryAdmin() {
     setTimeout(() => setToast((t) => (t?.id === id ? null : t)), 2500);
   };
 
-  // 💡 2. 백엔드 DB에서 데이터 불러오기 (GET)
-  const fetchGlossary = async () => {
+  // 💡 [GET] 목록 조회 (서버 페이지네이션 적용)
+  const fetchTerms = async () => {
     try {
-      // ⚠️ 백엔드 팀원이 설정한 조회용 API 주소로 맞춰주세요. (예: /api/glossary)
-      const response = await fetch('/api/glossary'); 
-      if (response.ok) {
-        const data = await response.json();
-        setTerms(data);
-      } else {
-        showToast('데이터를 불러오는데 실패했습니다.');
-      }
+      const params = new URLSearchParams({
+        page: String(page),
+        size: String(PAGE_SIZE)
+      });
+      if (keyword) params.set('search', keyword);
+      if (categoryFilter) params.set('category', categoryFilter);
+      if (statusFilter !== '') params.set('is_active', statusFilter);
+
+      // 인증 토큰이 필요하다면 headers에 Authorization을 추가해야 합니다.
+      const res = await fetch(`${API_BASE_URL}/admin/glossary?${params.toString()}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          // 'Authorization': `Bearer ${localStorage.getItem('admin_token')}` // 필요 시 주석 해제
+        }
+      });
+
+      if (!res.ok) throw new Error('데이터를 불러오는데 실패했습니다.');
+      
+      const data = await res.json();
+      setTerms(data.items || []); // 배열 대신 data.items 로 접근
+      setTotalPages(data.total_pages || 1);
+      setTotalCount(data.total || 0);
     } catch (error) {
       console.error(error);
-      showToast('서버와 연결할 수 없습니다.');
+      showToast('목록을 불러오는 중 오류가 발생했습니다.');
     }
   };
 
-  // 화면이 처음 켜질 때 딱 한 번 데이터 불러오기 실행
+  // 페이지나 필터가 바뀔 때마다 fetchTerms 실행
   useEffect(() => {
-    fetchGlossary();
-  }, []);
-
-  const { paginatedTerms, totalPages, stats } = useMemo(() => {
-    let filtered = terms;
-    if (keyword) {
-      filtered = filtered.filter(t => t.term.includes(keyword) || t.definition.includes(keyword));
-    }
-    if (categoryFilter) {
-      filtered = filtered.filter(t => t.category === categoryFilter);
-    }
-    if (statusFilter !== '') {
-      const isActive = statusFilter === 'true';
-      filtered = filtered.filter(t => t.is_active === isActive);
-    }
-
-    const totalPagesCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-    const currentPage = page > totalPagesCount ? 1 : page; 
-    const startIndex = (currentPage - 1) * PAGE_SIZE;
-    const paginated = filtered.slice(startIndex, startIndex + PAGE_SIZE);
-
-    return {
-      paginatedTerms: paginated,
-      totalPages: totalPagesCount,
-      stats: {
-        total: terms.length,
-        filteredTotal: filtered.length,
-        active: terms.filter(t => t.is_active).length,
-        inactive: terms.filter(t => !t.is_active).length,
-      }
-    };
-  }, [terms, keyword, categoryFilter, statusFilter, page]);
+    fetchTerms();
+  }, [page, keyword, categoryFilter, statusFilter]);
 
   const openModal = (item?: GlossaryItem) => {
     if (item) {
@@ -99,7 +89,7 @@ export default function GlossaryAdmin() {
     setEditingItem(null);
   };
 
-  // 💡 3. 데이터 저장/수정 (POST / PUT)
+  // 💡 [POST / PUT] 신규 추가 및 수정
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.term || !formData.definition) {
@@ -108,75 +98,73 @@ export default function GlossaryAdmin() {
     }
 
     try {
-      if (editingItem) {
-        // 기존 데이터 수정 (PUT)
-        const response = await fetch(`/api/glossary/${editingItem.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formData)
-        });
-        
-        if (response.ok) {
-          setTerms(terms.map(t => t.id === editingItem.id ? { ...t, ...formData } : t));
-          showToast('용어가 성공적으로 수정되었습니다.');
-        }
-      } else {
-        // 새 데이터 추가 (POST)
-        const response = await fetch('/api/glossary', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formData)
-        });
-        
-        if (response.ok) {
-          const newItem = await response.json(); // DB에서 생성된 id를 포함한 데이터 받기
-          setTerms([newItem, ...terms]);
-          setPage(1);
-          showToast('새로운 용어가 추가되었습니다.');
-        }
+      const url = editingItem 
+        ? `${API_BASE_URL}/admin/glossary/${editingItem.id}` 
+        : `${API_BASE_URL}/admin/glossary`;
+      
+      const method = editingItem ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData)
+      });
+
+      if (res.status === 409) {
+        showToast('이미 등록된 동일한 용어가 있습니다.');
+        return;
       }
+      if (!res.ok) throw new Error('저장 실패');
+
+      showToast(editingItem ? '용어가 수정되었습니다.' : '새 용어가 추가되었습니다.');
       closeModal();
+      setPage(1); // 저장 후 1페이지로 리프레시
+      fetchTerms();
     } catch (error) {
+      console.error(error);
       showToast('저장 중 오류가 발생했습니다.');
     }
   };
 
-  // 💡 4. 데이터 삭제 (DELETE)
+  // 💡 [DELETE] 용어 삭제
   const handleDelete = async (id: number) => {
     if (window.confirm('정말로 이 용어를 삭제하시겠습니까?')) {
       try {
-        const response = await fetch(`/api/glossary/${id}`, { method: 'DELETE' });
-        if (response.ok) {
-          setTerms(terms.filter(t => t.id !== id));
-          showToast('용어가 삭제되었습니다.');
-        }
+        const res = await fetch(`${API_BASE_URL}/admin/glossary/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('삭제 실패');
+        
+        showToast('용어가 삭제되었습니다.');
+        fetchTerms();
       } catch (error) {
+        console.error(error);
         showToast('삭제 중 오류가 발생했습니다.');
       }
     }
   };
 
-  // 💡 5. 활성화 상태 토글 (PATCH)
+  // 💡 [PATCH] 상태(ON/OFF) 변경
   const toggleStatus = async (id: number, currentStatus: boolean) => {
     try {
-      const response = await fetch(`/api/glossary/${id}`, {
+      const newStatus = !currentStatus;
+      const res = await fetch(`${API_BASE_URL}/admin/glossary/${id}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_active: !currentStatus })
+        body: JSON.stringify({ is_active: newStatus })
       });
-      
-      if (response.ok) {
-        setTerms(terms.map(t => t.id === id ? { ...t, is_active: !currentStatus } : t));
-        showToast(`상태가 ${currentStatus ? 'OFF' : 'ON'}로 변경되었습니다.`);
-      }
+
+      if (!res.ok) throw new Error('상태 변경 실패');
+
+      showToast(`상태가 ${newStatus ? 'ON' : 'OFF'}로 변경되었습니다.`);
+      fetchTerms(); // 상태 변경 후 목록 새로고침
     } catch (error) {
+      console.error(error);
       showToast('상태 변경 중 오류가 발생했습니다.');
     }
   };
 
   return (
     <main className="content relative">
-      {/* 토스트 메시지 UI */}
+      {/* 토스트 메시지 */}
       {toast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] bg-slate-800 text-white px-6 py-3 rounded-xl shadow-2xl text-[14px] font-bold flex items-center gap-2 animate-[fadeIn_0.2s_ease-out]">
           <span>🔔</span> {toast.message}
@@ -192,9 +180,7 @@ export default function GlossaryAdmin() {
       </div>
 
       <section className="stats">
-        <div className="card stat"><small>전체 등록 용어</small><strong>{stats.total}</strong></div>
-        <div className="card stat"><small>사용 중 (ON)</small><strong style={{ color: 'var(--green)' }}>{stats.active}</strong></div>
-        <div className="card stat"><small>미사용 (OFF)</small><strong style={{ color: 'var(--muted)' }}>{stats.inactive}</strong></div>
+        <div className="card stat"><small>전체 등록 용어</small><strong>{totalCount}</strong></div>
       </section>
       
       <section className="card filters" style={{ gridTemplateColumns: 'minmax(240px, 1fr) repeat(2, 1fr) auto' }}>
@@ -202,8 +188,8 @@ export default function GlossaryAdmin() {
           className="input wide" 
           placeholder="용어 또는 설명 검색" 
           value={keyword} 
-          onChange={(e) => { setKeyword(e.target.value); setPage(1); }}
-          onKeyDown={(e) => { if (e.key === 'Enter') setPage(1); }} 
+          onChange={(e) => { setKeyword(e.target.value); setPage(1); }} 
+          onKeyDown={(e) => e.key === 'Enter' && fetchTerms()}
         />
         <select className="select" value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); }}>
           <option value="">카테고리 전체</option>
@@ -212,20 +198,16 @@ export default function GlossaryAdmin() {
           <option value="주택/면적">주택/면적</option>
           <option value="주택/유형">주택/유형</option>
           <option value="청약/당첨">청약/당첨</option>
-          <option value="비용/계약">비용/계약</option>
         </select>
         <select className="select" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
           <option value="">활성화 상태 전체</option>
           <option value="true">사용 중 (ON)</option>
           <option value="false">미사용 (OFF)</option>
         </select>
-        <button className="btn btn-primary" onClick={() => setPage(1)}>검색</button>
+        <button className="btn btn-primary" onClick={() => fetchTerms()}>검색</button>
       </section>
 
       <section className="card table-card">
-        <div className="table-toolbar">
-          <b>검색 결과 {stats.filteredTotal}건</b>
-        </div>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
@@ -234,31 +216,28 @@ export default function GlossaryAdmin() {
                 <th style={{ width: '130px' }}>카테고리</th>
                 <th style={{ width: '160px' }}>용어</th>
                 <th>설명 (툴팁 내용)</th>
-                <th style={{ width: '100px', textAlign: 'center' }}>활성화 상태</th>
+                <th style={{ width: '100px', textAlign: 'center' }}>상태</th>
                 <th style={{ width: '140px', textAlign: 'center' }}>작업</th>
               </tr>
             </thead>
             <tbody>
-              {paginatedTerms.length > 0 ? (
-                paginatedTerms.map((t) => (
+              {terms.length > 0 ? (
+                terms.map((t) => (
                   <tr key={t.id}>
                     <td style={{ textAlign: 'center' }}>{t.id}</td>
                     <td>{t.category}</td>
                     <td className="title-cell" style={{ fontWeight: 700 }}>{t.term}</td>
-                    <td style={{ maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {t.definition}
-                    </td>
-                    <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                    <td style={{ maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.definition}</td>
+                    <td style={{ textAlign: 'center' }}>
                       <button 
                         className={`badge ${t.is_active ? 'green' : 'gray'}`} 
                         style={{ cursor: 'pointer', border: 'none', width: '60px' }}
                         onClick={() => toggleStatus(t.id, t.is_active)}
-                        title="클릭하여 상태 변경"
                       >
                         {t.is_active ? 'ON' : 'OFF'}
                       </button>
                     </td>
-                    <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                    <td style={{ textAlign: 'center' }}>
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                         <button className="btn btn-outline" style={{ height: '30px', padding: '0 10px', fontSize: '12px' }} onClick={() => openModal(t)}>수정</button>
                         <button className="btn btn-outline" style={{ height: '30px', padding: '0 10px', fontSize: '12px', color: '#ef4444', borderColor: '#fca5a5' }} onClick={() => handleDelete(t.id)}>삭제</button>
@@ -273,15 +252,10 @@ export default function GlossaryAdmin() {
           </table>
         </div>
         
-        {/* 페이지네이션 UI */}
         {totalPages > 1 && (
           <div className="pagination">
             {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
-              <button 
-                key={p} 
-                className={page === p ? "active" : ""} 
-                onClick={() => setPage(p)}
-              >
+              <button key={p} className={page === p ? "active" : ""} onClick={() => setPage(p)}>
                 {p}
               </button>
             ))}
@@ -289,7 +263,7 @@ export default function GlossaryAdmin() {
         )}
       </section>
 
-      {/* 모달 */}
+      {/* 모달 유지 */}
       {isModalOpen && (
         <div className="mobile-overlay show" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
           <div className="card" style={{ width: '100%', maxWidth: '500px', margin: '20px', padding: '32px' }}>
@@ -299,32 +273,24 @@ export default function GlossaryAdmin() {
             
             <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '14px', fontWeight: 700, marginBottom: '8px', color: 'var(--muted)' }}>카테고리 분류</label>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: 700, marginBottom: '8px' }}>카테고리</label>
                 <select className="select wide" value={formData.category} onChange={(e) => setFormData({...formData, category: e.target.value})}>
                   <option value="청약/자격">청약/자격</option>
                   <option value="소득/자산">소득/자산</option>
                   <option value="주택/면적">주택/면적</option>
                   <option value="주택/유형">주택/유형</option>
                   <option value="청약/당첨">청약/당첨</option>
-                  <option value="비용/계약">비용/계약</option>
                 </select>
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '14px', fontWeight: 700, marginBottom: '8px', color: 'var(--muted)' }}>용어 (단어)</label>
-                <input required className="input wide" placeholder="예: 무주택세대구성원" value={formData.term} onChange={(e) => setFormData({...formData, term: e.target.value})} />
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: 700, marginBottom: '8px' }}>용어 (단어)</label>
+                <input required className="input wide" value={formData.term} onChange={(e) => setFormData({...formData, term: e.target.value})} />
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '14px', fontWeight: 700, marginBottom: '8px', color: 'var(--muted)' }}>용어 설명 (툴팁 내용)</label>
-                <textarea required className="input wide" placeholder="용어에 대한 쉬운 설명을 입력하세요." value={formData.definition} onChange={(e) => setFormData({...formData, definition: e.target.value})} style={{ minHeight: '120px', resize: 'vertical', lineHeight: '1.5' }} />
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', padding: '12px', background: '#f8f9fc', borderRadius: '8px' }}>
-                <input type="checkbox" id="isActiveCheck" checked={formData.is_active} onChange={(e) => setFormData({...formData, is_active: e.target.checked})} style={{ width: '18px', height: '18px' }} />
-                <label htmlFor="isActiveCheck" style={{ fontSize: '14px', fontWeight: 600, cursor: 'pointer', color: 'var(--text)' }}>
-                  활성화 (체크 시 사용자 화면 챗봇 툴팁에 즉시 노출됩니다)
-                </label>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: 700, marginBottom: '8px' }}>설명</label>
+                <textarea required className="input wide" value={formData.definition} onChange={(e) => setFormData({...formData, definition: e.target.value})} style={{ minHeight: '120px' }} />
               </div>
 
               <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>

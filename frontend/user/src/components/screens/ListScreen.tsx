@@ -69,7 +69,10 @@ function inferNoticeType(
 
   return "주택공고";
 }
-
+function formatDate(dateString: string | null | undefined) {
+  if (!dateString) return "-";
+  return dateString.split('T')[0].replace(/-/g, '.');
+}
 
 export function ListScreen({
   go,
