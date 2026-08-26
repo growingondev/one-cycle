@@ -11,6 +11,7 @@ from backend.app.models.document_structure import DocumentStructure
 from backend.app.models.key_information import KeyInformation
 from backend.app.models.admin import Admin
 from backend.app.models.error_log import ErrorLog
+from backend.app.models.glossary import Glossary
 
 __all__ = [
     "CollectionRun",
@@ -26,4 +27,5 @@ __all__ = [
     "KeyInformation",
     "Admin",
     "ErrorLog",
+    "Glossary",
 ]

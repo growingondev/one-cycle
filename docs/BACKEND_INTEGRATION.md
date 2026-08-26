@@ -1,6 +1,6 @@
 # Backend Integration
 
-> 기준 시점: **2026-08-25**
+> 기준 시점: **2026-08-26**
 > 목적: Crawler / Document Processing / RAG와 Backend API / DB 사이의 **현재 실제 연결 계약**을 기록한다.
 >
 > 과거 초기 통합 과정은 `docs/BACKEND_DB_INTEGRATION_HISTORY.md`를 참고한다.
@@ -316,6 +316,7 @@ Document list/detail       PASS
 Document download          PASS
 ProcessingRun API          존재
 Error list/detail          PASS
+Glossary list              PASS (local runtime)
 ```
 
 주의:
@@ -332,11 +333,14 @@ Announcement recollect     연결
 Document reprocess         연결
 Error retry                ERROR_RETRY_RUNNER 미연결
 Collection publish         Admin API 없음
+Glossary CRUD              PASS (local runtime)
 ```
 
 ---
 
 # 12. AWS 실제 E2E
+
+> 최신 AWS Runtime 검증(2026-08-26): `docs/BACKEND_DB_RUNTIME_VALIDATION_20260826.md`
 
 실제 LH 수집:
 
@@ -395,10 +399,10 @@ Parser → BGE-M3 CUDA Embedding → Persistence → KeyInformation → Activati
 
 # 14. Backend / DB Contract Test
 
-현재 `feature/backend-db-update` 핵심 suite:
+현재 `feature/backend-integration` 핵심 suite:
 
 ```text
-48 / 48 PASS
+63 / 63 PASS
 ```
 
 검증 범위:
@@ -412,6 +416,7 @@ Pipeline Persistence 보호
 Collection Publish
 Document Role
 Integration Service
+Glossary contracts / API
 ```
 
 추가한 회귀:
@@ -437,7 +442,7 @@ unknown 재분류 / 관리자 검토
 문서 처리 Background Job / Queue
 ProcessingRun 실제 wall-clock timestamp 개선
 Collection Publish Admin API 여부 결정
-Glossary DB/API
+Glossary AWS migration/seed + Frontend API integration
 ```
 
 RAG/Chat 별도:

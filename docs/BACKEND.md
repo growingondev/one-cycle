@@ -1,6 +1,6 @@
 # Backend / DB 코드 가이드
 
-> 기준 시점: **2026-08-25**
+> 기준 시점: **2026-08-26**
 > 기준: `develop` 최신 통합 코드 + AWS EC2 실제 E2E 검증 결과
 > 목적: 현재 Backend / DB의 역할, 실제 연결 구조, 운영 기준과 인수인계 지점을 설명한다.
 >
@@ -411,6 +411,7 @@ llm
 GET  /api/announcements
 GET  /api/announcements/{id}
 POST /api/chat
+GET  /api/glossary
 ```
 
 ## 관리자
@@ -436,6 +437,13 @@ GET   /api/admin/errors
 GET   /api/admin/errors/{id}
 PATCH /api/admin/errors/{id}/status
 POST  /api/admin/errors/{id}/retry
+
+Glossary
+GET    /api/admin/glossary
+POST   /api/admin/glossary
+PUT    /api/admin/glossary/{id}
+PATCH  /api/admin/glossary/{id}/status
+DELETE /api/admin/glossary/{id}
 ```
 
 주의:
@@ -446,6 +454,8 @@ POST  /api/admin/errors/{id}/retry
 ---
 
 # 12. AWS 실제 E2E 검증
+
+> 최신 AWS Runtime 검증(2026-08-26): `docs/BACKEND_DB_RUNTIME_VALIDATION_20260826.md`
 
 2026-08-25 실제 LH 데이터 기준:
 
@@ -522,10 +532,10 @@ Parser부터 CUDA Embedding, DB Persistence, KeyInformation, Activation까지 �
 
 # 13. 테스트 기준
 
-현재 `feature/backend-db-update`에서 Backend / DB 핵심 suite:
+현재 `feature/backend-integration`에서 Backend / DB 핵심 suite:
 
 ```text
-48 / 48 PASS
+63 / 63 PASS
 ```
 
 포함:
@@ -535,6 +545,7 @@ Backend contracts
 Collection publish
 Document role
 Integration service
+Glossary contracts / API
 ```
 
 `tests/backend` 전체 discover는 현재 develop 기준 KeyInformation `application_period` 관련 기존 실패 3건이 존재한다.

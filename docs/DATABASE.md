@@ -1,6 +1,6 @@
 # Database Architecture
 
-> 기준 시점: **2026-08-25**
+> 기준 시점: **2026-08-26**
 > Stack: PostgreSQL 16 + pgvector + SQLAlchemy + Alembic
 > 목적: One-Cycle의 현재 DB 구조, Persistence, Active Dataset, Runtime RAG 연결을 설명한다.
 
@@ -63,10 +63,28 @@ Chunk
 Embedding
 KeyInformation
 ErrorLog
+Glossary
 SystemState
 ```
 
 실제 column / constraint / FK의 최종 기준은 ORM Model과 Alembic migration이다.
+
+## Glossary
+
+용어 사전은 다른 Collection 데이터와 독립된 운영 테이블이다.
+
+```text
+glossary
+├─ id PK
+├─ term VARCHAR(200) NOT NULL UNIQUE
+├─ definition TEXT NOT NULL
+├─ category VARCHAR(100) NOT NULL
+├─ is_active BOOLEAN NOT NULL DEFAULT true
+├─ created_at
+└─ updated_at
+```
+
+초기 Seed는 40개이며 `term` 기준 중복 없이 재실행 가능하도록 관리한다.
 
 ---
 
@@ -516,6 +534,8 @@ Similarity:
 
 # 20. AWS 실제 데이터 검증
 
+> 최신 AWS Runtime 검증(2026-08-26): `docs/BACKEND_DB_RUNTIME_VALIDATION_20260826.md`
+
 2026-08-25 실제 LH 수집:
 
 ```text
@@ -568,7 +588,7 @@ new ProcessingRun id=49
 
 ```text
 alembic heads
-→ 7564ce797c61 (head)
+→ 3d70b82ff082 (head)
 ```
 
 현재 단일 head다.
