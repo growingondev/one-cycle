@@ -293,9 +293,23 @@ class DBRAGPipeline:
         announcement_id: int,
         query: str,
     ) -> GeneratedAnswer:
-        retrieved = self.retrieve(
+        # hybrid_search.py가 DBRAGPipeline을 참조하므로
+        # 순환 import를 피하기 위해 지연 import한다.
+        from rag.retrieval.hybrid_search import (
+            HybridSearchConfig,
+            hybrid_search,
+        )
+
+        retrieved = hybrid_search(
+            pipeline=self,
             announcement_id=announcement_id,
             query=query,
+            config=HybridSearchConfig(
+                vector_top_k=self.retrieval_config.vector_top_k,
+                keyword_top_k=self.retrieval_config.bm25_top_k,
+                hybrid_top_k=self.retrieval_config.hybrid_top_k,
+                rrf_k=self.retrieval_config.rrf_k,
+            ),
         )
 
         if not retrieved:
@@ -304,25 +318,7 @@ class DBRAGPipeline:
                 f"announcement_id={announcement_id}"
             )
 
-        document_format = (
-            retrieved[0]
-            .item
-            .raw_metadata
-            .get("document_format")
-        )
-
-        if not document_format:
-            document_format = (
-                retrieved[0]
-                .search_result
-                .item
-                .raw_metadata
-                .get("document_format")
-            )
-
-        # 현재 Chunk 객체의 document_format을
-        # SearchResult 외부에서 별도로 보관하지 않으므로
-        # MVP 대표 문서 형식을 환경변수에서 사용한다.
+        # MVP 대표 문서 형식은 환경변수에서 사용한다.
         document_format = os.getenv(
             "MVP_DOCUMENT_FORMAT",
             "hwpx",
