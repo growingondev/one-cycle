@@ -23,6 +23,11 @@ MODEL_NAME = os.getenv(
     "BAAI/bge-m3",
 ).strip()
 
+MODEL_PATH = os.getenv(
+    "EMBEDDING_MODEL_PATH",
+    MODEL_NAME,
+).strip()
+
 TEXT_FIELD = "embedding_text"
 
 BATCH_SIZE = 8
