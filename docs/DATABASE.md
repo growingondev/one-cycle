@@ -1,6 +1,6 @@
 # Database Architecture
 
-> 기준 시점: **2026-08-25**
+> 기준 시점: **2026-08-26**
 > Stack: PostgreSQL 16 + pgvector + SQLAlchemy + Alembic
 > 목적: One-Cycle의 현재 DB 구조, Persistence, Active Dataset, Runtime RAG 연결을 설명한다.
 
@@ -515,6 +515,8 @@ Similarity:
 ---
 
 # 20. AWS 실제 데이터 검증
+
+> 최신 AWS Runtime 검증(2026-08-26): `docs/BACKEND_DB_RUNTIME_VALIDATION_20260826.md`
 
 2026-08-25 실제 LH 수집:
 

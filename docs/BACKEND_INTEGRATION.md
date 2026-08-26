@@ -1,6 +1,6 @@
 # Backend Integration
 
-> 기준 시점: **2026-08-25**
+> 기준 시점: **2026-08-26**
 > 목적: Crawler / Document Processing / RAG와 Backend API / DB 사이의 **현재 실제 연결 계약**을 기록한다.
 >
 > 과거 초기 통합 과정은 `docs/BACKEND_DB_INTEGRATION_HISTORY.md`를 참고한다.
@@ -337,6 +337,8 @@ Collection publish         Admin API 없음
 ---
 
 # 12. AWS 실제 E2E
+
+> 최신 AWS Runtime 검증(2026-08-26): `docs/BACKEND_DB_RUNTIME_VALIDATION_20260826.md`
 
 실제 LH 수집:
 

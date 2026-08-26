@@ -1,6 +1,6 @@
 # Backend / DB Integration History
 
-> 기준 시점: **2026-08-25**
+> 기준 시점: **2026-08-26**
 > 목적: Backend / DB 구현과 통합 과정에서 무엇을 바꿨고, 왜 바꿨으며, 어디까지 실제 Runtime으로 검증했는지 기록한다.
 >
 > 현재 코드 사용법은 `docs/BACKEND.md`, DB 구조는 `docs/DATABASE.md`, 현재 통합 계약은 `docs/BACKEND_INTEGRATION.md`를 우선한다.
@@ -257,7 +257,7 @@ Publish validation / activation 실패 시 ErrorLog를 기록하고 Integration 
 48 PASS
 ```
 
-이번에 최신 코드로 통합한 **전체 신규 수집 → Document 처리 → 자동 Publish orchestration** 전체 경로는 아직 AWS에서 다시 실행하여 Runtime 검증한 상태는 아니다.
+2026-08-26 AWS에서 전체 수집 → Document 처리 → 자동 Publish 경로의 Runtime 검증을 완료했다. 상세 결과는 `docs/BACKEND_DB_RUNTIME_VALIDATION_20260826.md`에서 확인할 수 있다.
 
 ---
 

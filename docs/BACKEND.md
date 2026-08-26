@@ -1,6 +1,6 @@
 # Backend / DB 코드 가이드
 
-> 기준 시점: **2026-08-25**
+> 기준 시점: **2026-08-26**
 > 기준: `develop` 최신 통합 코드 + AWS EC2 실제 E2E 검증 결과
 > 목적: 현재 Backend / DB의 역할, 실제 연결 구조, 운영 기준과 인수인계 지점을 설명한다.
 >
@@ -446,6 +446,8 @@ POST  /api/admin/errors/{id}/retry
 ---
 
 # 12. AWS 실제 E2E 검증
+
+> 최신 AWS Runtime 검증(2026-08-26): `docs/BACKEND_DB_RUNTIME_VALIDATION_20260826.md`
 
 2026-08-25 실제 LH 데이터 기준:
 
