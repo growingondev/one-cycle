@@ -70,6 +70,7 @@ function inferNoticeType(
   return "주택공고";
 }
 
+// 💡 날짜 표기 형식 (T 자르고 하이픈을 점으로 변경)
 function formatDateOnly(dateString: string | null | undefined) {
   if (!dateString || dateString.trim() === "") return "-";
   return dateString.split('T')[0].replace(/-/g, '.');
@@ -121,7 +122,6 @@ export function ListScreen({
       );
     }
 
-    // Nationwide means no region restriction.
     if (region !== "전국") {
       params.set(
         "region",
@@ -144,59 +144,27 @@ export function ListScreen({
     )
       .then(async (res) => {
         if (!res.ok) {
-          const text =
-            await res.text();
-
+          const text = await res.text();
           throw new Error(
             `Backend response error: ${res.status} ${res.statusText}\n${text}`
           );
         }
-
         return res.json();
       })
       .then((data) => {
-        if (
-          !Array.isArray(
-            data?.items
-          )
-        ) {
-          throw new Error(
-            "Unexpected announcement response"
-          );
+        if (!Array.isArray(data?.items)) {
+          throw new Error("Unexpected announcement response");
         }
-
-        setAnnouncements(
-          data.items
-        );
-
-        setTotal(
-          Number(
-            data.total ?? 0
-          )
-        );
-
-        setPages(
-          Math.max(
-            1,
-            Number(
-              data.total_pages ?? 0
-            )
-          )
-        );
+        setAnnouncements(data.items);
+        setTotal(Number(data.total ?? 0));
+        setPages(Math.max(1, Number(data.total_pages ?? 0)));
       })
       .catch((err) => {
-        console.error(
-          "Backend fetch error:",
-          err
-        );
-
+        console.error("Backend fetch error:", err);
         setAnnouncements([]);
         setTotal(0);
         setPages(1);
-
-        showToast(
-          "공고 목록을 불러오지 못했습니다."
-        );
+        showToast("공고 목록을 불러오지 못했습니다.");
       });
   }, [
     searchQuery,
@@ -327,7 +295,8 @@ export function ListScreen({
       </div>
 
       <div className="hidden lg:block bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-        <div className="grid grid-cols-[60px_100px_minmax(300px,1fr)_100px_110px_110px_100px] items-center h-[52px] bg-slate-50 border-b border-slate-200 text-[18px] font-bold text-slate-700 px-2 text-center">
+        {/* 💡 헤더: 7칸으로 맞추고 폰트 크기 20px로 상향 */}
+        <div className="grid grid-cols-[60px_100px_minmax(300px,1fr)_100px_110px_110px_100px] items-center h-[52px] bg-slate-50 border-b border-slate-200 text-[20px] font-bold text-slate-700 px-2 text-center">
           <div>번호</div>
           <div>유형</div>
           <div className="text-left px-4">공고명</div>
@@ -337,13 +306,14 @@ export function ListScreen({
           <div>상태</div>
         </div>
 
+        {/* 💡 본문: 7칸으로 맞추고 각 메타데이터 폰트 크기 2~3px씩 상향 */}
         {visible.map((a) => (
           <button
             key={a.id}
             onClick={() => goToDetail(a)}
-            className="w-full grid grid-cols-[60px_100px_minmax(300px,1fr)_100px_110px_110px_100px_40px] items-center min-h-[68px] border-b border-slate-100 bg-white hover:bg-blue-50/50 text-[13px] text-slate-700 transition-colors px-2 text-center"
+            className="w-full grid grid-cols-[60px_100px_minmax(300px,1fr)_100px_110px_110px_100px] items-center min-h-[68px] border-b border-slate-100 bg-white hover:bg-blue-50/50 text-[15px] text-slate-700 transition-colors px-2 text-center"
           >
-            <div className="font-bold text-[14px] text-slate-500">
+            <div className="font-bold text-[16px] text-slate-500">
               {a.notice_number || a.id}
             </div>
 
@@ -351,15 +321,13 @@ export function ListScreen({
               {a.notice_type || "유형없음"}
             </div>
 
-            <div className="px-4 font-semibold text-[15px] text-slate-900 leading-relaxed text-left break-keep">
+            <div className="px-4 font-semibold text-[17px] text-slate-900 leading-relaxed text-left break-keep">
               {formatAnnouncementTitle(a.title)}
             </div>
 
             <div>
               {a.region ?? "-"}
             </div>
-
-            {/* 에러 수정: 괄호를 씌워서 처리 */}
             
             <div>
               {formatDateOnly(a.post_date || a.announcementDate)}
@@ -374,8 +342,6 @@ export function ListScreen({
                 {formatPublicationStatus(a.publication_status || a.publicationStatus)}
               </StatusPill>
             </div>
-
-            <div className="text-slate-400 text-xl">›</div>
           </button>
         ))}
 
@@ -390,17 +356,16 @@ export function ListScreen({
           page={page}
           onChange={(p) => {
             setPage(p);
-
             window.scrollTo({
               top: 0,
               behavior: "smooth",
             });
-
             showToast(`${p}페이지로 이동했습니다.`);
           }}
         />
       </div>
 
+      {/* 💡 모바일 뷰: 메타데이터 글자 크기 2~3px 상향 조정 */}
       <div className="flex flex-col gap-3 lg:hidden">
         {visible.map((a) => (
           <button
@@ -410,19 +375,18 @@ export function ListScreen({
           >
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-blue-600 bg-blue-50 px-2 py-0.5 rounded text-[11px] font-bold">{a.notice_type || "유형없음"}</span>
+                <span className="text-blue-600 bg-blue-50 px-2 py-0.5 rounded text-[13px] font-bold">{a.notice_type || "유형없음"}</span>
                 <StatusPill>
                   {formatPublicationStatus(a.publication_status || a.publicationStatus)}
                 </StatusPill>
               </div>
 
-              <strong className="block text-[15px] font-extrabold text-slate-900 leading-snug mb-2.5 break-keep">
+              <strong className="block text-[17px] font-extrabold text-slate-900 leading-snug mb-2.5 break-keep">
                 {formatAnnouncementTitle(a.title)}
               </strong>
 
-              <div className="flex flex-col gap-1 text-[12px] text-slate-500">
+              <div className="flex flex-col gap-1 text-[14px] text-slate-500">
                 <span>📍 {a.region ?? "-"}</span>
-                {/* 에러 수정: 괄호를 씌워서 처리 */}
                 <span>📅 {formatDateOnly(a.post_date || a.announcementDate)} ~ {formatDateOnly(a.deadlineDate || a.deadline_date)}</span>
               </div>
             </div>
@@ -445,12 +409,10 @@ export function ListScreen({
           page={page}
           onChange={(p) => {
             setPage(p);
-
             window.scrollTo({
               top: 0,
               behavior: "smooth",
             });
-
             showToast(`${p}페이지로 이동했습니다.`);
           }}
         />
