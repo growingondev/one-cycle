@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 // 💡 프로젝트 환경에 맞게 API_BASE_URL 또는 api helper를 import 하세요.
 // import { API_BASE_URL } from '../../config'; 
 const API_BASE_URL = '/api'; // 임시 설정 (실제 환경에 맞게 수정)
@@ -27,6 +27,13 @@ export default function GlossaryAdmin() {
   // 모달 및 폼 State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<GlossaryItem | null>(null);
+  const formRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isModalOpen && formRef.current) {
+      formRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [isModalOpen]);
   const [formData, setFormData] = useState({ term: '', definition: '', category: '', is_active: true });
 
   // 토스트 알림 State
@@ -266,7 +273,7 @@ export default function GlossaryAdmin() {
       {/* 모달 유지 */}
       {isModalOpen && (
         <div className="mobile-overlay show" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-          <div className="card" style={{ width: '100%', maxWidth: '500px', margin: '20px', padding: '32px' }}>
+          <div ref={formRef} className="card" style={{ width: '100%', maxWidth: '500px', margin: '20px', padding: '32px' }}>
             <h2 style={{ fontSize: '22px', fontWeight: 800, marginBottom: '24px', color: 'var(--text)' }}>
               {editingItem ? '용어 수정' : '신규 용어 추가'}
             </h2>

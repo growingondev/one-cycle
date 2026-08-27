@@ -19,11 +19,10 @@ export function UserLayout({ screen, go, showToast, children }: { screen: Screen
       {/* 1. 데스크톱 좌측 사이드바 */}
       <aside className="hidden lg:flex fixed left-0 top-0 bottom-0 w-[270px] xl:w-[280px] border-r border-slate-200 bg-white flex-col z-10 px-4 py-10">
         <Logo />
-      <nav className="mt-8 flex flex-col gap-3">
+        <nav className="mt-8 flex flex-col gap-3">
           {[
             { id: "list", icon: "list", label: "공고 목록" },
-            { id: "guide", icon: "guide", label: "이용 안내" },
-            { id: "glossary", icon: "glossary", label: "용어 설명" }
+            { id: "guide", icon: "guide", label: "이용 안내" }
           ].map((item) => (
             <button
               key={item.id}
@@ -63,11 +62,10 @@ export function UserLayout({ screen, go, showToast, children }: { screen: Screen
       </main>
 
       {/* 4. 모바일 하단 네비게이션 */}
-      <nav className="lg:hidden fixed bottom-0 w-full h-[70px] bg-white border-t border-slate-200 shadow-[0_-4px_14px_rgba(0,0,0,0.03)] grid grid-cols-3 z-50">
+      <nav className="lg:hidden fixed bottom-0 w-full h-[70px] bg-white border-t border-slate-200 shadow-[0_-4px_14px_rgba(0,0,0,0.03)] grid grid-cols-2 z-50">
         {[
           { id: "list", icon: "list", label: "공고 목록" },
-          { id: "guide", icon: "guide", label: "이용 안내" },
-          { id: "glossary", icon: "glossary", label: "용어 설명" }
+          { id: "guide", icon: "guide", label: "이용 안내" }
         ].map((item) => (
           <button
             key={item.id}

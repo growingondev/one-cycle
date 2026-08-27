@@ -7,7 +7,8 @@ import {
   FileText,
   FileStack,
   ChevronDown,
-  ChevronUp,
+  ChevronUp, 
+  Download,
 } from "lucide-react";
 
 import { UserLayout } from "../layout/UserLayout";
@@ -435,6 +436,16 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
     }
   };
 
+  const handleDownload = () => {
+    // 💡 백엔드에서 넘겨주는 파일 URL 변수명에 맞게 수정하세요 (예: currentNotice.pdfUrl, file_url 등)
+    const downloadUrl = currentNotice.file_url || currentNotice.pdfUrl; 
+    
+    if (downloadUrl) {
+      window.open(downloadUrl, "_blank"); // 새 창에서 파일 열기/다운로드
+    } else {
+      showToast("현재 이 공고는 다운로드할 수 있는 원본 파일이 없습니다.");
+    }
+  };
 
   /* =========================
      로딩
@@ -620,6 +631,15 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
             </div>
             <strong className="text-[17px] lg:text-[20px] text-slate-900 leading-snug">{toDisplayText(currentNotice.title, "공고명 없음")}</strong>
           </div>
+          <div className="flex-shrink-0 pt-1 lg:pt-0">
+          <button
+            onClick={handleDownload}
+            className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2.5 rounded-lg text-[14px] lg:text-[15px] font-bold hover:bg-slate-900 transition-colors shadow-sm"
+          >
+            <Download size={18} />
+            공고문 다운로드
+          </button>
+        </div>
 
           <div className="text-[13px] lg:text-[15px] text-slate-500 mt-3">
             <span className="mr-2">게시일</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayAnnouncementDate, "-")}</span>
