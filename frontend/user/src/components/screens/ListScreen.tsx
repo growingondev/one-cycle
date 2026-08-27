@@ -69,8 +69,9 @@ function inferNoticeType(
 
   return "주택공고";
 }
-function formatDate(dateString: string | null | undefined) {
-  if (!dateString) return "-";
+
+function formatDateOnly(dateString: string | null | undefined) {
+  if (!dateString || dateString.trim() === "") return "-";
   return dateString.split('T')[0].replace(/-/g, '.');
 }
 
@@ -365,7 +366,11 @@ export function ListScreen({
             </div>
             
             <div>
-              {a.deadlineDate ?? a.deadline_date ?? "-"}
+              {formatDateOnly(a.post_date || a.announcementDate)}
+            </div>
+            
+            <div>
+              {formatDateOnly(a.deadlineDate || a.deadline_date)}
             </div>
 
             <div>
@@ -422,7 +427,7 @@ export function ListScreen({
               <div className="flex flex-col gap-1 text-[12px] text-slate-500">
                 <span>📍 {a.region ?? "-"}</span>
                 {/* 에러 수정: 괄호를 씌워서 처리 */}
-                <span>📅 {(a.post_date || a.announcementDate) ?? "-"} ~ {a.deadlineDate ?? a.deadline_date ?? "-"}</span>
+                <span>📅 {formatDateOnly(a.post_date || a.announcementDate)} ~ {formatDateOnly(a.deadlineDate || a.deadline_date)}</span>
               </div>
             </div>
 
