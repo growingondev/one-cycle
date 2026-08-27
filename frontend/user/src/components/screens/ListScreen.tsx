@@ -69,8 +69,9 @@ function inferNoticeType(
 
   return "주택공고";
 }
-function formatDate(dateString: string | null | undefined) {
-  if (!dateString) return "-";
+
+function formatDateOnly(dateString: string | null | undefined) {
+  if (!dateString || dateString.trim() === "") return "-";
   return dateString.split('T')[0].replace(/-/g, '.');
 }
 
@@ -326,7 +327,7 @@ export function ListScreen({
       </div>
 
       <div className="hidden lg:block bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-        <div className="grid grid-cols-[60px_100px_minmax(300px,1fr)_100px_110px_110px_100px_40px] items-center h-[52px] bg-slate-50 border-b border-slate-200 text-[18px] font-bold text-slate-700 px-2 text-center">
+        <div className="grid grid-cols-[60px_100px_minmax(300px,1fr)_100px_110px_110px_100px] items-center h-[52px] bg-slate-50 border-b border-slate-200 text-[18px] font-bold text-slate-700 px-2 text-center">
           <div>번호</div>
           <div>유형</div>
           <div className="text-left px-4">공고명</div>
@@ -334,7 +335,6 @@ export function ListScreen({
           <div>게시일</div>
           <div>마감일</div>
           <div>상태</div>
-          <div></div>
         </div>
 
         {visible.map((a) => (
@@ -360,12 +360,13 @@ export function ListScreen({
             </div>
 
             {/* 에러 수정: 괄호를 씌워서 처리 */}
+            
             <div>
-              {(a.post_date || a.announcementDate) ?? "-"}
+              {formatDateOnly(a.post_date || a.announcementDate)}
             </div>
             
             <div>
-              {a.deadlineDate ?? a.deadline_date ?? "-"}
+              {formatDateOnly(a.deadlineDate || a.deadline_date)}
             </div>
 
             <div>
@@ -422,7 +423,7 @@ export function ListScreen({
               <div className="flex flex-col gap-1 text-[12px] text-slate-500">
                 <span>📍 {a.region ?? "-"}</span>
                 {/* 에러 수정: 괄호를 씌워서 처리 */}
-                <span>📅 {(a.post_date || a.announcementDate) ?? "-"} ~ {a.deadlineDate ?? a.deadline_date ?? "-"}</span>
+                <span>📅 {formatDateOnly(a.post_date || a.announcementDate)} ~ {formatDateOnly(a.deadlineDate || a.deadline_date)}</span>
               </div>
             </div>
 
