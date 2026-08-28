@@ -764,3 +764,164 @@ E2E                         PENDING
 따라서 현재 시점에는 기존 Python direct call을 유지한다.
 
 각 Service Endpoint가 구현된 후 `develop-api`에서 실제 HTTP Runtime 전환과 통합 검증을 진행한다.
+
+---
+
+## 21. 2026-08-28 Backend Document Worker Orchestration 준비
+
+Document Worker의 실제 HTTP Endpoint 구현 전에 Backend 측 Worker 연동 및 Persistence 책임을 구현했다.
+
+이번 단계에서는 기존 MVP Runtime의 `DOCUMENT_REPROCESSOR` 직접 호출은 변경하지 않았다.
+
+### 구현한 Backend 처리 흐름
+
+신규 Service:
+
+~~~text
+backend/app/services/document_processing_service.py
+~~~
+
+처리 흐름:
+
+~~~text
+DB Document Context 조회
+→ Document Worker HTTP Client
+→ Worker Response Contract 검증
+→ output_path 기준 Artifact 검증/Persistence
+→ inactive ProcessingRun 생성
+→ Key Information DB 저장
+→ ProcessingRun 활성화
+~~~
+
+Worker Response의 다음 식별값도 요청한 DB Context와 일치하는지 검증한다.
+
+~~~text
+document_id
+announcement_id
+announcement_key
+document_format
+~~~
+
+### Worker 결과 Persistence
+
+기존 `pipeline_persistence.py`를 확장하여 Worker Response의 `output_path`를 선택적으로 사용할 수 있게 했다.
+
+기존 MVP 호출은 그대로 유지한다.
+
+~~~text
+persist_document_outputs(document_id)
+~~~
+
+API 버전에서는 다음 방식으로 Worker Artifact 경로를 전달할 수 있다.
+
+~~~text
+persist_document_outputs(
+    document_id,
+    output_root_path=response.output_path,
+)
+~~~
+
+Worker의 `summary.chunk_count`, `summary.embedding_count`와 실제 DB Persistence 결과도 비교한다.
+
+불일치 시 새 ProcessingRun을 활성화하지 않고 failed 상태로 기록한다.
+
+### ProcessingRun 실패 처리
+
+ProcessingRun 생성 이후 다음 단계에서 오류가 발생하면 새 Run을 failed 처리한다.
+
+~~~text
+persistence summary validation
+key_information persistence
+activation
+~~~
+
+기존 active ProcessingRun은 유지한다.
+
+Artifact Persistence transaction 자체가 실패하여 유효한 새 `processing_run_id`가 없는 경우에는 존재하지 않는 ProcessingRun을 임의로 failed 처리하지 않는다.
+
+### Shared Volume 경로 처리
+
+Docker 서비스 계약은 기존대로 다음 경로를 사용한다.
+
+~~~text
+/data/documents
+/data/outputs
+~~~
+
+Windows 로컬 Python에서는 `/data/...`를 `C:\data\...`로 잘못 해석할 수 있으므로 암묵적인 경로 변환을 하지 않는다.
+
+Windows host에서는 Docker POSIX 경로 직접 접근을 명시적으로 차단하고, 실제 API 통합 시 Backend와 Worker Container가 동일 `/data/...` 경로를 사용한다.
+
+Worker `output_path`는 다음 경로 식별값도 검증한다.
+
+~~~text
+{announcement_key}
+/document_{document_id}
+~~~
+
+### 테스트
+
+신규 테스트:
+
+~~~text
+tests/backend/test_document_processing_service.py
+tests/backend/test_pipeline_persistence_paths.py
+~~~
+
+검증 결과:
+
+~~~text
+Document Worker / Persistence 관련 테스트
+Ran 18 tests
+OK
+
+관련 Backend 회귀 테스트
+Ran 53 tests
+OK
+
+전체 Backend 테스트
+Ran 106 tests
+FAILED (failures=4)
+~~~
+
+전체 테스트의 4개 실패는 이전 Phase 1부터 존재한 기존 KeyInformationExtractor 테스트와 동일하다.
+
+~~~text
+test_application_period
+test_application_period_korean_ampm_range
+test_application_period_labeled_range
+test_supply_summary_is_compact
+~~~
+
+이번 Backend Worker Orchestration 작업으로 새롭게 발생한 회귀 실패는 확인되지 않았다.
+
+### 현재 구현 상태
+
+~~~text
+Backend Worker HTTP Client        IMPLEMENTED
+Backend Worker Orchestration      IMPLEMENTED
+Worker Artifact Persistence       IMPLEMENTED
+
+Document Worker Endpoint          PENDING
+Backend Runtime Cutover           PENDING
+Docker Compose Integration        PENDING
+E2E                               PENDING
+~~~
+
+실제 Worker Endpoint가 준비될 때까지 Runtime은 기존 구조를 유지한다.
+
+현재:
+
+~~~text
+DOCUMENT_REPROCESSOR
+→ Python callable
+~~~
+
+향후:
+
+~~~text
+Backend
+→ process_document_with_worker()
+→ Document Worker HTTP
+→ Backend Persistence
+~~~
