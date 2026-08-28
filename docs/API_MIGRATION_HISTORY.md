@@ -1425,3 +1425,98 @@ RAG Endpoint                      PENDING
 ~~~
 
 실제 RAG Endpoint가 구현되기 전까지는 `RAG_RUNTIME=rag_http`로 기본값을 전환하지 않는다.
+
+## 26. 2026-08-29 Backend Service Boundary 직접 의존성 정리
+
+Backend API 서비스 분리 기준에 맞춰 Backend가 다른 Service 구현 모듈을 Python import로 직접 참조하는 경로를 추가 점검하고 정리했다.
+
+### 변경 내용
+
+`collection_publish_service.py`는 기존에 RAG 내부 설정 모듈을 직접 참조하고 있었다.
+
+~~~text
+Backend
+→ rag.retrieval.config.DEFAULT_RETRIEVAL_CONFIG
+→ embedding_model_name
+~~~
+
+서비스 분리 이후 Backend가 RAG 내부 Python 구현에 의존하지 않도록 해당 참조를 제거했다.
+
+변경 후:
+
+~~~text
+Backend
+→ backend.app.core.config.Settings
+→ embedding_model_name
+~~~
+
+`Settings`에 다음 기본 설정을 추가했다.
+
+~~~text
+embedding_model_name = BAAI/bge-m3
+~~~
+
+따라서 Embedding 모델 이름이 필요한 Backend 검증 로직은 Backend 자체 설정을 사용하며 RAG 구현 모듈을 import하지 않는다.
+
+### Service Boundary 점검
+
+Backend 전체 Python 코드를 기준으로 다음 직접 import를 검색했다.
+
+~~~text
+rag
+document_worker
+services.embedding
+pipeline.embedding
+~~~
+
+검색 결과:
+
+~~~text
+직접 Python import 0건
+~~~
+
+기존 MVP 호환을 위해 남아 있는 `RAG_ANSWER_FUNCTION`, `DOCUMENT_REPROCESSOR` 기반 legacy runtime은 실제 Runtime Cutover 전까지 유지한다.
+
+이는 서비스 구현 모듈에 대한 일반 direct import와 별도로 관리한다.
+
+### 검증 결과
+
+관련 Collection Publish 테스트:
+
+~~~text
+6 tests PASS
+~~~
+
+전체 Backend 회귀 테스트:
+
+~~~text
+Ran 113 tests
+
+PASS: 109
+FAIL: 4
+~~~
+
+실패 4건은 기존 KeyInformationExtractor 관련 테스트와 동일하다.
+
+~~~text
+test_application_period
+test_application_period_korean_ampm_range
+test_application_period_labeled_range
+test_supply_summary_is_compact
+~~~
+
+이번 Service Boundary 정리로 새로 발생한 Backend 회귀 실패는 없다.
+
+현재 Backend API 분리 상태:
+
+~~~text
+Backend HTTP Client                 IMPLEMENTED
+Backend Worker Orchestration        IMPLEMENTED
+Backend Worker Artifact Persist     IMPLEMENTED
+Backend Document Runtime Switch     IMPLEMENTED
+Backend RAG Runtime Switch          IMPLEMENTED
+Backend Service Boundary Cleanup    IMPLEMENTED
+
+Actual Document Runtime Cutover     PENDING
+Actual RAG Runtime Cutover          PENDING
+~~~

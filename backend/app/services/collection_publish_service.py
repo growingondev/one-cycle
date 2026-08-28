@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from backend.app.core.config import settings
 from backend.app.db.session import SessionLocal
 from backend.app.models.announcement import Announcement
 from backend.app.models.chunk import Chunk
@@ -20,12 +21,8 @@ from backend.app.services.document_role_service import (
     DOCUMENT_ROLE_SUPPORTING,
     DOCUMENT_ROLE_UNKNOWN,
 )
-from rag.retrieval.config import DEFAULT_RETRIEVAL_CONFIG
 
-
-RAG_EMBEDDING_MODEL_NAME = (
-    DEFAULT_RETRIEVAL_CONFIG.embedding_model_name
-)
+RAG_EMBEDDING_MODEL_NAME = settings.embedding_model_name
 
 
 def _validate_primary_document_for_publish(

@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     postgres_user: str = "one_cycle"
     postgres_password: str = "change_me"
 
+    embedding_model_name: str = "BAAI/bge-m3"
+
     # Internal Docker HTTP Services
     rag_service_base_url: str = ""
     rag_service_timeout_seconds: float = 60.0
