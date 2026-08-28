@@ -566,12 +566,17 @@ Shared Volume Direction   CONFIRMED
 현재 구현 상태:
 
 ~~~text
-Backend HTTP Client       IMPLEMENTED
-Document Worker Endpoint  PENDING
-RAG Endpoint              PENDING
-Embedding Endpoint        PENDING
-Docker Compose Integration PENDING
-E2E                       PENDING
+Backend HTTP Client               IMPLEMENTED
+Backend Worker Orchestration      IMPLEMENTED
+Backend Worker Artifact Persist   IMPLEMENTED
+
+Document Worker Endpoint          PARTIAL
+RAG Endpoint                      PENDING
+Embedding Endpoint                IMPLEMENTED
+
+Backend Runtime Cutover           PENDING
+Docker Compose Integration        PENDING
+E2E                               PENDING
 ~~~
 
 계약 확정과 Endpoint 구현 완료는 서로 다른 상태로 관리한다.

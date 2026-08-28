@@ -764,3 +764,414 @@ E2E                         PENDING
 따라서 현재 시점에는 기존 Python direct call을 유지한다.
 
 각 Service Endpoint가 구현된 후 `develop-api`에서 실제 HTTP Runtime 전환과 통합 검증을 진행한다.
+
+---
+
+## 21. 2026-08-28 Backend Document Worker Orchestration 준비
+
+Document Worker의 실제 HTTP Endpoint 구현 전에 Backend 측 Worker 연동 및 Persistence 책임을 구현했다.
+
+이번 단계에서는 기존 MVP Runtime의 `DOCUMENT_REPROCESSOR` 직접 호출은 변경하지 않았다.
+
+### 구현한 Backend 처리 흐름
+
+신규 Service:
+
+~~~text
+backend/app/services/document_processing_service.py
+~~~
+
+처리 흐름:
+
+~~~text
+DB Document Context 조회
+→ Document Worker HTTP Client
+→ Worker Response Contract 검증
+→ output_path 기준 Artifact 검증/Persistence
+→ inactive ProcessingRun 생성
+→ Key Information DB 저장
+→ ProcessingRun 활성화
+~~~
+
+Worker Response의 다음 식별값도 요청한 DB Context와 일치하는지 검증한다.
+
+~~~text
+document_id
+announcement_id
+announcement_key
+document_format
+~~~
+
+### Worker 결과 Persistence
+
+기존 `pipeline_persistence.py`를 확장하여 Worker Response의 `output_path`를 선택적으로 사용할 수 있게 했다.
+
+기존 MVP 호출은 그대로 유지한다.
+
+~~~text
+persist_document_outputs(document_id)
+~~~
+
+API 버전에서는 다음 방식으로 Worker Artifact 경로를 전달할 수 있다.
+
+~~~text
+persist_document_outputs(
+    document_id,
+    output_root_path=response.output_path,
+)
+~~~
+
+Worker의 `summary.chunk_count`, `summary.embedding_count`와 실제 DB Persistence 결과도 비교한다.
+
+불일치 시 새 ProcessingRun을 활성화하지 않고 failed 상태로 기록한다.
+
+### ProcessingRun 실패 처리
+
+ProcessingRun 생성 이후 다음 단계에서 오류가 발생하면 새 Run을 failed 처리한다.
+
+~~~text
+persistence summary validation
+key_information persistence
+activation
+~~~
+
+기존 active ProcessingRun은 유지한다.
+
+Artifact Persistence transaction 자체가 실패하여 유효한 새 `processing_run_id`가 없는 경우에는 존재하지 않는 ProcessingRun을 임의로 failed 처리하지 않는다.
+
+### Shared Volume 경로 처리
+
+Docker 서비스 계약은 기존대로 다음 경로를 사용한다.
+
+~~~text
+/data/documents
+/data/outputs
+~~~
+
+Windows 로컬 Python에서는 `/data/...`를 `C:\data\...`로 잘못 해석할 수 있으므로 암묵적인 경로 변환을 하지 않는다.
+
+Windows host에서는 Docker POSIX 경로 직접 접근을 명시적으로 차단하고, 실제 API 통합 시 Backend와 Worker Container가 동일 `/data/...` 경로를 사용한다.
+
+Worker `output_path`는 다음 경로 식별값도 검증한다.
+
+~~~text
+{announcement_key}
+/document_{document_id}
+~~~
+
+### 테스트
+
+신규 테스트:
+
+~~~text
+tests/backend/test_document_processing_service.py
+tests/backend/test_pipeline_persistence_paths.py
+~~~
+
+검증 결과:
+
+~~~text
+Document Worker / Persistence 관련 테스트
+Ran 18 tests
+OK
+
+관련 Backend 회귀 테스트
+Ran 53 tests
+OK
+
+전체 Backend 테스트
+Ran 106 tests
+FAILED (failures=4)
+~~~
+
+전체 테스트의 4개 실패는 이전 Phase 1부터 존재한 기존 KeyInformationExtractor 테스트와 동일하다.
+
+~~~text
+test_application_period
+test_application_period_korean_ampm_range
+test_application_period_labeled_range
+test_supply_summary_is_compact
+~~~
+
+이번 Backend Worker Orchestration 작업으로 새롭게 발생한 회귀 실패는 확인되지 않았다.
+
+### 현재 구현 상태
+
+~~~text
+Backend Worker HTTP Client        IMPLEMENTED
+Backend Worker Orchestration      IMPLEMENTED
+Worker Artifact Persistence       IMPLEMENTED
+
+Document Worker Endpoint          PENDING
+Backend Runtime Cutover           PENDING
+Docker Compose Integration        PENDING
+E2E                               PENDING
+~~~
+
+실제 Worker Endpoint가 준비될 때까지 Runtime은 기존 구조를 유지한다.
+
+현재:
+
+~~~text
+DOCUMENT_REPROCESSOR
+→ Python callable
+~~~
+
+향후:
+
+~~~text
+Backend
+→ process_document_with_worker()
+→ Document Worker HTTP
+→ Backend Persistence
+~~~
+
+---
+
+## 22. 2026-08-28 Embedding API develop-api 반영 확인
+
+`develop-api`에 Embedding Service API 구현 PR이 병합되어 Backend API 통합 브랜치에도 최신 변경을 반영했다.
+
+이번 변경은 Embedding Service 담당 구현을 Backend에서 새로 작성한 것이 아니라, `develop-api`에 병합된 구현을 통합 브랜치에서 받아 계약 일치 여부를 확인한 것이다.
+
+### 반영된 Service
+
+~~~text
+services/embedding/main.py
+services/embedding/schemas.py
+services/embedding/service.py
+~~~
+
+구현 Endpoint:
+
+~~~text
+POST /v1/embeddings
+~~~
+
+### 기존 확정 계약과의 확인 결과
+
+Request:
+
+~~~json
+{
+  "items": [
+    {
+      "id": "chunk-001",
+      "text": "..."
+    }
+  ]
+}
+~~~
+
+다음 검증이 구현되어 있다.
+
+~~~text
+items >= 1
+id non-empty
+text non-empty
+request 내부 id unique
+~~~
+
+Response:
+
+~~~json
+{
+  "model": "...",
+  "dimension": 1024,
+  "normalized": true,
+  "items": [
+    {
+      "id": "chunk-001",
+      "embedding": []
+    }
+  ]
+}
+~~~
+
+기존 Service API Contract에서 확정한 응답 필드와 일치한다.
+
+오류 응답도 공통 내부 서비스 형식을 사용한다.
+
+~~~text
+422 EMBEDDING_INVALID_REQUEST
+503 EMBEDDING_MODEL_UNAVAILABLE
+500 EMBEDDING_GENERATION_FAILED
+~~~
+
+### 현재 구현 상태 변경
+
+이전:
+
+~~~text
+Embedding Endpoint  PENDING
+~~~
+
+현재:
+
+~~~text
+Embedding Endpoint  IMPLEMENTED
+~~~
+
+다만 다음 단계는 아직 남아 있다.
+
+~~~text
+Document Worker → Embedding HTTP 실제 연결
+RAG → Embedding HTTP 실제 연결
+Docker Compose service 등록/연결
+Container 환경 E2E 검증
+~~~
+
+따라서 Endpoint 구현 완료와 전체 서비스 통합 완료는 별도 상태로 관리한다.
+
+---
+
+## 23. 2026-08-28 Document Worker API 부분 구현 반영 확인
+
+`develop-api`에 Document Worker API 구현 PR이 병합되어 Backend API 통합 브랜치에도 최신 변경을 반영했다.
+
+이번 변경은 Document Worker 담당 코드를 Backend에서 새로 구현한 것이 아니라, `develop-api`에 병합된 구현을 통합 브랜치에서 받아 기존 Backend HTTP Client 계약과의 호환성을 확인한 것이다.
+
+### 반영된 Service
+
+~~~text
+document_worker/api/routes.py
+document_worker/api/schemas.py
+document_worker/main.py
+document_worker/service.py
+~~~
+
+구현 Endpoint:
+
+~~~text
+POST /v1/documents/{document_id}/process
+~~~
+
+### 현재 구현 범위
+
+현재 Worker의 실제 처리 흐름은 다음 단계까지 구현되어 있다.
+
+~~~text
+원본 파일 확인
+→ 실제 HWP/HWPX 형식 확인
+→ Parser
+→ Normalizer
+→ Structure / Verification
+→ Chunking
+~~~
+
+Chunking 이후 다음 단계는 아직 구현되지 않았다.
+
+~~~text
+Document Worker → Embedding HTTP
+→ Embedding Artifact 생성
+→ Key Information Extraction
+→ completed Response 반환
+~~~
+
+현재 Worker는 Chunking 완료 후 `NotImplementedError`를 발생시키며 Endpoint에서는 이를 다음 오류로 반환한다.
+
+~~~text
+HTTP 501
+DOCUMENT_PROCESSING_NOT_IMPLEMENTED
+~~~
+
+따라서 Endpoint 자체는 존재하지만 전체 Document Processing 정상 완료 경로는 아직 구현 중이다.
+
+### Backend Client 계약 확인
+
+Backend HTTP Client와 Worker Request Schema의 필드를 대조했다.
+
+~~~text
+announcement_id
+announcement_key
+
+source:
+  filename
+  format
+  storage_path
+~~~
+
+Request 계약은 일치한다.
+
+정상 Response Schema도 다음 필드가 일치한다.
+
+~~~text
+document_id
+announcement_id
+announcement_key
+status
+document_format
+output_path
+
+summary:
+  chunk_count
+  embedding_count
+
+key_information:
+  application_period
+  eligibility
+  supply_information
+  income_asset_criteria
+  required_documents
+  winner_announcement
+  contact_information
+~~~
+
+Python Schema 객체 간 실제 변환 검증도 수행했다.
+
+~~~text
+request validation: OK
+worker response validation: OK
+backend response compatibility: OK
+~~~
+
+Document Worker 패키지 전체 문법 검사도 통과했다.
+
+~~~text
+python -m compileall document_worker
+PASS
+~~~
+
+### 현재 상태 변경
+
+이전:
+
+~~~text
+Document Worker Endpoint  PENDING
+~~~
+
+현재:
+
+~~~text
+Document Worker Endpoint  PARTIAL
+~~~
+
+여기서 `PARTIAL`은 다음 의미다.
+
+~~~text
+Endpoint                     IMPLEMENTED
+Request Schema                IMPLEMENTED / MATCHED
+Response Schema               IMPLEMENTED / MATCHED
+Parser                        IMPLEMENTED
+Normalizer                    IMPLEMENTED
+Structure / Verification      IMPLEMENTED
+Chunking                      IMPLEMENTED
+
+Worker → Embedding HTTP       PENDING
+Embedding Artifact            PENDING
+Key Information Extraction    PENDING
+Completed Runtime Response    PENDING
+~~~
+
+Backend Runtime Cutover는 아직 수행하지 않는다.
+
+현재 Backend는 기존 MVP의:
+
+~~~text
+DOCUMENT_REPROCESSOR
+→ Python callable
+~~~
+
+경로를 유지한다.
+
+Worker가 Embedding HTTP 연동과 Key Information Extraction을 완료하고 정상 `completed` Response를 실제로 반환할 수 있게 된 후 Backend Runtime을 `process_document_with_worker()` 경로로 전환한다.
