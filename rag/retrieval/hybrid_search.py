@@ -5,8 +5,8 @@ from dataclasses import dataclass, replace
 
 from rag.db_pipeline import DBRAGPipeline
 from rag.retrieval.keyword_search import (
-    KeywordSearchConfig,
-    search_keywords,
+    BM25SearchConfig,
+    search_bm25,
 )
 from rag.retrieval.models import SearchResult
 from backend.app.services.error_log_service import record_error
@@ -19,7 +19,7 @@ class HybridSearchError(RuntimeError):
 @dataclass(frozen=True)
 class HybridSearchConfig:
     vector_top_k: int = 20
-    keyword_top_k: int = 20
+    bm25_top_k: int = 20
     hybrid_top_k: int = 20
     rrf_k: int = 60
 
@@ -28,9 +28,9 @@ class HybridSearchConfig:
             raise ValueError(
                 "vector_top_k는 1 이상이어야 합니다."
             )
-        if self.keyword_top_k <= 0:
+        if self.bm25_top_k <= 0:
             raise ValueError(
-                "keyword_top_k는 1 이상이어야 합니다."
+                "bm25_top_k는 1 이상이어야 합니다."
             )
         if self.hybrid_top_k <= 0:
             raise ValueError(
@@ -47,7 +47,7 @@ def _rrf_score(rank: int, rrf_k: int) -> float:
     Reciprocal Rank Fusion:
         score = 1 / (rrf_k + rank)
 
-    Vector와 Keyword의 원점수 스케일이 서로 다르므로
+    Vector와 BM25의 원점수 스케일이 서로 다르므로
     원점수를 직접 더하지 않고 각 검색기의 순위를 결합한다.
     """
     if rank <= 0:
@@ -66,13 +66,11 @@ def _hybrid_search_impl(
     config: HybridSearchConfig | None = None,
 ) -> list[SearchResult]:
     """
-    Vector Search + Keyword Search 결과를 RRF로 결합한다.
+    Vector Search + BM25 Search 결과를 RRF로 결합한다.
 
-    특정 공고를 하드코딩하지 않는다.
     announcement_id는 호출자가 전달하며,
-    Vector/Keyword 양쪽 모두 동일한 공고 범위에서 검색한다.
+    Vector/BM25 양쪽 모두 동일한 공고 범위에서 검색한다.
     """
-
     if not isinstance(announcement_id, int) or announcement_id <= 0:
         raise HybridSearchError(
             "announcement_id는 1 이상의 정수여야 합니다."
@@ -100,11 +98,11 @@ def _hybrid_search_impl(
     finally:
         pipeline.top_k = original_top_k
 
-    keyword_results = search_keywords(
+    bm25_results = search_bm25(
         announcement_id=announcement_id,
         query=query,
-        config=KeywordSearchConfig(
-            top_k=config.keyword_top_k,
+        config=BM25SearchConfig(
+            top_k=config.bm25_top_k,
         ),
     )
 
@@ -121,7 +119,7 @@ def _hybrid_search_impl(
             "item": search_result.item,
             "vector_score": result.score,
             "vector_rank": vector_rank,
-            "keyword_rank": None,
+            "bm25_rank": None,
             "matched_by": {"pgvector"},
             "fusion_score": _rrf_score(
                 vector_rank,
@@ -129,8 +127,8 @@ def _hybrid_search_impl(
             ),
         }
 
-    for keyword_rank, result in enumerate(
-        keyword_results,
+    for bm25_rank, result in enumerate(
+        bm25_results,
         start=1,
     ):
         chunk_id = result.chunk_id
@@ -140,23 +138,19 @@ def _hybrid_search_impl(
                 "item": result.item,
                 "vector_score": None,
                 "vector_rank": None,
-                "keyword_rank": keyword_rank,
-                "matched_by": {"keyword"},
+                "bm25_rank": bm25_rank,
+                "matched_by": {"bm25"},
                 "fusion_score": _rrf_score(
-                    keyword_rank,
+                    bm25_rank,
                     config.rrf_k,
                 ),
             }
         else:
-            fused[chunk_id]["keyword_rank"] = (
-                keyword_rank
-            )
-            fused[chunk_id]["matched_by"].add(
-                "keyword"
-            )
+            fused[chunk_id]["bm25_rank"] = bm25_rank
+            fused[chunk_id]["matched_by"].add("bm25")
             fused[chunk_id]["fusion_score"] += (
                 _rrf_score(
-                    keyword_rank,
+                    bm25_rank,
                     config.rrf_k,
                 )
             )
@@ -168,8 +162,8 @@ def _hybrid_search_impl(
             pair[1]["vector_rank"]
             if pair[1]["vector_rank"] is not None
             else 10**9,
-            pair[1]["keyword_rank"]
-            if pair[1]["keyword_rank"] is not None
+            pair[1]["bm25_rank"]
+            if pair[1]["bm25_rank"] is not None
             else 10**9,
             pair[0],
         ),
@@ -188,12 +182,10 @@ def _hybrid_search_impl(
         )
         raw_metadata["hybrid"] = {
             "vector_rank": data["vector_rank"],
-            "keyword_rank": data["keyword_rank"],
+            "bm25_rank": data["bm25_rank"],
             "rrf_k": config.rrf_k,
         }
 
-        # CorpusItem은 frozen=True이므로 직접 수정하지 않고
-        # dataclasses.replace()로 새 객체를 만든다.
         item = replace(
             original_item,
             raw_metadata=raw_metadata,
@@ -256,7 +248,6 @@ def hybrid_search(
                 stack_trace=traceback.format_exc(),
             )
         except Exception as log_error:
-            # 로그 저장 실패가 원래 Retrieval 예외를 가리지 않도록 한다.
             print(
                 f"[WARNING] Retrieval ErrorLog 기록 실패: {log_error}"
             )
