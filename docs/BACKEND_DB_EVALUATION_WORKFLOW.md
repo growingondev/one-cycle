@@ -1,10 +1,14 @@
-﻿# Backend / DB Evaluation Workflow
+# Backend / DB Evaluation Workflow
 
 > 목적: 운영 DB에 존재하지 않는 평가 문서를 임시 평가 DB에 적재하고,
 > 운영 서비스와 동일한 문서 처리 / DB 저장 / Publish / RAG 검색 경로를
 > 사용할 수 있도록 Backend / DB 실행 흐름을 구성한다.
 >
-> 구현 브랜치: `feature/evaluation-db-backend`
+> 원 구현 브랜치: `feature/evaluation-db-backend`
+>
+> 현재 상태: **`develop` 병합 완료**
+>
+> 현재 검토 기준: `develop@1c3b2e9fedf9be1fba14253ec7de2ed678521a45`
 
 ---
 
@@ -180,17 +184,27 @@ publish_collection_run()
 
 하나의 평가 문서라도 처리에 실패하면 Publish하지 않는다.
 
-성공 시 다음 정보를 반환한다.
+성공 응답의 최상위 구조는 다음과 같다.
 
 ```text
 collection_run_id
-announcement_id
-document_id
-processing_run_id
-chunk_set_id
-chunk_count
-embedding_count
-embedding_model_name
+document_count
+processing
+documents[]
+publish
+```
+
+각 평가 Document의 처리 결과는 `documents[]`에 들어간다.
+
+```text
+documents[].evaluation_document_id
+documents[].announcement_id
+documents[].document_id
+documents[].processing_run_id
+documents[].chunk_set_id
+documents[].chunk_count
+documents[].embedding_count
+documents[].embedding_model_name
 ```
 
 ---
@@ -261,8 +275,8 @@ evaluation/source_documents/
       └─ *.hwpx
 ```
 
-프로젝트 내부 파일은 DB의 `Document.storage_path`에
-프로젝트 상대경로로 저장한다.
+평가 원본이 프로젝트 Root 내부에 있으면 DB의
+`Document.storage_path`에 프로젝트 상대경로로 저장한다.
 
 예:
 
@@ -270,15 +284,22 @@ evaluation/source_documents/
 evaluation/source_documents/DOC_GC_001/v1/example.hwpx
 ```
 
-따라서 프로젝트 Root가 달라도 동일한 경로 구조를 사용할 수 있다.
+이 경우 프로젝트 Root가 달라도 Repository 내부의 동일한 상대경로 구조를
+유지할 수 있다.
+
+예시:
 
 ```text
 Windows
 C:\Project\one-cycle
 
-AWS
+AWS 기존 작업 경로 예
 /home/ubuntu/ddokbot/one-cycle
 ```
+
+단, 평가 원본이 `PROJECT_ROOT` 밖에 있으면 현재 구현은
+`storage_path`에 **절대경로를 저장한다.** 이 경우 다른 서버나 Docker
+Container로 옮길 때 동일 경로가 존재하지 않을 수 있으므로 별도 경로 정책이 필요하다.
 
 기존 `reprocess_document(document_id)`가
 `Document.storage_path`를 읽어 실제 원본을 처리한다.
@@ -423,6 +444,10 @@ CPU fallback으로 자동 전환하지 않는다.
 
 ## 10. Backend 테스트 결과
 
+> 아래 수치는 평가 DB Backend 기능 구현 당시 실행한 테스트 기록이다.
+> 현재 `develop@1c3b2e9` 전체 테스트를 다시 실행한 최신 결과라고
+> 확대 해석하지 않는다.
+
 신규 테스트:
 
 ```text
@@ -468,14 +493,16 @@ test_collection_publish_service.py
 
 실패 4건은 기존 `KeyInformationExtractor` 테스트다.
 
-이번 작업에서는 다음 파일을 수정하지 않았다.
+평가 DB Backend 기능 구현 당시에는 다음 기존 KeyInformation 관련 파일을
+수정하지 않았다.
 
 ```text
-backend/app/services/key_information_extractor.py
+pipeline/key_information_extractor.py
 tests/backend/test_key_information_extractor.py
 ```
 
-`origin/develop` 대비 변경사항이 없음을 별도로 확인했다.
+따라서 당시 4개 실패는 평가 DB Backend 코드 변경으로 새로 발생한 실패로
+판정하지 않았다. 현재 HEAD의 테스트 상태가 필요하면 별도로 재실행한다.
 
 ---
 
