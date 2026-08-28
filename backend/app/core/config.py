@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     postgres_user: str = "one_cycle"
     postgres_password: str = "change_me"
 
+    # Internal Docker HTTP Services
+    rag_service_base_url: str = ""
+    rag_service_timeout_seconds: float = 60.0
+
+    document_worker_base_url: str = ""
+    document_worker_timeout_seconds: float = 600.0
+
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",
