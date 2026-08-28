@@ -572,7 +572,7 @@ Backend Worker Artifact Persist   IMPLEMENTED
 
 Document Worker Endpoint          PENDING
 RAG Endpoint                      PENDING
-Embedding Endpoint                PENDING
+Embedding Endpoint                IMPLEMENTED
 
 Backend Runtime Cutover           PENDING
 Docker Compose Integration        PENDING

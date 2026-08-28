@@ -925,3 +925,100 @@ Backend
 → Document Worker HTTP
 → Backend Persistence
 ~~~
+
+---
+
+## 22. 2026-08-28 Embedding API develop-api 반영 확인
+
+`develop-api`에 Embedding Service API 구현 PR이 병합되어 Backend API 통합 브랜치에도 최신 변경을 반영했다.
+
+이번 변경은 Embedding Service 담당 구현을 Backend에서 새로 작성한 것이 아니라, `develop-api`에 병합된 구현을 통합 브랜치에서 받아 계약 일치 여부를 확인한 것이다.
+
+### 반영된 Service
+
+~~~text
+services/embedding/main.py
+services/embedding/schemas.py
+services/embedding/service.py
+~~~
+
+구현 Endpoint:
+
+~~~text
+POST /v1/embeddings
+~~~
+
+### 기존 확정 계약과의 확인 결과
+
+Request:
+
+~~~json
+{
+  "items": [
+    {
+      "id": "chunk-001",
+      "text": "..."
+    }
+  ]
+}
+~~~
+
+다음 검증이 구현되어 있다.
+
+~~~text
+items >= 1
+id non-empty
+text non-empty
+request 내부 id unique
+~~~
+
+Response:
+
+~~~json
+{
+  "model": "...",
+  "dimension": 1024,
+  "normalized": true,
+  "items": [
+    {
+      "id": "chunk-001",
+      "embedding": []
+    }
+  ]
+}
+~~~
+
+기존 Service API Contract에서 확정한 응답 필드와 일치한다.
+
+오류 응답도 공통 내부 서비스 형식을 사용한다.
+
+~~~text
+422 EMBEDDING_INVALID_REQUEST
+503 EMBEDDING_MODEL_UNAVAILABLE
+500 EMBEDDING_GENERATION_FAILED
+~~~
+
+### 현재 구현 상태 변경
+
+이전:
+
+~~~text
+Embedding Endpoint  PENDING
+~~~
+
+현재:
+
+~~~text
+Embedding Endpoint  IMPLEMENTED
+~~~
+
+다만 다음 단계는 아직 남아 있다.
+
+~~~text
+Document Worker → Embedding HTTP 실제 연결
+RAG → Embedding HTTP 실제 연결
+Docker Compose service 등록/연결
+Container 환경 E2E 검증
+~~~
+
+따라서 Endpoint 구현 완료와 전체 서비스 통합 완료는 별도 상태로 관리한다.
