@@ -50,9 +50,44 @@ def recollect_announcement(announcement_id: int):
     )
 
 
+def _get_document_processing_runtime() -> str:
+    runtime = os.getenv(
+        "DOCUMENT_PROCESSING_RUNTIME",
+        "legacy",
+    ).strip().lower()
+
+    if runtime not in {
+        "legacy",
+        "worker_http",
+    }:
+        raise PipelineUnavailableError(
+            "DOCUMENT_PROCESSING_RUNTIME must be "
+            "'legacy' or 'worker_http'. "
+            f"Current value: {runtime or '<empty>'}"
+        )
+
+    return runtime
+
+
 def reprocess_document(document_id: int):
-    return _load_callable("DOCUMENT_REPROCESSOR")(
-        document_id=document_id
+    runtime = _get_document_processing_runtime()
+
+    if runtime == "legacy":
+        return _load_callable(
+            "DOCUMENT_REPROCESSOR"
+        )(
+            document_id=document_id
+        )
+
+    from backend.app.services import (
+        document_processing_service,
+    )
+
+    return (
+        document_processing_service
+        .process_document_with_worker(
+            document_id
+        )
     )
 
 

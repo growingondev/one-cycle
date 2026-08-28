@@ -574,7 +574,7 @@ Document Worker Endpoint          PARTIAL
 RAG Endpoint                      PENDING
 Embedding Endpoint                IMPLEMENTED
 
-Backend Runtime Cutover           PENDING
+Backend Runtime Cutover           PREPARED
 Docker Compose Integration        PENDING
 E2E                               PENDING
 ~~~
