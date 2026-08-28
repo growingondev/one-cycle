@@ -305,7 +305,7 @@ class DBRAGPipeline:
             query=query,
             config=HybridSearchConfig(
                 vector_top_k=self.retrieval_config.vector_top_k,
-                keyword_top_k=self.retrieval_config.bm25_top_k,
+                bm25_top_k=self.retrieval_config.bm25_top_k,
                 hybrid_top_k=self.retrieval_config.hybrid_top_k,
                 rrf_k=self.retrieval_config.rrf_k,
             ),
