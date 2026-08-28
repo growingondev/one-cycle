@@ -1022,3 +1022,156 @@ Container 환경 E2E 검증
 ~~~
 
 따라서 Endpoint 구현 완료와 전체 서비스 통합 완료는 별도 상태로 관리한다.
+
+---
+
+## 23. 2026-08-28 Document Worker API 부분 구현 반영 확인
+
+`develop-api`에 Document Worker API 구현 PR이 병합되어 Backend API 통합 브랜치에도 최신 변경을 반영했다.
+
+이번 변경은 Document Worker 담당 코드를 Backend에서 새로 구현한 것이 아니라, `develop-api`에 병합된 구현을 통합 브랜치에서 받아 기존 Backend HTTP Client 계약과의 호환성을 확인한 것이다.
+
+### 반영된 Service
+
+~~~text
+document_worker/api/routes.py
+document_worker/api/schemas.py
+document_worker/main.py
+document_worker/service.py
+~~~
+
+구현 Endpoint:
+
+~~~text
+POST /v1/documents/{document_id}/process
+~~~
+
+### 현재 구현 범위
+
+현재 Worker의 실제 처리 흐름은 다음 단계까지 구현되어 있다.
+
+~~~text
+원본 파일 확인
+→ 실제 HWP/HWPX 형식 확인
+→ Parser
+→ Normalizer
+→ Structure / Verification
+→ Chunking
+~~~
+
+Chunking 이후 다음 단계는 아직 구현되지 않았다.
+
+~~~text
+Document Worker → Embedding HTTP
+→ Embedding Artifact 생성
+→ Key Information Extraction
+→ completed Response 반환
+~~~
+
+현재 Worker는 Chunking 완료 후 `NotImplementedError`를 발생시키며 Endpoint에서는 이를 다음 오류로 반환한다.
+
+~~~text
+HTTP 501
+DOCUMENT_PROCESSING_NOT_IMPLEMENTED
+~~~
+
+따라서 Endpoint 자체는 존재하지만 전체 Document Processing 정상 완료 경로는 아직 구현 중이다.
+
+### Backend Client 계약 확인
+
+Backend HTTP Client와 Worker Request Schema의 필드를 대조했다.
+
+~~~text
+announcement_id
+announcement_key
+
+source:
+  filename
+  format
+  storage_path
+~~~
+
+Request 계약은 일치한다.
+
+정상 Response Schema도 다음 필드가 일치한다.
+
+~~~text
+document_id
+announcement_id
+announcement_key
+status
+document_format
+output_path
+
+summary:
+  chunk_count
+  embedding_count
+
+key_information:
+  application_period
+  eligibility
+  supply_information
+  income_asset_criteria
+  required_documents
+  winner_announcement
+  contact_information
+~~~
+
+Python Schema 객체 간 실제 변환 검증도 수행했다.
+
+~~~text
+request validation: OK
+worker response validation: OK
+backend response compatibility: OK
+~~~
+
+Document Worker 패키지 전체 문법 검사도 통과했다.
+
+~~~text
+python -m compileall document_worker
+PASS
+~~~
+
+### 현재 상태 변경
+
+이전:
+
+~~~text
+Document Worker Endpoint  PENDING
+~~~
+
+현재:
+
+~~~text
+Document Worker Endpoint  PARTIAL
+~~~
+
+여기서 `PARTIAL`은 다음 의미다.
+
+~~~text
+Endpoint                     IMPLEMENTED
+Request Schema                IMPLEMENTED / MATCHED
+Response Schema               IMPLEMENTED / MATCHED
+Parser                        IMPLEMENTED
+Normalizer                    IMPLEMENTED
+Structure / Verification      IMPLEMENTED
+Chunking                      IMPLEMENTED
+
+Worker → Embedding HTTP       PENDING
+Embedding Artifact            PENDING
+Key Information Extraction    PENDING
+Completed Runtime Response    PENDING
+~~~
+
+Backend Runtime Cutover는 아직 수행하지 않는다.
+
+현재 Backend는 기존 MVP의:
+
+~~~text
+DOCUMENT_REPROCESSOR
+→ Python callable
+~~~
+
+경로를 유지한다.
+
+Worker가 Embedding HTTP 연동과 Key Information Extraction을 완료하고 정상 `completed` Response를 실제로 반환할 수 있게 된 후 Backend Runtime을 `process_document_with_worker()` 경로로 전환한다.

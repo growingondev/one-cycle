@@ -570,7 +570,7 @@ Backend HTTP Client               IMPLEMENTED
 Backend Worker Orchestration      IMPLEMENTED
 Backend Worker Artifact Persist   IMPLEMENTED
 
-Document Worker Endpoint          PENDING
+Document Worker Endpoint          PARTIAL
 RAG Endpoint                      PENDING
 Embedding Endpoint                IMPLEMENTED
 
