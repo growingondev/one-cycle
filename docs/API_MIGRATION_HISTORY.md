@@ -560,3 +560,207 @@ develop-api
 ~~~
 
 따라서 API 전환 과정에서 문제가 발생하더라도 기존 MVP 완성 버전은 `develop`에서 계속 보존된다.
+
+---
+
+## 20. 2026-08-28 Internal Service API 계약 확정
+
+Phase 1의 Backend HTTP Client Layer를 `develop-api`에 병합한 뒤, Document Processing 및 RAG/Embedding 담당자와 실제 Client 계약을 기준으로 서비스 간 API 계약을 확인했다.
+
+상세 계약은 다음 문서에서 관리한다.
+
+~~~text
+docs/SERVICE_API_CONTRACT.md
+~~~
+
+### 계약 확정 상태
+
+~~~text
+Document Worker Contract   CONFIRMED
+RAG Contract               CONFIRMED
+Embedding Contract         CONFIRMED
+Shared Volume Direction    CONFIRMED
+~~~
+
+### Document Worker
+
+확정 Endpoint:
+
+~~~text
+POST /v1/documents/{document_id}/process
+~~~
+
+Backend는 다음 Context를 전달한다.
+
+~~~text
+document_id
+announcement_id
+announcement_key
+filename
+format
+storage_path
+~~~
+
+Document Worker의 책임 범위는 다음과 같이 확정했다.
+
+~~~text
+Parser
+→ Normalizer
+→ Structure / Verification
+→ Chunking
+→ Embedding Service 호출
+→ Key Information Extraction
+→ Artifact 생성
+→ 결과 반환
+~~~
+
+Worker는 DB Persistence, Key Information DB 저장, ProcessingRun 상태 처리를 직접 수행하지 않는다.
+
+Artifact 파일 자체를 HTTP Response에 포함하지 않고 shared output 경로에 생성한다.
+
+Worker 성공 Response는 현재 Backend Client 계약대로 다음 정보를 반환한다.
+
+~~~text
+output_path
+summary
+key_information
+~~~
+
+Backend는 `output_path`를 기준으로 Artifact를 검증한 후 DB Persistence 및 ProcessingRun 처리를 담당한다.
+
+Key Information 7개 필드는 모두 필수이며 개별 필드의 다음 상태는 정상 결과로 인정한다.
+
+~~~json
+{
+  "status": "not_found"
+}
+~~~
+
+Worker는 우선 동기 HTTP 방식으로 구현하며 Backend의 초기 timeout은 600초를 사용한다.
+
+실제 Docker 환경의 처리시간 측정 후 필요한 경우에만 `202 Accepted + job_id` 기반 비동기 방식 전환을 검토한다.
+
+### RAG
+
+확정 Endpoint:
+
+~~~text
+POST /v1/rag/answer
+~~~
+
+Request:
+
+~~~json
+{
+  "announcement_id": 1,
+  "question": "신청 기간은 언제인가요?"
+}
+~~~
+
+RAG는 전달받은 공고 범위에서 Retrieval을 수행하고 `answer + evidence`를 반환한다.
+
+Business Result는 기존 Backend Client 계약대로 다음 세 상태를 유지한다.
+
+~~~text
+grounded
+no_evidence
+unsupported
+~~~
+
+### Embedding
+
+확정 Endpoint:
+
+~~~text
+POST /v1/embeddings
+~~~
+
+Document Worker의 Chunk Embedding과 RAG의 Query Embedding이 동일 Endpoint를 사용한다.
+
+Request:
+
+~~~json
+{
+  "items": [
+    {
+      "id": "chunk-001",
+      "text": "..."
+    }
+  ]
+}
+~~~
+
+Response:
+
+~~~json
+{
+  "model": "BAAI/bge-m3",
+  "dimension": 1024,
+  "normalized": true,
+  "items": [
+    {
+      "id": "chunk-001",
+      "embedding": [...]
+    }
+  ]
+}
+~~~
+
+추가 계약 규칙:
+
+- `items`는 1개 이상
+- `items[].id`는 Request 내 중복 불가
+- `items[].text`는 빈 문자열 불가
+- Response 배열 순서에 의존하지 않음
+- Request와 Response는 `id` 기준으로 매칭
+- 성공 Response에는 요청한 모든 `id`가 정확히 1개씩 존재
+- Request에 없는 추가 `id`는 반환하지 않음
+- 오류는 공통 Internal Service Error Contract 사용
+
+RAG Query는 동일 Endpoint에 다음과 같이 1건을 전달한다.
+
+~~~json
+{
+  "items": [
+    {
+      "id": "query",
+      "text": "..."
+    }
+  ]
+}
+~~~
+
+### Shared Volume
+
+Backend와 Document Worker는 Docker Compose에서 다음 경로를 동일한 Container 내부 경로로 공유한다.
+
+~~~text
+/data/documents
+/data/outputs
+~~~
+
+Backend가 Worker에 전달한 `storage_path`는 Worker Container에서도 동일한 경로로 접근 가능해야 한다.
+
+Worker가 생성하고 반환한 `output_path` 역시 Backend Container에서 동일한 경로로 접근 가능해야 한다.
+
+실제 Docker volume 이름과 host mount 위치는 Docker Compose 통합 단계에서 확정한다.
+
+### 현재 구현 상태
+
+계약 확정과 Endpoint 구현 완료는 구분한다.
+
+~~~text
+Backend HTTP Client         IMPLEMENTED
+
+Document Worker Endpoint    PENDING
+RAG Endpoint                PENDING
+Embedding Endpoint          PENDING
+
+Backend Runtime Cutover     PENDING
+Docker Compose Integration  PENDING
+E2E                         PENDING
+~~~
+
+따라서 현재 시점에는 기존 Python direct call을 유지한다.
+
+각 Service Endpoint가 구현된 후 `develop-api`에서 실제 HTTP Runtime 전환과 통합 검증을 진행한다.
