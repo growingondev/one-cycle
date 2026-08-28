@@ -574,7 +574,9 @@ Document Worker Endpoint          PARTIAL
 RAG Endpoint                      PENDING
 Embedding Endpoint                IMPLEMENTED
 
-Backend Runtime Cutover           PREPARED
+Backend Document Runtime Switch   IMPLEMENTED
+Backend RAG Runtime Switch        IMPLEMENTED
+Backend Runtime Cutover           PENDING
 Docker Compose Integration        PENDING
 E2E                               PENDING
 ~~~
@@ -591,8 +593,14 @@ E2E                               PENDING
 
 ~~~text
 Backend → RAG
-RAG_ANSWER_FUNCTION
+
+RAG_RUNTIME=legacy
+→ RAG_ANSWER_FUNCTION
 → Python callable
+
+RAG_RUNTIME=rag_http
+→ Backend rag_client
+→ POST /v1/rag/answer
 
 Backend → Document Processing
 DOCUMENT_REPROCESSOR

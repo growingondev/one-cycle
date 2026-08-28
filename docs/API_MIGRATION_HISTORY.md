@@ -1309,3 +1309,119 @@ Actual Runtime Cutover           PENDING
 ~~~
 
 Service API Contract의 구현 상태에서는 Runtime 전환 준비 완료를 `PREPARED`로 관리한다.
+
+---
+
+## 25. 2026-08-29 Backend RAG Runtime 전환 스위치 준비
+
+기존 Backend의 `chat_service.py`는 `RAG_ANSWER_FUNCTION` 환경변수를 통해 Python 함수를 직접 호출하는 구조였다.
+
+API/Docker 서비스 분리를 위해 Backend가 RAG 서비스를 직접 import하지 않고 HTTP 경계만 사용하도록 Runtime 전환 구조를 추가했다.
+
+### 변경된 Runtime 구조
+
+~~~text
+RAG_RUNTIME=legacy
+→ RAG_ANSWER_FUNCTION
+→ 기존 Python direct call
+
+RAG_RUNTIME=rag_http
+→ Backend rag_client
+→ POST /v1/rag/answer
+~~~
+
+기본값은 다음과 같이 유지한다.
+
+~~~text
+RAG_RUNTIME=legacy
+~~~
+
+환경변수가 설정되지 않은 경우에도 `legacy`를 사용하므로 기존 RAG 실행 동작은 유지된다.
+
+지원하지 않는 Runtime 값은 `RagServiceUnavailableError`로 차단한다.
+
+### HTTP 오류 처리
+
+`rag_client.answer_question()`에서 발생한 `InternalServiceClientError` 계열 오류를 `RagServiceUnavailableError`로 변환하도록 처리했다.
+
+이로 인해 기존 Backend `/chat` 진입점에서 RAG HTTP 서비스 오류를 기존 503 처리 흐름으로 유지할 수 있다.
+
+### 응답 변환
+
+내부 RAG Service 응답인 `RagAnswerResponse`를 외부 사용자 API 응답인 `ChatResponse`로 명시적으로 변환한다.
+
+~~~text
+Internal RAG Response
+result
+answer
+grounded
+evidence
+    ↓
+Backend ChatResponse
+answer
+grounded
+evidence
+~~~
+
+### 검증 결과
+
+신규 RAG Runtime 분기 테스트:
+
+~~~text
+legacy runtime                         PASS
+rag_http runtime                       PASS
+invalid runtime rejection              PASS
+HTTP client error mapping               PASS
+~~~
+
+관련 Chat/RAG 테스트:
+
+~~~text
+Chat Service Runtime
+RAG Client
+Backend Chat Contract
+
+27 tests PASS
+~~~
+
+전체 Backend 회귀 테스트:
+
+~~~text
+Ran 113 tests
+
+PASS: 109
+FAIL: 4
+~~~
+
+실패 4건은 기존 KeyInformationExtractor 관련 테스트와 동일하다.
+
+~~~text
+test_application_period
+test_application_period_korean_ampm_range
+test_application_period_labeled_range
+test_supply_summary_is_compact
+~~~
+
+이번 RAG Runtime 전환 작업으로 새로 발생한 Backend 회귀 실패는 없다.
+
+문법 검사:
+
+~~~text
+python -m compileall
+backend/app/services/chat_service.py
+backend/app/clients/rag_client.py
+
+PASS
+~~~
+
+현재 상태:
+
+~~~text
+Backend RAG Runtime Switch        IMPLEMENTED
+Legacy RAG Runtime Default        ACTIVE
+Backend RAG HTTP Path             PREPARED
+Actual RAG Runtime Cutover        PENDING
+RAG Endpoint                      PENDING
+~~~
+
+실제 RAG Endpoint가 구현되기 전까지는 `RAG_RUNTIME=rag_http`로 기본값을 전환하지 않는다.
