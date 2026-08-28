@@ -576,12 +576,17 @@ Embedding Endpoint                IMPLEMENTED
 
 Backend Document Runtime Switch   IMPLEMENTED
 Backend RAG Runtime Switch        IMPLEMENTED
+Backend Service Boundary Cleanup  IMPLEMENTED
 Backend Runtime Cutover           PENDING
 Docker Compose Integration        PENDING
 E2E                               PENDING
 ~~~
 
 계약 확정과 Endpoint 구현 완료는 서로 다른 상태로 관리한다.
+
+Backend 서비스 경계 정리 기준으로 Backend는 `rag`, `document_worker`, `services.embedding`, `pipeline.embedding`의 Service 구현 모듈을 Python import로 직접 참조하지 않는다.
+
+기존 MVP 호환을 위한 `RAG_ANSWER_FUNCTION`, `DOCUMENT_REPROCESSOR` 기반 legacy runtime은 실제 Runtime Cutover 전까지 유지한다.
 
 ---
 
