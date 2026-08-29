@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
+
+import numpy as np
 
 from config.paths import OUTPUT_ROOT
 
@@ -19,6 +23,20 @@ from pipeline.parser.format_detector import (
     detect_actual_document_format,
 )
 
+from pipeline.embedding.input_loader import (
+    ChunkLoadError,
+    load_chunk_document,
+)
+
+from pipeline.key_information_extractor import (
+    REQUIRED_FIELDS,
+    extract_key_information,
+)
+
+from services.embedding.client import (
+    EmbeddingClient,
+    EmbeddingClientError,
+)
 
 # ============================================================
 # 기본 경로
@@ -235,11 +253,18 @@ def _prepare_stage_paths(
         / document_format
     )
 
+    embeddings_dir = (
+        root
+        / "05_embeddings"
+        / document_format
+    )
+
     for directory in (
         parsed_dir,
         normalized_dir,
         structured_dir,
         chunks_dir,
+        embeddings_dir,
     ):
         directory.mkdir(
             parents=True,
@@ -274,6 +299,23 @@ def _prepare_stage_paths(
         "chunks": (
             chunks_dir
             / "chunks.json"
+        ),
+
+        "embeddings_dir": embeddings_dir,
+
+        "embeddings": (
+            embeddings_dir
+            / "embeddings.npy"
+        ),
+
+        "embedding_metadata": (
+            embeddings_dir
+            / "metadata.json"
+        ),
+
+        "embedding_report": (
+            embeddings_dir
+            / "embedding_report.json"
         ),
     }
 
@@ -605,6 +647,542 @@ def _run_chunking(
         )
 
 
+# ============================================================
+# Embedding Service
+# ============================================================
+
+def _run_embedding_service(
+    *,
+    document_id: int,
+    chunks_input: Path,
+):
+    """
+    Chunking 결과인 chunks.json을 읽어
+    Embedding Service에 HTTP 요청을 보내고
+    Chunk 순서에 맞는 Vector 배열을 반환한다.
+
+    Document Worker에서는 BGE-M3 모델을 직접 실행하지 않는다.
+    """
+
+    # --------------------------------------------------------
+    # 1. chunks.json 로드
+    # --------------------------------------------------------
+
+    try:
+        document = load_chunk_document(
+            chunks_input
+        )
+
+    except ChunkLoadError as error:
+        raise DocumentWorkerServiceError(
+            status_code=500,
+            error_code=(
+                "DOCUMENT_EMBEDDING_INPUT_FAILED"
+            ),
+            message=str(error),
+        ) from error
+
+    if not document.items:
+        raise DocumentWorkerServiceError(
+            status_code=500,
+            error_code=(
+                "DOCUMENT_EMBEDDING_INPUT_FAILED"
+            ),
+            message=(
+                "Embedding할 Chunk가 없습니다. "
+                f"document_id={document_id}"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # 2. Embedding API Request 구성
+    # --------------------------------------------------------
+
+    request_items = [
+        {
+            "id": item.chunk_id,
+            "text": item.embedding_text,
+        }
+        for item in document.items
+    ]
+
+    # --------------------------------------------------------
+    # 3. Embedding Service HTTP 호출
+    # --------------------------------------------------------
+
+    client = EmbeddingClient()
+
+    try:
+        embedding_map = (
+            client.embed_items(
+                request_items
+            )
+        )
+
+    except EmbeddingClientError as error:
+        raise DocumentWorkerServiceError(
+            status_code=502,
+            error_code=(
+                "DOCUMENT_EMBEDDING_SERVICE_FAILED"
+            ),
+            message=(
+                "Embedding Service 호출에 실패했습니다. "
+                f"document_id={document_id}, "
+                f"error={error}"
+            ),
+        ) from error
+
+    # --------------------------------------------------------
+    # 4. 응답을 Chunk ID 기준으로 다시 정렬
+    # --------------------------------------------------------
+
+    try:
+        vectors = np.stack(
+            [
+                embedding_map[
+                    item.chunk_id
+                ]
+                for item in document.items
+            ],
+            axis=0,
+        ).astype(
+            np.float32,
+            copy=False,
+        )
+
+    except (
+        KeyError,
+        ValueError,
+        TypeError,
+    ) as error:
+        raise DocumentWorkerServiceError(
+            status_code=502,
+            error_code=(
+                "DOCUMENT_EMBEDDING_RESPONSE_INVALID"
+            ),
+            message=(
+                "Embedding 응답을 Chunk ID 기준으로 "
+                "정렬하지 못했습니다. "
+                f"document_id={document_id}"
+            ),
+        ) from error
+
+    # --------------------------------------------------------
+    # 5. Vector Shape 검증
+    # --------------------------------------------------------
+
+    expected_shape = (
+        document.chunk_count,
+        1024,
+    )
+
+    if vectors.shape != expected_shape:
+        raise DocumentWorkerServiceError(
+            status_code=502,
+            error_code=(
+                "DOCUMENT_EMBEDDING_RESPONSE_INVALID"
+            ),
+            message=(
+                "Embedding 결과 shape이 "
+                "올바르지 않습니다. "
+                f"expected={expected_shape}, "
+                f"actual={vectors.shape}"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # 6. NaN / Infinity 검증
+    # --------------------------------------------------------
+
+    if not np.isfinite(
+        vectors
+    ).all():
+        raise DocumentWorkerServiceError(
+            status_code=502,
+            error_code=(
+                "DOCUMENT_EMBEDDING_RESPONSE_INVALID"
+            ),
+            message=(
+                "Embedding 결과에 "
+                "NaN 또는 Infinity가 있습니다."
+            ),
+        )
+
+    return (
+        document,
+        vectors,
+    )
+
+
+# ============================================================
+# Embedding Artifact 저장
+# ============================================================
+
+def _write_embedding_artifacts(
+    *,
+    document,
+    vectors: np.ndarray,
+    embeddings_path: Path,
+    metadata_path: Path,
+    report_path: Path,
+) -> None:
+    """
+    Embedding Service에서 반환받은 Vector를
+    Document Worker Artifact로 저장한다.
+
+    생성 파일:
+    - embeddings.npy
+    - metadata.json
+    - embedding_report.json
+    """
+
+    output_dir = (
+        embeddings_path.parent
+    )
+
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    # --------------------------------------------------------
+    # 1. embeddings.npy
+    # --------------------------------------------------------
+
+    try:
+        np.save(
+            embeddings_path,
+            vectors,
+            allow_pickle=False,
+        )
+
+    except Exception as error:
+        raise DocumentWorkerServiceError(
+            status_code=500,
+            error_code=(
+                "DOCUMENT_EMBEDDING_ARTIFACT_FAILED"
+            ),
+            message=(
+                "embeddings.npy 저장에 "
+                "실패했습니다: "
+                f"{embeddings_path}"
+            ),
+        ) from error
+
+    # --------------------------------------------------------
+    # 2. Metadata Item 구성
+    # --------------------------------------------------------
+
+    metadata_items: list[
+        dict
+    ] = []
+
+    for vector_index, item in enumerate(
+        document.items
+    ):
+        metadata = dict(
+            item.metadata
+        )
+
+        metadata[
+            "vector_index"
+        ] = vector_index
+
+        metadata[
+            "chunk_id"
+        ] = item.chunk_id
+
+        metadata_items.append(
+            metadata
+        )
+
+    created_at = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    # --------------------------------------------------------
+    # 3. metadata.json
+    # --------------------------------------------------------
+
+    metadata_payload = {
+        "schema_version": (
+            "embedding-metadata-v1"
+        ),
+        "created_at": created_at,
+        "model": {
+            "name": "BAAI/bge-m3",
+            "dimension": 1024,
+            "normalized": True,
+            "dtype": str(
+                vectors.dtype
+            ),
+            "source": (
+                "embedding-service"
+            ),
+        },
+        "source": {
+            "chunk_file": str(
+                document.source_path
+            ),
+            "document_id": (
+                document.document_id
+            ),
+            "announcement_id": (
+                document.announcement_id
+            ),
+            "chunk_count": (
+                document.chunk_count
+            ),
+        },
+        "items": metadata_items,
+    }
+
+    try:
+        with metadata_path.open(
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(
+                metadata_payload,
+                file,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+            file.write("\n")
+
+    except OSError as error:
+        raise DocumentWorkerServiceError(
+            status_code=500,
+            error_code=(
+                "DOCUMENT_EMBEDDING_ARTIFACT_FAILED"
+            ),
+            message=(
+                "metadata.json 저장에 "
+                "실패했습니다: "
+                f"{metadata_path}"
+            ),
+        ) from error
+
+    # --------------------------------------------------------
+    # 4. Embedding 통계
+    # --------------------------------------------------------
+
+    norms = np.linalg.norm(
+        vectors,
+        axis=1,
+    )
+
+    # --------------------------------------------------------
+    # 5. embedding_report.json
+    # --------------------------------------------------------
+
+    report_payload = {
+        "schema_version": (
+            "embedding-report-v1"
+        ),
+        "status": "success",
+        "created_at": created_at,
+
+        "source_chunk_file": str(
+            document.source_path
+        ),
+
+        "document_id": (
+            document.document_id
+        ),
+
+        "announcement_id": (
+            document.announcement_id
+        ),
+
+        "model_name": (
+            "BAAI/bge-m3"
+        ),
+
+        "embedding_source": (
+            "embedding-service"
+        ),
+
+        "chunk_count": (
+            document.chunk_count
+        ),
+
+        "embedding_count": int(
+            vectors.shape[0]
+        ),
+
+        "embedding_dimension": int(
+            vectors.shape[1]
+        ),
+
+        "embedding_dtype": str(
+            vectors.dtype
+        ),
+
+        "normalized": True,
+
+        "nan_count": int(
+            np.isnan(
+                vectors
+            ).sum()
+        ),
+
+        "infinity_count": int(
+            np.isinf(
+                vectors
+            ).sum()
+        ),
+
+        "zero_vector_count": int(
+            np.sum(
+                norms == 0
+            )
+        ),
+
+        "norm_statistics": {
+            "minimum": float(
+                norms.min()
+            ),
+            "maximum": float(
+                norms.max()
+            ),
+            "average": float(
+                norms.mean()
+            ),
+        },
+    }
+
+    try:
+        with report_path.open(
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(
+                report_payload,
+                file,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+            file.write("\n")
+
+    except OSError as error:
+        raise DocumentWorkerServiceError(
+            status_code=500,
+            error_code=(
+                "DOCUMENT_EMBEDDING_ARTIFACT_FAILED"
+            ),
+            message=(
+                "embedding_report.json 저장에 "
+                "실패했습니다: "
+                f"{report_path}"
+            ),
+        ) from error
+
+    # --------------------------------------------------------
+    # 6. 최종 파일 존재 확인
+    # --------------------------------------------------------
+
+    expected_files = (
+        embeddings_path,
+        metadata_path,
+        report_path,
+    )
+
+    for path in expected_files:
+        if not path.is_file():
+            raise DocumentWorkerServiceError(
+                status_code=500,
+                error_code=(
+                    "DOCUMENT_EMBEDDING_ARTIFACT_FAILED"
+                ),
+                message=(
+                    "Embedding Artifact가 "
+                    "생성되지 않았습니다: "
+                    f"{path}"
+                ),
+            )
+
+# ============================================================
+# Key Information Extraction
+# ============================================================
+
+def _run_key_information_extraction(
+    *,
+    document_id: int,
+    announcement_id: int,
+    announcement_key: str,
+    structure_path: Path,
+    verification_path: Path,
+) -> dict[str, Any]:
+    """
+    Structure / Verification 결과에서
+    Backend에 반환할 핵심정보 7개 필드를 추출한다.
+
+    Document Worker는 추출 결과를 응답으로 반환하며,
+    DB 저장은 Backend의 책임으로 유지한다.
+    """
+
+    context = {
+        "document_id": document_id,
+        "announcement_id": announcement_id,
+        "announcement_key": announcement_key,
+    }
+
+    try:
+        result = extract_key_information(
+            structure_path=structure_path,
+            verification_path=verification_path,
+            context=context,
+        )
+
+    except Exception as error:
+        raise DocumentWorkerServiceError(
+            status_code=500,
+            error_code="DOCUMENT_KEY_INFORMATION_FAILED",
+            message=(
+                "Key Information Extraction에 실패했습니다. "
+                f"document_id={document_id}, "
+                f"error={error}"
+            ),
+        ) from error
+
+    if not isinstance(result, dict):
+        raise DocumentWorkerServiceError(
+            status_code=500,
+            error_code="DOCUMENT_KEY_INFORMATION_FAILED",
+            message=(
+                "Key Information Extraction 결과가 "
+                "객체가 아닙니다."
+            ),
+        )
+
+    missing_fields = [
+        field
+        for field in REQUIRED_FIELDS
+        if (
+            field not in result
+            or not isinstance(
+                result[field],
+                dict,
+            )
+        )
+    ]
+
+    if missing_fields:
+        raise DocumentWorkerServiceError(
+            status_code=500,
+            error_code="DOCUMENT_KEY_INFORMATION_FAILED",
+            message=(
+                "Key Information 필수 필드가 "
+                "누락되었거나 형식이 잘못되었습니다: "
+                f"{missing_fields}"
+            ),
+        )
+
+    return result
+
 
 # ============================================================
 # Document Worker 진입점
@@ -624,9 +1202,10 @@ def process_document(
     -> Normalizer
     -> Structure / Verification
     -> Chunking
-
-    다음 구현:
     -> Embedding Service
+    -> Embedding Artifact 저장
+    -> Key Information Extraction
+    -> 최종 DocumentProcessResponse 반환
     """
 
     # --------------------------------------------------------
@@ -730,23 +1309,91 @@ def process_document(
     # --------------------------------------------------------
     # 8. Embedding Service HTTP 연동
     # --------------------------------------------------------
-    # TODO:
-    # 별도 Embedding Service의
-    # POST /v1/embeddings Endpoint가 준비되면
-    # chunks.json의 Chunk 데이터를 HTTP로 전달한다.
-    #
-    # Document Worker에서는 Embedding Model을 직접 실행하지 않는다.
-    #
-    # 이후:
-    # Embedding Service 호출
-    # -> Embedding Artifact 생성
-    # -> Key Information Extraction
-    # -> DocumentProcessResponse 반환
 
-    raise NotImplementedError(
-        "Document processing through chunking completed successfully. "
-        f"document_id={document_id}, "
-        f"format={document_format}, "
-        f"chunks_output={paths['chunks']}. "
-        "Embedding service HTTP integration is pending."
+    (
+        embedding_document,
+        embedding_vectors,
+    ) = _run_embedding_service(
+        document_id=document_id,
+        chunks_input=(
+            paths["chunks"]
+        ),
+    )
+
+    # --------------------------------------------------------
+    # 9. Embedding Artifact 저장
+    # --------------------------------------------------------
+
+    _write_embedding_artifacts(
+        document=(
+            embedding_document
+        ),
+        vectors=(
+            embedding_vectors
+        ),
+        embeddings_path=(
+            paths["embeddings"]
+        ),
+        metadata_path=(
+            paths[
+                "embedding_metadata"
+            ]
+        ),
+        report_path=(
+            paths[
+                "embedding_report"
+            ]
+        ),
+    )
+
+    # --------------------------------------------------------
+    # 10. Key Information Extraction
+    # --------------------------------------------------------
+
+    key_information = (
+        _run_key_information_extraction(
+            document_id=document_id,
+            announcement_id=(
+                request.announcement_id
+            ),
+            announcement_key=(
+                request.announcement_key
+            ),
+            structure_path=(
+                paths["structure"]
+            ),
+            verification_path=(
+                paths["verification"]
+            ),
+        )
+    )
+
+    # --------------------------------------------------------
+    # 11. 최종 Document Worker Response
+    # --------------------------------------------------------
+
+    return DocumentProcessResponse(
+        document_id=document_id,
+        announcement_id=(
+            request.announcement_id
+        ),
+        announcement_key=(
+            request.announcement_key
+        ),
+        status="completed",
+        document_format=document_format,
+        output_path=str(
+            paths["root"]
+        ),
+        summary={
+            "chunk_count": (
+                embedding_document.chunk_count
+            ),
+            "embedding_count": int(
+                embedding_vectors.shape[0]
+            ),
+        },
+        key_information=(
+            key_information
+        ),
     )
