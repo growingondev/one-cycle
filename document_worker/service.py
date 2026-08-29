@@ -8,7 +8,7 @@ import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import numpy as np
 
@@ -26,6 +26,11 @@ from pipeline.parser.format_detector import (
 from pipeline.embedding.input_loader import (
     ChunkLoadError,
     load_chunk_document,
+)
+
+from pipeline.key_information_extractor import (
+    REQUIRED_FIELDS,
+    extract_key_information,
 )
 
 from services.embedding.client import (
@@ -1100,6 +1105,86 @@ def _write_embedding_artifacts(
             )
 
 # ============================================================
+# Key Information Extraction
+# ============================================================
+
+def _run_key_information_extraction(
+    *,
+    document_id: int,
+    announcement_id: int,
+    announcement_key: str,
+    structure_path: Path,
+    verification_path: Path,
+) -> dict[str, Any]:
+    """
+    Structure / Verification 결과에서
+    Backend에 반환할 핵심정보 7개 필드를 추출한다.
+
+    Document Worker는 추출 결과를 응답으로 반환하며,
+    DB 저장은 Backend의 책임으로 유지한다.
+    """
+
+    context = {
+        "document_id": document_id,
+        "announcement_id": announcement_id,
+        "announcement_key": announcement_key,
+    }
+
+    try:
+        result = extract_key_information(
+            structure_path=structure_path,
+            verification_path=verification_path,
+            context=context,
+        )
+
+    except Exception as error:
+        raise DocumentWorkerServiceError(
+            status_code=500,
+            error_code="DOCUMENT_KEY_INFORMATION_FAILED",
+            message=(
+                "Key Information Extraction에 실패했습니다. "
+                f"document_id={document_id}, "
+                f"error={error}"
+            ),
+        ) from error
+
+    if not isinstance(result, dict):
+        raise DocumentWorkerServiceError(
+            status_code=500,
+            error_code="DOCUMENT_KEY_INFORMATION_FAILED",
+            message=(
+                "Key Information Extraction 결과가 "
+                "객체가 아닙니다."
+            ),
+        )
+
+    missing_fields = [
+        field
+        for field in REQUIRED_FIELDS
+        if (
+            field not in result
+            or not isinstance(
+                result[field],
+                dict,
+            )
+        )
+    ]
+
+    if missing_fields:
+        raise DocumentWorkerServiceError(
+            status_code=500,
+            error_code="DOCUMENT_KEY_INFORMATION_FAILED",
+            message=(
+                "Key Information 필수 필드가 "
+                "누락되었거나 형식이 잘못되었습니다: "
+                f"{missing_fields}"
+            ),
+        )
+
+    return result
+
+
+# ============================================================
 # Document Worker 진입점
 # ============================================================
 
@@ -1117,9 +1202,10 @@ def process_document(
     -> Normalizer
     -> Structure / Verification
     -> Chunking
-
-    다음 구현:
     -> Embedding Service
+    -> Embedding Artifact 저장
+    -> Key Information Extraction
+    -> 최종 DocumentProcessResponse 반환
     """
 
     # --------------------------------------------------------
@@ -1261,22 +1347,53 @@ def process_document(
     )
 
     # --------------------------------------------------------
-    # 10. 다음 단계
+    # 10. Key Information Extraction
     # --------------------------------------------------------
-    #
-    # Embedding Service 연동까지 완료됨.
-    #
-    # 다음:
-    # Key Information Extraction
-    # -> 최종 DocumentProcessResponse 반환
 
-    raise NotImplementedError(
-        "Document processing through embedding "
-        "completed successfully. "
-        f"document_id={document_id}, "
-        f"format={document_format}, "
-        f"embedding_count="
-        f"{embedding_vectors.shape[0]}. "
-        "Key information extraction integration "
-        "is pending."
+    key_information = (
+        _run_key_information_extraction(
+            document_id=document_id,
+            announcement_id=(
+                request.announcement_id
+            ),
+            announcement_key=(
+                request.announcement_key
+            ),
+            structure_path=(
+                paths["structure"]
+            ),
+            verification_path=(
+                paths["verification"]
+            ),
+        )
+    )
+
+    # --------------------------------------------------------
+    # 11. 최종 Document Worker Response
+    # --------------------------------------------------------
+
+    return DocumentProcessResponse(
+        document_id=document_id,
+        announcement_id=(
+            request.announcement_id
+        ),
+        announcement_key=(
+            request.announcement_key
+        ),
+        status="completed",
+        document_format=document_format,
+        output_path=str(
+            paths["root"]
+        ),
+        summary={
+            "chunk_count": (
+                embedding_document.chunk_count
+            ),
+            "embedding_count": int(
+                embedding_vectors.shape[0]
+            ),
+        },
+        key_information=(
+            key_information
+        ),
     )
