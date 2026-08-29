@@ -383,10 +383,17 @@ class ChatContractTest(unittest.TestCase):
                 ],
             }
 
-        with patch(
-            "backend.app.services.chat_service."
-            "_load_answer_question",
-            return_value=fake_answer_question,
+        with (
+            patch.dict(
+                os.environ,
+                {"RAG_RUNTIME": "legacy"},
+                clear=False,
+            ),
+            patch(
+                "backend.app.services.chat_service."
+                "_load_answer_question",
+                return_value=fake_answer_question,
+            ),
         ):
             response = answer_question_via_rag(
                 announcement_id=10,
@@ -408,10 +415,17 @@ class ChatContractTest(unittest.TestCase):
         )
 
     def test_invalid_rag_result_is_rejected(self):
-        with patch(
-            "backend.app.services.chat_service."
-            "_load_answer_question",
-            return_value=lambda **kwargs: "invalid-result",
+        with (
+            patch.dict(
+                os.environ,
+                {"RAG_RUNTIME": "legacy"},
+                clear=False,
+            ),
+            patch(
+                "backend.app.services.chat_service."
+                "_load_answer_question",
+                return_value=lambda **kwargs: "invalid-result",
+            ),
         ):
             with self.assertRaises(Exception):
                 answer_question_via_rag(

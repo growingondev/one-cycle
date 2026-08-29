@@ -57,6 +57,50 @@ class ChatServiceRuntimeTest(unittest.TestCase):
             question="test question",
         )
 
+    def test_default_runtime_uses_http_client(self):
+        http_response = RagAnswerResponse(
+            result="grounded",
+            answer="default http answer",
+            grounded=True,
+            evidence=[],
+        )
+
+        with (
+            patch.dict(
+                os.environ,
+                {},
+                clear=False,
+            ),
+            patch.object(
+                chat_service,
+                "_load_answer_question",
+            ) as mock_load,
+            patch(
+                "backend.app.clients.rag_client."
+                "answer_question",
+                return_value=http_response,
+            ) as mock_http,
+        ):
+            os.environ.pop("RAG_RUNTIME", None)
+
+            result = chat_service.answer_question_via_rag(
+                announcement_id=15,
+                question="default runtime question",
+            )
+
+        self.assertEqual(
+            result.answer,
+            "default http answer",
+        )
+        self.assertTrue(result.grounded)
+
+        mock_load.assert_not_called()
+
+        mock_http.assert_called_once_with(
+            announcement_id=15,
+            question="default runtime question",
+        )
+
     def test_rag_http_runtime_uses_http_client(self):
         http_response = RagAnswerResponse(
             result="grounded",

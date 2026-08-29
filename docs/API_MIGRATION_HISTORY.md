@@ -1520,3 +1520,247 @@ Backend Service Boundary Cleanup    IMPLEMENTED
 Actual Document Runtime Cutover     PENDING
 Actual RAG Runtime Cutover          PENDING
 ~~~
+
+---
+
+## 27. 2026-08-30 Service Endpoint 통합 및 RAG Runtime Cutover
+
+`develop-api`에 RAG 및 Document Worker의 API 구현이 추가된 이후 Backend 계약과 실제 Runtime 연결을 다시 검증했다.
+
+### Service 구현 통합 상태
+
+다른 Service 담당 영역에서 다음 구현이 `develop-api`에 통합되었다.
+
+~~~text
+RAG Endpoint                       IMPLEMENTED
+RAG → Embedding HTTP               IMPLEMENTED
+
+Document Worker Endpoint           IMPLEMENTED
+Document Worker → Embedding HTTP   IMPLEMENTED
+Embedding Artifact 생성            IMPLEMENTED
+Key Information Extraction        IMPLEMENTED
+Completed Worker Response          IMPLEMENTED
+~~~
+
+Backend에서는 기존에 구현한 HTTP Client 및 Orchestration 계약이 위 Service 구현과 호환되는지 집중 회귀 테스트를 수행했다.
+
+초기 통합 검증 결과:
+
+~~~text
+Backend focused contract/runtime tests
+
+27 tests PASS
+~~~
+
+RAG 기본 Runtime 전환 테스트를 추가한 이후 결과:
+
+~~~text
+Backend focused contract/runtime tests
+
+28 tests PASS
+~~~
+
+### AWS RAG 실제 E2E 검증
+
+AWS 실행 환경에서 다음 Service의 Health를 확인했다.
+
+~~~text
+Embedding Service :18001   PASS
+RAG Service       :18002   PASS
+llama.cpp         :8080    PASS
+~~~
+
+Embedding Service는 다음 모델이 실제 Load된 상태였다.
+
+~~~text
+BAAI/bge-m3
+~~~
+
+현재 활성 Collection은 다음과 같이 확인했다.
+
+~~~text
+active_collection_run_id = 2
+~~~
+
+실제 검색 가능한 공고 중 다음 데이터를 검증 대상으로 사용했다.
+
+~~~text
+announcement_id = 78
+chunk_count      = 614
+embedding_count  = 614
+~~~
+
+RAG API에 실제 질문을 전송한 결과:
+
+~~~text
+result          = grounded
+grounded        = true
+evidence_count  = 5
+~~~
+
+따라서 다음 전체 경로가 실제 AWS 데이터로 동작함을 확인했다.
+
+~~~text
+RAG API
+→ Embedding Service
+→ BGE-M3 Query Embedding
+→ PostgreSQL / pgvector
+→ Retrieval
+→ llama.cpp
+→ Answer Generation
+→ grounded answer + evidence
+~~~
+
+### Backend → RAG 실제 HTTP 검증
+
+동일한 AWS 환경에서 `curl` 직접 호출뿐 아니라 Backend의 `rag_client.answer_question()`을 통해 RAG Service를 호출했다.
+
+결과:
+
+~~~text
+RESULT         grounded
+GROUNDED       True
+EVIDENCE_COUNT 5
+~~~
+
+이에 따라 다음 경로를 실제로 검증했다.
+
+~~~text
+Backend rag_client
+→ HTTP
+→ RAG Service
+→ Embedding
+→ PostgreSQL
+→ llama.cpp
+→ RAG Response
+→ Backend Response Contract Parsing
+~~~
+
+### Backend Runtime Switch 실제 검증
+
+마지막으로 Backend Service Layer의 실제 진입점에 다음 Runtime을 적용했다.
+
+~~~text
+RAG_RUNTIME=rag_http
+RAG_SERVICE_BASE_URL=http://127.0.0.1:18002
+~~~
+
+`chat_service.answer_question_via_rag()` 실행 결과:
+
+~~~text
+GROUNDED       True
+EVIDENCE_COUNT 5
+~~~
+
+따라서 다음 Runtime 경로도 실제 AWS에서 검증 완료했다.
+
+~~~text
+Backend chat_service
+→ RAG_RUNTIME=rag_http
+→ Backend rag_client
+→ RAG Service
+→ Embedding Service
+→ PostgreSQL / pgvector
+→ llama.cpp
+→ Backend
+~~~
+
+### RAG 기본 Runtime 전환
+
+AWS 검증 완료 후 API 버전의 Backend 기본 RAG Runtime을 다음과 같이 변경했다.
+
+~~~text
+Before
+RAG_RUNTIME default = legacy
+
+After
+RAG_RUNTIME default = rag_http
+~~~
+
+`.env.example` 역시 다음 기준으로 변경했다.
+
+~~~text
+RAG_SERVICE_BASE_URL=http://127.0.0.1:18002
+RAG_RUNTIME=rag_http
+~~~
+
+`127.0.0.1`은 현재 로컬 또는 AWS 동일 호스트 실행 기준이다.
+
+향후 Docker Compose에서는 Backend Container의 `localhost`가 RAG Service를 의미하지 않으므로 Docker Service DNS 주소로 변경해야 한다.
+
+기존 `legacy` Runtime은 제거하지 않고 rollback 경로로 유지한다.
+
+### 현재 상태
+
+~~~text
+Backend HTTP Client                 IMPLEMENTED
+Backend Worker Orchestration        IMPLEMENTED
+Backend Worker Artifact Persist     IMPLEMENTED
+Backend Document Runtime Switch     IMPLEMENTED
+Backend RAG Runtime Switch          IMPLEMENTED
+Backend Service Boundary Cleanup    IMPLEMENTED
+
+Embedding Endpoint                  IMPLEMENTED
+RAG Endpoint                        IMPLEMENTED
+RAG → Embedding HTTP                IMPLEMENTED
+Document Worker Endpoint            IMPLEMENTED
+Document Worker → Embedding HTTP    IMPLEMENTED
+
+Actual RAG Runtime Cutover          IMPLEMENTED
+Backend → RAG AWS E2E               PASS
+
+Actual Document Runtime Cutover     PENDING
+Backend → Worker AWS E2E            PENDING
+Docker Compose Integration          PENDING
+Overall E2E                         PARTIAL
+~~~
+
+다음 단계는 Backend → Document Worker 실제 HTTP 통합 검증 후 Document Runtime을 `worker_http` 기본 경로로 전환하는 것이다.
+
+---
+
+## 28. 2026-08-30 RAG Runtime Cutover 최종 회귀 검증
+
+RAG 기본 Runtime을 `rag_http`로 전환하고, 기존 legacy Runtime 계약 테스트에 `RAG_RUNTIME=legacy`를 명시한 뒤 Backend 전체 회귀 테스트를 다시 수행했다.
+
+최종 결과:
+
+~~~text
+Ran 114 tests
+
+PASS: 110
+FAIL: 4
+ERROR: 0
+~~~
+
+실패한 4개 테스트는 API 전환 이전부터 확인된 `KeyInformationExtractor` 관련 테스트와 동일하다.
+
+~~~text
+test_application_period
+test_application_period_korean_ampm_range
+test_application_period_labeled_range
+test_supply_summary_is_compact
+~~~
+
+RAG Runtime 기본값 변경으로 처음 발생했던 기존 ChatContract 테스트 오류는 legacy Runtime을 명시하도록 테스트 계약을 보정한 뒤 해결되었다.
+
+~~~text
+ChatContractTest
+
+2 tests PASS
+~~~
+
+따라서 이번 RAG Runtime Cutover로 새로 발생한 Backend 회귀 오류는 없다.
+
+현재 결론:
+
+~~~text
+Actual RAG Runtime Cutover      IMPLEMENTED
+Backend → RAG AWS E2E           PASS
+Backend RAG regression error    0
+
+Actual Document Runtime Cutover PENDING
+Backend → Worker AWS E2E        PENDING
+~~~
+
+---
