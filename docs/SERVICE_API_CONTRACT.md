@@ -581,11 +581,11 @@ Backend RAG Runtime Switch          IMPLEMENTED
 Backend Service Boundary Cleanup    IMPLEMENTED
 
 RAG Runtime Cutover                 IMPLEMENTED
-Document Runtime Cutover            PENDING
-Backend Runtime Cutover             PARTIAL
+Document Runtime Cutover            IMPLEMENTED
+Backend Runtime Cutover             IMPLEMENTED
 
 Backend → RAG AWS E2E               PASS
-Backend → Worker AWS E2E            PENDING
+Backend → Worker AWS E2E            PASS
 Docker Compose Integration          PENDING
 E2E                                 PARTIAL
 ~~~
@@ -594,7 +594,7 @@ E2E                                 PARTIAL
 
 Backend 서비스 경계 정리 기준으로 Backend는 `rag`, `document_worker`, `services.embedding`, `pipeline.embedding`의 Service 구현 모듈을 Python import로 직접 참조하지 않는다.
 
-RAG의 `RAG_ANSWER_FUNCTION` 기반 legacy runtime은 HTTP 전환 문제 발생 시 rollback 용도로 유지한다. Document Processing의 `DOCUMENT_REPROCESSOR` 기반 legacy runtime은 Document Runtime Cutover 완료 전까지 유지한다.
+RAG의 `RAG_ANSWER_FUNCTION` 기반 legacy runtime은 HTTP 전환 문제 발생 시 rollback 용도로 유지한다. Document Processing의 `DOCUMENT_REPROCESSOR` 기반 legacy runtime 역시 HTTP 전환 문제 발생 시 rollback 용도로 유지한다.
 
 ---
 
@@ -634,23 +634,26 @@ Backend chat_service
 
 따라서 API 버전의 RAG 기본 Runtime은 `rag_http`로 전환한다.
 
-Document Processing Runtime은 아직 기본값을 전환하지 않는다.
+2026-08-30 AWS 실제 환경에서 Backend → Document Worker → Embedding → Backend DB Persistence 전체 경로 검증을 완료했다.
+
+따라서 API 버전의 Document Processing 기본 Runtime은 `worker_http`로 전환한다.
 
 ~~~text
 Backend → Document Processing
 
-DOCUMENT_PROCESSING_RUNTIME=legacy
-→ 현재 기본 Runtime
-→ DOCUMENT_REPROCESSOR
-→ Python callable
-
 DOCUMENT_PROCESSING_RUNTIME=worker_http
+→ 기본 Runtime
 → Backend Worker Orchestration
 → Document Worker HTTP Client
 → POST /v1/documents/{document_id}/process
+
+DOCUMENT_PROCESSING_RUNTIME=legacy
+→ rollback Runtime
+→ DOCUMENT_REPROCESSOR
+→ Python callable
 ~~~
 
-Document Worker Endpoint와 Worker → Embedding HTTP 연결 자체는 구현되어 있으나, Backend → Worker 실제 통합 검증 후 Document Runtime Cutover를 진행한다.
+AWS E2E에서 Worker 처리 결과 291개 Chunk와 291개 Embedding이 Backend DB에 정상 저장되었고, Key Information 저장 및 ProcessingRun 활성화까지 확인했다.
 
 현재 `.env.example`의 `127.0.0.1` Service 주소는 로컬 또는 AWS 동일 호스트 실행 기준이다. Docker Compose 통합 시에는 `localhost`를 사용하지 않고 각 Service의 Docker DNS 이름으로 변경한다.
 
