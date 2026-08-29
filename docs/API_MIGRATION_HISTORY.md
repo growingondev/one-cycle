@@ -1764,3 +1764,209 @@ Backend → Worker AWS E2E        PENDING
 ~~~
 
 ---
+
+## 29. 2026-08-30 Document Runtime Cutover 및 AWS E2E 검증
+
+Document Worker Endpoint와 Worker → Embedding HTTP 연결이 완료된 상태에서 Backend → Document Worker 실제 HTTP 통합을 AWS 환경에서 검증했다.
+
+### AWS Service 상태
+
+검증 당시 주요 Service는 다음 주소에서 실행했다.
+
+~~~text
+Embedding Service     http://127.0.0.1:18001
+Document Worker       http://127.0.0.1:18003
+~~~
+
+Document Worker는 별도 health endpoint가 없으므로 다음 경로로 HTTP Server 기동 상태를 확인했다.
+
+~~~text
+GET /openapi.json
+HTTP 200
+~~~
+
+### Backend Document Worker Client 실제 HTTP 검증
+
+Backend의 `document_worker_client.process_document()`를 통해 실제 HWPX fixture를 Worker에 전달했다.
+
+결과:
+
+~~~text
+status           = completed
+document_format  = hwpx
+chunk_count      = 291
+embedding_count  = 291
+~~~
+
+Key Information 결과:
+
+~~~text
+application_period     not_found
+eligibility            extracted
+supply_information     extracted
+income_asset_criteria  extracted
+required_documents     extracted
+winner_announcement    not_found
+contact_information    extracted
+~~~
+
+`not_found`는 계약상 정상 Business Result이므로 Worker 전체 결과는 성공으로 처리되었다.
+
+이에 따라 다음 실제 HTTP 경로를 검증했다.
+
+~~~text
+Backend document_worker_client
+→ HTTP
+→ Document Worker
+→ Parser / Normalizer
+→ Structure / Verification
+→ Chunking
+→ Embedding Service HTTP
+→ Artifact
+→ Key Information
+→ Worker Response
+→ Backend Response Contract Parsing
+~~~
+
+### Backend Orchestration + DB Persistence 실제 검증
+
+기존 정상 공고 데이터를 변경하지 않도록 E2E 전용 CollectionRun, Announcement, Document를 생성한 뒤 Backend의 실제 orchestration 진입점인 `process_document_with_worker()`를 실행했다.
+
+검증 결과:
+
+~~~text
+success               = True
+stage                 = completed
+processing_run_id     = 193
+key_information_id    = 95
+is_active             = True
+
+chunk_set_id          = 193
+declared_chunks       = 291
+actual_chunks         = 291
+actual_embeddings     = 291
+
+execution_status      = succeeded
+verification_status   = pass
+key_information       = completed
+output_exists         = True
+~~~
+
+따라서 다음 전체 경로가 실제 AWS 환경에서 정상 동작함을 확인했다.
+
+~~~text
+Backend
+→ DB Document Context
+→ Document Worker HTTP
+→ Parser / Normalizer
+→ Structure / Verification
+→ Chunking
+→ Embedding Service HTTP
+→ Worker Artifact
+→ Backend Artifact Persistence
+→ Chunk DB Persistence
+→ Embedding DB Persistence
+→ Key Information DB Persistence
+→ ProcessingRun Activation
+~~~
+
+검증 후 생성한 E2E 전용 DB 데이터와 Artifact는 삭제했으며 다음 상태를 확인했다.
+
+~~~text
+DB_TEST_DATA_EXISTS = False
+ARTIFACT_EXISTS     = False
+~~~
+
+기존 정상 공고 데이터는 테스트 대상으로 사용하지 않았다.
+
+### Document Runtime 기본값 전환
+
+AWS E2E 성공 후 API 버전 Backend의 Document Processing 기본 Runtime을 다음과 같이 변경했다.
+
+~~~text
+Before
+DOCUMENT_PROCESSING_RUNTIME default = legacy
+
+After
+DOCUMENT_PROCESSING_RUNTIME default = worker_http
+~~~
+
+`.env.example` 역시 다음 기준으로 변경했다.
+
+~~~text
+DOCUMENT_WORKER_BASE_URL=http://127.0.0.1:18003
+DOCUMENT_WORKER_TIMEOUT_SECONDS=600
+DOCUMENT_PROCESSING_RUNTIME=worker_http
+~~~
+
+현재 `127.0.0.1`은 로컬 또는 AWS 동일 호스트 실행 기준이다.
+
+Docker Compose 통합 시에는 Backend Container의 `localhost`가 Document Worker를 의미하지 않으므로 Docker Service DNS 주소로 변경해야 한다.
+
+기존 `DOCUMENT_REPROCESSOR` 기반 `legacy` Runtime은 제거하지 않고 rollback 경로로 유지한다.
+
+### 로컬 Runtime 회귀 검증
+
+환경변수 `DOCUMENT_PROCESSING_RUNTIME`을 설정하지 않았을 때 기본적으로 Worker orchestration을 사용하는 테스트를 추가했다.
+
+집중 회귀 테스트 결과:
+
+~~~text
+50 passed
+4 subtests passed
+0 failed
+~~~
+
+검증 범위:
+
+~~~text
+Pipeline Gateway Runtime
+Document Worker Client
+Document Processing Service
+Pipeline Persistence
+Internal HTTP Client
+Backend Contract
+~~~
+
+### 전체 Backend 회귀 검증
+
+Document Runtime 기본값 전환 후 전체 Backend 테스트를 수행했다.
+
+~~~text
+111 passed
+4 failed
+4 subtests passed
+~~~
+
+실패한 4개 테스트는 API 전환 이전부터 확인된 `KeyInformationExtractor` 관련 테스트와 동일하다.
+
+~~~text
+test_application_period
+test_application_period_korean_ampm_range
+test_application_period_labeled_range
+test_supply_summary_is_compact
+~~~
+
+따라서 이번 Document Runtime Cutover로 새로 발생한 Backend 회귀 오류는 없다.
+### 현재 상태
+
+~~~text
+Backend → RAG AWS E2E               PASS
+Backend → Worker AWS E2E            PASS
+
+RAG Runtime Cutover                 IMPLEMENTED
+Document Runtime Cutover            IMPLEMENTED
+Backend Runtime Cutover             IMPLEMENTED
+
+RAG → Embedding HTTP                IMPLEMENTED
+Document Worker → Embedding HTTP    IMPLEMENTED
+
+Docker Compose Integration          PENDING
+Overall E2E                         PARTIAL
+~~~
+
+Backend의 RAG 및 Document Processing Runtime은 모두 내부 HTTP Service를 기본 경로로 사용하게 되었다.
+
+다음 단계는 Docker Compose에서 Backend, Document Worker, RAG, Embedding, LLM, PostgreSQL의 실행 환경과 Service DNS, shared volume을 통합하는 것이다.
+
+---

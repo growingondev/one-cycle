@@ -53,7 +53,7 @@ def recollect_announcement(announcement_id: int):
 def _get_document_processing_runtime() -> str:
     runtime = os.getenv(
         "DOCUMENT_PROCESSING_RUNTIME",
-        "legacy",
+        "worker_http",
     ).strip().lower()
 
     if runtime not in {

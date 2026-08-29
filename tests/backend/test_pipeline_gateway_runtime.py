@@ -91,6 +91,50 @@ class PipelineGatewayRuntimeTest(unittest.TestCase):
             20
         )
 
+    def test_default_runtime_uses_worker_orchestration(self):
+        expected = {
+            "success": True,
+            "document_id": 25,
+            "stage": "completed",
+        }
+
+        with (
+            patch.dict(
+                os.environ,
+                {},
+                clear=False,
+            ),
+            patch.object(
+                pipeline_gateway,
+                "_load_callable",
+            ) as mock_load_callable,
+            patch(
+                "backend.app.services."
+                "document_processing_service."
+                "process_document_with_worker",
+                return_value=expected,
+            ) as mock_worker,
+        ):
+            os.environ.pop(
+                "DOCUMENT_PROCESSING_RUNTIME",
+                None,
+            )
+
+            result = pipeline_gateway.reprocess_document(
+                25
+            )
+
+        self.assertEqual(
+            result,
+            expected,
+        )
+
+        mock_load_callable.assert_not_called()
+
+        mock_worker.assert_called_once_with(
+            25
+        )
+
     def test_invalid_runtime_is_rejected(self):
         with patch.dict(
             os.environ,
