@@ -6,10 +6,7 @@ from dataclasses import dataclass
 from sqlalchemy import text
 
 from backend.app.db.session import SessionLocal
-from pipeline.embedding.model_loader import (
-    LoadedEmbeddingModel,
-    load_bge_m3_model,
-)
+from services.embedding.client import EmbeddingClient
 from rag.generation.config import (
     DEFAULT_GENERATION_CONFIG,
     GenerationConfig,
@@ -22,7 +19,6 @@ from rag.retrieval.config import (
     RetrievalConfig,
 )
 from rag.retrieval.models import CorpusItem, SearchResult
-from rag.retrieval.query_embedding import embed_query
 
 
 class DBRAGPipelineError(RuntimeError):
@@ -36,13 +32,13 @@ class DBRAGNoEvidenceError(DBRAGPipelineError):
 @dataclass
 class DBRAGPipeline:
     """
-    BGE-M3 Query Embedding
+    Embedding Service Query Embedding
     → PostgreSQL + pgvector
     → 선택 공고 Top-K
     → 기존 Qwen Generation
     """
 
-    embedding_model: LoadedEmbeddingModel
+    embedding_client: EmbeddingClient
     retrieval_config: RetrievalConfig
     generation_config: GenerationConfig
     top_k: int = 5
@@ -74,16 +70,10 @@ class DBRAGPipeline:
                 "RAG_DB_TOP_K는 1 이상이어야 합니다."
             )
 
-        loaded_model = load_bge_m3_model(
-            model_name=retrieval_config.embedding_model_name,
-            model_path=retrieval_config.embedding_model_path,
-            use_fp16=retrieval_config.use_fp16,
-            require_cuda=retrieval_config.require_cuda,
-            device_index=retrieval_config.device_index,
-        )
+        embedding_client = EmbeddingClient()
 
         return cls(
-            embedding_model=loaded_model,
+            embedding_client=embedding_client,
             retrieval_config=retrieval_config,
             generation_config=generation_config,
             top_k=top_k,
@@ -93,14 +83,7 @@ class DBRAGPipeline:
         self,
         query: str,
     ):
-        return embed_query(
-            self.embedding_model,
-            query,
-            max_length=(
-                self.retrieval_config.query_max_length
-            ),
-            normalize=True,
-        )
+        return self.embedding_client.embed_query(query)
 
     @staticmethod
     def _vector_literal(vector) -> str:
