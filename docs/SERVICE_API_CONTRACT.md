@@ -566,53 +566,93 @@ Shared Volume Direction   CONFIRMED
 현재 구현 상태:
 
 ~~~text
-Backend HTTP Client               IMPLEMENTED
-Backend Worker Orchestration      IMPLEMENTED
-Backend Worker Artifact Persist   IMPLEMENTED
+Backend HTTP Client                 IMPLEMENTED
+Backend Worker Orchestration        IMPLEMENTED
+Backend Worker Artifact Persist     IMPLEMENTED
 
-Document Worker Endpoint          PARTIAL
-RAG Endpoint                      PENDING
-Embedding Endpoint                IMPLEMENTED
+Document Worker Endpoint            IMPLEMENTED
+RAG Endpoint                        IMPLEMENTED
+Embedding Endpoint                  IMPLEMENTED
+Document Worker → Embedding HTTP    IMPLEMENTED
+RAG → Embedding HTTP                IMPLEMENTED
 
-Backend Document Runtime Switch   IMPLEMENTED
-Backend RAG Runtime Switch        IMPLEMENTED
-Backend Service Boundary Cleanup  IMPLEMENTED
-Backend Runtime Cutover           PENDING
-Docker Compose Integration        PENDING
-E2E                               PENDING
+Backend Document Runtime Switch     IMPLEMENTED
+Backend RAG Runtime Switch          IMPLEMENTED
+Backend Service Boundary Cleanup    IMPLEMENTED
+
+RAG Runtime Cutover                 IMPLEMENTED
+Document Runtime Cutover            PENDING
+Backend Runtime Cutover             PARTIAL
+
+Backend → RAG AWS E2E               PASS
+Backend → Worker AWS E2E            PENDING
+Docker Compose Integration          PENDING
+E2E                                 PARTIAL
 ~~~
 
 계약 확정과 Endpoint 구현 완료는 서로 다른 상태로 관리한다.
 
 Backend 서비스 경계 정리 기준으로 Backend는 `rag`, `document_worker`, `services.embedding`, `pipeline.embedding`의 Service 구현 모듈을 Python import로 직접 참조하지 않는다.
 
-기존 MVP 호환을 위한 `RAG_ANSWER_FUNCTION`, `DOCUMENT_REPROCESSOR` 기반 legacy runtime은 실제 Runtime Cutover 전까지 유지한다.
+RAG의 `RAG_ANSWER_FUNCTION` 기반 legacy runtime은 HTTP 전환 문제 발생 시 rollback 용도로 유지한다. Document Processing의 `DOCUMENT_REPROCESSOR` 기반 legacy runtime은 Document Runtime Cutover 완료 전까지 유지한다.
 
 ---
 
 # 10. Runtime 전환 원칙
 
-각 Service Endpoint가 실제로 준비되기 전까지 기존 MVP의 Python direct call을 제거하지 않는다.
+Service Endpoint 구현과 실제 통합 검증이 완료된 경로부터 HTTP Runtime을 기본값으로 전환한다.
 
-현재:
+현재 RAG Runtime:
 
 ~~~text
 Backend → RAG
 
-RAG_RUNTIME=legacy
-→ RAG_ANSWER_FUNCTION
-→ Python callable
-
 RAG_RUNTIME=rag_http
+→ 기본 Runtime
 → Backend rag_client
 → POST /v1/rag/answer
 
-Backend → Document Processing
-DOCUMENT_REPROCESSOR
+RAG_RUNTIME=legacy
+→ rollback Runtime
+→ RAG_ANSWER_FUNCTION
 → Python callable
 ~~~
 
-Service Endpoint가 구현되고 단위 테스트 및 통합 테스트가 가능해지면 `develop-api`에서 HTTP Client 호출로 전환한다.
+2026-08-30 AWS 실제 환경에서 다음 전체 경로를 검증했다.
+
+~~~text
+Backend chat_service
+→ RAG_RUNTIME=rag_http
+→ Backend rag_client
+→ RAG Service
+→ Embedding Service
+→ PostgreSQL / pgvector
+→ llama.cpp
+→ grounded answer + evidence
+→ Backend
+~~~
+
+따라서 API 버전의 RAG 기본 Runtime은 `rag_http`로 전환한다.
+
+Document Processing Runtime은 아직 기본값을 전환하지 않는다.
+
+~~~text
+Backend → Document Processing
+
+DOCUMENT_PROCESSING_RUNTIME=legacy
+→ 현재 기본 Runtime
+→ DOCUMENT_REPROCESSOR
+→ Python callable
+
+DOCUMENT_PROCESSING_RUNTIME=worker_http
+→ Backend Worker Orchestration
+→ Document Worker HTTP Client
+→ POST /v1/documents/{document_id}/process
+~~~
+
+Document Worker Endpoint와 Worker → Embedding HTTP 연결 자체는 구현되어 있으나, Backend → Worker 실제 통합 검증 후 Document Runtime Cutover를 진행한다.
+
+현재 `.env.example`의 `127.0.0.1` Service 주소는 로컬 또는 AWS 동일 호스트 실행 기준이다. Docker Compose 통합 시에는 `localhost`를 사용하지 않고 각 Service의 Docker DNS 이름으로 변경한다.
 
 기존 `develop` 브랜치의 MVP Runtime은 API/Docker 전환 완료 전까지 유지한다.
 

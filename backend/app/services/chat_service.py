@@ -59,7 +59,7 @@ def _load_answer_question():
 def _get_rag_runtime() -> str:
     runtime = os.getenv(
         "RAG_RUNTIME",
-        "legacy",
+        "rag_http",
     ).strip().lower()
 
     if runtime not in {
