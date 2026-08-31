@@ -2306,3 +2306,42 @@ Embedding / RAG / LLM 실제 실행 검증        미완료
 AWS 신규 Docker 구성 반영                 미완료
 AWS 전체 Docker E2E                       미완료
 ~~~
+
+## 32. 2026-09-01 전체 Docker Compose 1차 통합
+
+Embedding / RAG / LLM Docker 정의를 기존 PostgreSQL / Backend / Document Worker Compose 구성에 연결했다.
+
+현재 Compose는 `ai` profile 사용 시 다음 6개 서비스를 인식한다.
+
+~~~text
+postgres
+backend
+document-worker
+embedding
+llm
+rag
+~~~
+
+로컬에서는 GPU와 모델 파일이 필요하지 않은 RAG를 실제 빌드 및 실행하여 다음 항목을 검증했다.
+
+~~~text
+RAG image build                    PASS
+RAG container startup              PASS
+GET /health                        PASS
+Backend -> rag:18002 Docker DNS     PASS
+~~~
+
+Embedding과 LLM은 NVIDIA GPU 및 실제 모델 마운트가 필요하므로 로컬 실행 검증 대상에서 제외했다. 두 서비스와 전체 6서비스 E2E는 AWS NVIDIA L4 환경에서 검증한다.
+
+현재 상태:
+
+~~~text
+PostgreSQL                          PASS
+Backend(+Crawler)                   PASS
+Document Worker                     PASS
+RAG                                 PASS
+Backend -> RAG 내부 통신            PASS
+Embedding                           AWS 검증 대기
+LLM                                 AWS 검증 대기
+전체 6서비스 E2E                    AWS 검증 대기
+~~~
