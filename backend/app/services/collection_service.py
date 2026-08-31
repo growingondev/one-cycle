@@ -254,6 +254,9 @@ def persist_collection_result(
                 announcement_date=_parse_date(
                     raw_announcement.get("post_date")
                 ),
+                deadline_date=_parse_date(
+                    raw_announcement.get("deadline_date")
+                ),
                 publication_status=(
                     str(
                         raw_announcement.get(

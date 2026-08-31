@@ -1970,3 +1970,162 @@ Backend의 RAG 및 Document Processing Runtime은 모두 내부 HTTP Service를 
 다음 단계는 Docker Compose에서 Backend, Document Worker, RAG, Embedding, LLM, PostgreSQL의 실행 환경과 Service DNS, shared volume을 통합하는 것이다.
 
 ---
+
+## 30. 2026-08-31 공고 마감일 데이터 소스 정비
+
+사용자 공고 목록의 `deadlineDate`가 기존에는 문서 처리 결과인
+`key_information.application_period.end`에만 의존하고 있었다.
+
+LH 공고 목록 Crawler는 이미 공고 메타데이터에서 `deadline_date`를
+수집하고 있으므로, 공고 목록에 표시하는 마감일은 Crawler 원본 값을
+우선 사용하도록 Backend 데이터 흐름을 정비했다.
+
+### 변경된 데이터 흐름
+
+기존:
+
+~~~text
+Document Processing
+→ Key Information Extraction
+→ key_information.application_period.end
+→ Backend Announcement List API
+→ deadlineDate
+~~~
+
+변경:
+
+~~~text
+LH Announcement List
+→ Crawler deadline_date
+→ announcements.deadline_date
+→ Backend Announcement List API
+→ deadlineDate
+~~~
+
+기존 데이터와의 호환성을 위해 목록 조회에서는 다음 우선순위를 적용한다.
+
+~~~text
+1. announcements.deadline_date
+2. key_information.application_period.end
+~~~
+
+SQL 기준:
+
+~~~sql
+COALESCE(
+    a.deadline_date::text,
+    ki.application_period ->> 'end'
+)
+~~~
+
+따라서 신규 수집 공고는 Crawler가 수집한 원본 마감일을 우선 사용하고,
+기존 공고에서 `deadline_date`가 NULL인 경우에는 기존 핵심정보 값을
+fallback으로 사용할 수 있다.
+
+### DB Schema 변경
+
+`announcements` 테이블에 다음 컬럼을 추가했다.
+
+~~~text
+deadline_date DATE NULL
+~~~
+
+Alembic migration:
+
+~~~text
+5f4c391df25e
+add deadline date to announcements
+~~~
+
+이전 Revision:
+
+~~~text
+3d70b82ff082
+~~~
+
+### Collection Persistence 변경
+
+`persist_collection_result()`에서 Crawler 결과의 다음 값을 저장한다.
+
+~~~text
+raw_announcement["deadline_date"]
+→ _parse_date()
+→ Announcement.deadline_date
+~~~
+
+기존 `_parse_date()`가 지원하는 날짜 형식을 그대로 사용한다.
+
+~~~text
+YYYY-MM-DD
+YYYY.MM.DD
+YYYY/MM/DD
+~~~
+
+### 검증 결과
+
+신규 Deadline 계약 테스트:
+
+~~~text
+2 tests PASS
+~~~
+
+검증 항목:
+
+~~~text
+Crawler deadline_date parsing / persistence        PASS
+Announcement DB deadline priority                  PASS
+Key Information fallback SQL contract              PASS
+Frontend API field deadlineDate contract           PASS
+~~~
+
+기존 Backend Contract 테스트:
+
+~~~text
+19 tests PASS
+~~~
+
+전체 Backend 회귀 테스트:
+
+~~~text
+113 passed
+4 failed
+4 subtests passed
+~~~
+
+실패한 4개 테스트는 기존부터 확인된
+`KeyInformationExtractor` 관련 테스트와 동일하다.
+
+~~~text
+test_application_period
+test_application_period_korean_ampm_range
+test_application_period_labeled_range
+test_supply_summary_is_compact
+~~~
+
+이번 `deadline_date` 변경으로 새롭게 발생한 Backend 회귀 실패는 없다.
+
+### 실제 PostgreSQL Service 검증
+
+로컬 PostgreSQL의 기존 Announcement를 대상으로 트랜잭션 내부에서
+임시 `deadline_date`를 설정한 뒤 실제
+`list_active_announcements()`를 호출했다.
+
+검증 결과:
+
+~~~text
+temporary deadline_date = 2099-12-31
+API deadlineDate        = 2099-12-31
+service priority        = PASS
+~~~
+
+검증 종료 후 transaction rollback을 수행했다.
+
+~~~text
+active_collection_run_id = None
+deadline_date             = None
+rollback                  = PASS
+~~~
+
+따라서 실제 PostgreSQL과 Backend Announcement List Service에서도
+`announcements.deadline_date` 우선 조회가 정상 동작하며,
+검증 과정에서 기존 DB 상태는 변경되지 않았다.
