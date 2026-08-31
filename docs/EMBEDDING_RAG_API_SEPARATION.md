@@ -243,6 +243,16 @@ Client는 응답에서 다음 내용을 검증합니다.
 
 ------------------------------------------------------------------------
 
+### `services/embedding/config.py`
+
+Embedding Service 전용 환경설정 계층입니다. `pydantic-settings`를 사용하며 모델명/경로, FP16,
+CUDA 필수 여부, GPU device index, Embedding Service URL을 환경변수에서 읽습니다.
+
+`pipeline/embedding/config.py`도 이 settings를 사용하도록 변경하여 Embedding 관련 환경변수 읽기
+방식을 한 곳으로 모았습니다.
+
+------------------------------------------------------------------------
+
 ## 5. Embedding API 계약
 
 ### Endpoint
@@ -459,6 +469,16 @@ unsupported
 
 `no_evidence`는 서버 장애가 아니라 **검색 가능한 근거가 없다는 정상
 비즈니스 응답**입니다.
+
+------------------------------------------------------------------------
+
+### `services/rag/config.py`
+
+RAG Service 전용 환경설정 계층입니다. PostgreSQL, Embedding Service, llama.cpp, Retrieval, MVP 문서
+설정을 `pydantic-settings`로 관리합니다. `MVP_ANNOUNCEMENT_ID`는 빈 문자열도 `None`으로 처리하도록
+validator가 적용되어 있습니다.
+
+RAG DB 접근은 `rag/db/session.py`가 이 설정을 사용하여 PostgreSQL에 직접 연결합니다.
 
 ------------------------------------------------------------------------
 
@@ -739,124 +759,112 @@ reasoning : off
 
 # 16. 현재 완료 상태
 
-  작업                                 상태
-  ------------------------------------ ---------------------
-  Embedding Service API 생성           완료
-  `/v1/embeddings` 구현                완료
-  Embedding 단일 요청 테스트           완료
-  Embedding Batch 테스트               완료
-  Embedding Validation 테스트          완료
-  RAG Service API 생성                 완료
-  `/v1/rag/answer` 구현                완료
-  RAG Query Embedding 직접 호출 제거   완료
-  RAG → Embedding HTTP 연결            완료
-  RAG Retrieval 실행                   완료
-  RAG → llama.cpp 연결                 기존 HTTP 구조 유지
-  AWS 전체 RAG E2E 테스트              완료
-  Document Pipeline → Embedding API    **대기**
-  레거시 Embedding 코드 정리           **대기**
-  Docker 서비스 단위 통합              **대기**
+| 작업 | 상태 |
+|---|---|
+| Embedding Service API 생성 | 완료 |
+| `/v1/embeddings` 구현 | 완료 |
+| Embedding 단일/Batch/Validation 테스트 | 완료 |
+| RAG Service API 생성 | 완료 |
+| `/v1/rag/answer` 구현 | 완료 |
+| RAG Query Embedding 직접 호출 제거 | 완료 |
+| RAG → Embedding HTTP 연결 | 완료 |
+| Document Worker → Embedding HTTP 연결 | 완료 |
+| RAG 자체 DB Session 분리 | 완료 |
+| RAG → Backend 직접 import 제거 | 완료 |
+| RAG/Embedding 설정 계층 분리 | 완료 |
+| `.env` 자동 로딩(`pydantic-settings`) | 완료 |
+| RAG Retrieval 실행 | 완료 |
+| RAG → llama.cpp 연결 | 기존 HTTP 구조 유지 |
+| AWS RAG API/HTTP 연동 검증 | 완료 |
+| 레거시 `run_embeddings.py` 직접 실행 경로 | 유지 / 추후 정리 |
+| Docker 서비스 단위 통합 | 대기 |
 
 ------------------------------------------------------------------------
 
-# 17. 현재 하지 않은 작업
+# 17. 기존 파일 기반 Embedding 실행 경로 주의
 
-## Document Pipeline / Worker의 Chunk Embedding API 전환
+실제 서비스의 Document Worker는 이미 Embedding API를 사용합니다.
 
-이 부분은 아직 변경하지 않았습니다.
+``` text
+Backend
+  ↓ HTTP
+Document Worker :18003
+  ↓ Parsing / Normalizing / Structure / Chunking
+EmbeddingClient.embed_items()
+  ↓ HTTP
+POST /v1/embeddings
+  ↓
+Embedding Service :18001
+  ↓
+BGE-M3
+```
 
-현재 기존 문서 처리 흐름에는 다음과 같은 직접 임베딩 실행 코드가 남아
-있습니다.
+다만 저장소에는 기존 수동/파일 기반 실행용 코드가 남아 있습니다.
 
 ``` text
 pipeline/embedding/run_embeddings.py
+pipeline/document_processor.py
 ```
 
-검색 결과 이 파일에서는 현재:
+`run_embeddings.py`에서는 현재도 다음 함수를 직접 사용합니다.
 
 ``` text
 load_bge_m3_model()
 generate_embeddings()
 ```
 
-등을 직접 사용합니다.
+따라서 `pipeline/document_processor.py` 또는 `run_embeddings.py`를 직접 실행하는
+레거시/CLI 경로는 Embedding Service `:18001`을 거치지 않습니다. 이것은 현재 웹서비스의
+Document Worker 실행 경로와 구분해야 합니다.
 
-또한:
-
-``` text
-pipeline/document_processor.py
-```
-
-가 기존 `run_embeddings.py` 실행 경로를 가지고 있습니다.
-
-하지만 Document Pipeline/Worker API 작업은 다른 팀원의 작업 결과와 맞춰
-연결해야 하므로 **이번 작업에서는 해당 코드를 임의로 수정하지
-않았습니다.**
+또한 `run_embeddings.py`에는 Backend의 `error_log_service`를 import하는 기존 의존성이
+남아 있습니다. 현재 서비스 운영 경로의 Embedding HTTP 연동에는 영향을 주지 않지만,
+향후 파일 기반 파이프라인까지 완전히 독립 서비스 규칙에 맞출 경우 정리 대상입니다.
 
 ------------------------------------------------------------------------
 
-# 18. Document Worker 담당자가 이어서 해야 할 작업
+# 18. Document Worker → Embedding API 현재 구현
 
-Document Worker/API 작업이 완료되면 Chunk Embedding 부분을 다음 구조로
-연결해야 합니다.
-
-### 기존
+현재 `document_worker/service.py`는 `EmbeddingClient`를 사용합니다.
 
 ``` text
-Document Worker / Pipeline
-        ↓
-run_embeddings.py
-        ↓
-BGE-M3 직접 load
-        ↓
-Chunk Embedding
-```
-
-### 목표
-
-``` text
-Document Worker
-        ↓
-Chunk/Text 준비
-        ↓ HTTP
+document_worker/service.py
+  ↓
+EmbeddingClient()
+  ↓
+client.embed_items(...)
+  ↓ HTTP
 POST /v1/embeddings
-        ↓
+  ↓
 Embedding Service
-        ↓
-BGE-M3
-        ↓
-Embedding 결과
-        ↓
-Worker에서 저장/후속 처리
 ```
 
-중요한 책임 분리는 다음과 같습니다.
+따라서 실제 서비스에서 Document Worker의 Chunk Embedding은 BGE-M3를 직접 로드하지 않고
+공용 Embedding Service를 통해 수행됩니다.
 
 ### Document Worker 책임
 
--   HWP/HWPX Parsing
--   Normalizing
--   Structure 생성
--   Chunking
--   임베딩할 text 결정
--   Chunk ID 결정
--   Embedding API 요청
--   반환 vector와 chunk ID 매칭
--   DB/Artifact 저장 및 후속 처리
+- HWP/HWPX Parsing
+- Normalizing
+- Structure 생성
+- Chunking
+- 임베딩할 text 결정
+- Chunk ID 결정
+- Embedding API 요청
+- 반환 vector와 chunk ID 매칭
+- DB/Artifact 저장 및 후속 처리
 
 ### Embedding Service 책임
 
--   BGE-M3 모델 로드
--   Encode/Inference
--   Dense Vector 생성
--   L2 Normalization
--   Vector 결과 검증
--   API Response 반환
+- BGE-M3 모델 로드
+- Encode/Inference
+- Dense Vector 생성
+- L2 Normalization
+- Vector 결과 검증
+- API Response 반환
 
-즉 **문서 파이프라인 전체를 Embedding Service로 옮기면 안 됩니다.**
-
-Embedding Service는 **텍스트를 받아 벡터를 반환하는 공용 모델
-서비스**입니다.
+즉 **문서 파이프라인 전체를 Embedding Service로 옮기는 것이 아니라, 모델 추론 책임만
+Embedding Service로 분리**한 구조입니다.
 
 ------------------------------------------------------------------------
 
@@ -883,20 +891,32 @@ Document Worker가 Embedding API를 사용하도록 변경된 후 기존 CLI가
 
 ------------------------------------------------------------------------
 
-### 19.3 RAG의 Backend 직접 import
+### 19.3 RAG의 Backend 직접 import 제거 완료
 
-현재 일부 RAG 내부 코드에는 다음과 같은 Backend 의존성이 남아 있습니다.
+RAG를 독립 Docker 서비스로 분리하기 위해 기존 Backend 직접 의존성을 제거했습니다.
+
+기존 의존 예:
 
 ``` text
 backend.app.db.session.SessionLocal
 backend.app.services.error_log_service
 ```
 
-RAG를 완전히 독립된 Docker 서비스로 분리할 경우 이 의존성을 검토해야
-합니다.
+현재 DB 연결은 RAG가 자체 계층을 사용합니다.
 
-특히 RAG가 DB에 직접 접근하는 현재 설계를 유지한다면 RAG 자체 DB
-session/config 계층으로 분리하는 방안을 검토해야 합니다.
+``` text
+rag/db/__init__.py
+rag/db/session.py
+```
+
+`rag/db/session.py`가 RAG 설정을 이용해 PostgreSQL에 직접 연결하며,
+`rag/retrieval/keyword_search.py` 등은 Backend DB session 대신 RAG DB session을 사용합니다.
+
+또한 `rag/generation/generator.py`, `rag/retrieval/hybrid_search.py`의 Backend
+`error_log_service.record_error()` 직접 import를 제거하고 Python `logging`으로 변경했습니다.
+
+최종 검증에서 `rag/`, `services/rag/` 범위의 `from backend`, `import backend`,
+`record_error`, `error_log_service` 검색 결과가 없는 것을 확인했습니다.
 
 ------------------------------------------------------------------------
 
@@ -927,6 +947,7 @@ message를 계약에 맞게 보존하는지 재검토합니다.
 fastapi
 uvicorn
 httpx
+pydantic-settings
 ```
 
 Embedding Service의 ML/GPU dependency도 서비스별 Docker 구성 시 다시
@@ -934,48 +955,93 @@ Embedding Service의 ML/GPU dependency도 서비스별 Docker 구성 시 다시
 
 ------------------------------------------------------------------------
 
-# 20. 환경변수 / 서비스 주소
+# 20. 환경변수 / 서비스 주소 및 설정 계층
 
-현재 Host-level AWS 통합 테스트에서는 다음 형태를 사용했습니다.
+## 20.1 이번에 수정한 환경변수 로딩 문제
 
-``` text
-Embedding Service
-http://127.0.0.1:18001
+기존 RAG/Embedding 관련 코드 일부는 `os.getenv()`를 직접 사용했습니다. AWS에서 프로세스를
+새로 실행했을 때 `.env` 파일이 존재하더라도 Python 프로세스 환경에 값이 자동 주입되지 않아,
+`source .env`를 먼저 수행해야 정상 실행되는 문제가 확인되었습니다.
 
-RAG Service
-http://127.0.0.1:18002
-
-llama.cpp
-http://127.0.0.1:8080
-```
-
-RAG에서 Embedding Service 주소는:
+이를 해결하기 위해 `pydantic-settings` 기반의 서비스별 설정 계층을 추가했습니다.
 
 ``` text
-EMBEDDING_SERVICE_URL
+services/embedding/config.py
+services/rag/config.py
 ```
 
-을 사용합니다.
-
-### Docker 전환 시 중요
-
-각 서비스가 별도 Container가 되면:
+현재 관련 모듈은 위 settings 객체를 통해 설정을 읽습니다.
 
 ``` text
-127.0.0.1
+pipeline/embedding/config.py      → Embedding settings 사용
+services/embedding/client.py      → Embedding Service URL settings 사용
+rag/db_pipeline.py                → RAG settings 사용
+rag/retrieval/config.py           → RAG settings 사용
+rag/generation/config.py          → RAG settings 사용
+rag/service.py                    → RAG settings 사용
 ```
 
-은 자기 자신의 Container를 의미합니다.
+이 변경 후 AWS에서 별도의 `source .env` 없이 서비스를 새로 시작해 설정이 정상 로드되는 것을
+확인했습니다.
 
-따라서 Docker Compose에서는 서비스 이름 기반 주소로 변경해야 합니다.
+### `MVP_ANNOUNCEMENT_ID` 빈 값 처리
 
-예:
+`.env`에 다음처럼 빈 값이 있을 때:
+
+``` env
+MVP_ANNOUNCEMENT_ID=
+```
+
+Pydantic이 빈 문자열을 `int`로 변환하지 못하는 문제가 발생했습니다.
+`services/rag/config.py`에 validator를 추가하여 빈 문자열을 `None`으로 변환하도록 수정했습니다.
+따라서 현재 `MVP_ANNOUNCEMENT_ID`는 optional이며 비워두거나 생략할 수 있습니다.
+
+## 20.2 Host-level AWS 주소
+
+Host-level AWS 통합 테스트에서는 다음 주소를 사용했습니다.
 
 ``` text
-http://embedding:18001
+Backend          http://127.0.0.1:18000
+Embedding        http://127.0.0.1:18001
+RAG              http://127.0.0.1:18002
+Document Worker  http://127.0.0.1:18003
+llama.cpp        http://127.0.0.1:8080
+PostgreSQL       127.0.0.1:5432
 ```
 
-실제 이름/포트는 최종 `docker-compose.yml`에 맞춰 결정합니다.
+## 20.3 Docker 전환 시 환경변수
+
+각 서비스가 별도 Container가 되면 `127.0.0.1`은 자기 자신의 Container를 의미하므로,
+Docker Compose 내부에서는 서비스 hostname을 사용해야 합니다.
+
+현재 계약 기준 예시는 다음과 같습니다.
+
+``` env
+POSTGRES_HOST=postgres
+EMBEDDING_SERVICE_URL=http://embedding:18001
+LLAMA_BASE_URL=http://llm:8080
+RAG_SERVICE_BASE_URL=http://rag:18002
+DOCUMENT_WORKER_BASE_URL=http://document-worker:18003
+```
+
+Embedding 설정에서 사용하는 기존 환경변수 이름은 유지합니다.
+
+``` env
+EMBEDDING_MODEL_NAME=BAAI/bge-m3
+EMBEDDING_MODEL_PATH=/models/bge-m3
+EMBEDDING_USE_FP16=true
+EMBEDDING_REQUIRE_CUDA=true
+EMBEDDING_DEVICE_INDEX=0
+```
+
+RAG는 `POSTGRES_*`, `EMBEDDING_SERVICE_URL`, `LLAMA_*`, `RAG_DB_TOP_K`,
+`MVP_DOCUMENT_FORMAT`, 선택적인 `MVP_ANNOUNCEMENT_ID`를 사용합니다.
+
+Docker 이미지의 Python dependency에는 이번 변경에서 사용하는 `pydantic-settings`가 반드시
+포함되어야 합니다. AWS 개발 환경에서는 `pydantic-settings 2.14.2`가 설치된 상태에서 검증했습니다.
+
+`SettingsConfigDict(env_file=".env")`가 설정되어 있지만 Docker에서는 Compose의 `environment:`
+또는 `env_file:`을 통해 프로세스 환경변수를 주입하면 됩니다.
 
 ------------------------------------------------------------------------
 
@@ -1028,19 +1094,31 @@ curl -s -X POST http://127.0.0.1:18002/v1/rag/answer \
 
 이 작업을 이어받는 경우 아래 순서로 확인하는 것을 권장합니다.
 
-1.  `services/embedding/` 구조와 `/v1/embeddings` 계약 확인
-2.  `services/embedding/client.py`가 서버가 아니라 **호출용 HTTP
-    Client**임을 확인
-3.  `rag/db_pipeline.py`에서 Query Embedding이 `EmbeddingClient`를
-    사용하는지 확인
-4.  Embedding Service 실행 후 `/health` 확인
-5.  RAG Service 실행 후 `/health` 확인
-6.  active collection에 속한 announcement로 `/v1/rag/answer` 테스트
-7.  llama.cpp 실행 시 Gemma reasoning 설정 확인
-8.  Document Worker 작업이 완료되면 Chunk Embedding을 `/v1/embeddings`로
-    연결
-9.  모든 연결 완료 후 레거시 직접 Embedding 호출 코드 정리
-10. Docker 환경에서는 localhost 대신 서비스 hostname으로 변경
+1. `services/embedding/` 구조와 `/v1/embeddings` 계약 확인
+2. `services/embedding/client.py`가 서버가 아니라 **호출용 HTTP Client**임을 확인
+3. `document_worker/service.py`가 `EmbeddingClient.embed_items()`로 Chunk Embedding을 요청하는지 확인
+4. `rag/db_pipeline.py`가 `EmbeddingClient`로 Query Embedding을 요청하는지 확인
+5. `rag/db/session.py`가 Backend DB session이 아니라 RAG 자체 PostgreSQL 연결 계층임을 확인
+6. `services/embedding/config.py`, `services/rag/config.py`와 필요한 환경변수 확인
+7. Embedding Service `/health` 및 `/v1/embeddings` 확인
+8. RAG Service `/health` 및 `/v1/rag/answer` 확인
+9. RAG 테스트 시 active collection에 속한 announcement를 사용
+10. llama.cpp 실행 시 Gemma reasoning 설정 확인
+11. Docker에서는 localhost 대신 `embedding`, `rag`, `document-worker`, `postgres`, `llm` 등의 서비스 hostname 사용
+12. Docker requirements에 `pydantic-settings` 포함 여부 확인
+13. `pipeline/embedding/run_embeddings.py`는 서비스 경로가 아닌 레거시/수동 CLI 경로임을 구분
+
+### 최근 재검증 결과
+
+서비스를 종료한 뒤 `.env`를 shell에서 `source`하지 않고 다시 시작하여 설정 로딩을 확인했습니다.
+Embedding Service의 `/health`, `/v1/embeddings`가 정상 동작했고, Backend `/api/chat`에서
+RAG Service `/v1/rag/answer`까지 실제 HTTP 호출이 정상적으로 이루어졌습니다.
+
+테스트 `announcement_id=1`에서는 `no_evidence`가 반환되었으며, 이는 API 연결 실패가 아니라
+앞서 확인한 active collection/검색 대상 조건에 따른 Retrieval 결과입니다. `no_evidence` 경로에서는
+Generation을 수행하지 않으므로 이 테스트 하나만으로 llama.cpp Generation 경로를 재검증한 것으로
+보면 안 됩니다. 기존 active announcement + `--reasoning off` 테스트에서 Generation 정상 반환을
+확인한 기록은 13~15절을 참고합니다.
 
 ------------------------------------------------------------------------
 
@@ -1096,10 +1174,17 @@ Embedding HTTP API 호출로 변경 완료 - 기존 Vector + BM25 + RRF 검색 �
 유지 - Generation은 기존 llama.cpp HTTP 연결 유지 - AWS에서 최종
 답변까지 E2E 검증 완료
 
-**남은 핵심** - 다른 팀원의 Document Worker/API 작업 완료 후 Chunk
-Embedding을 동일한 Embedding API에 연결 - 이후 레거시 직접 임베딩 코드
-및 서비스 간 잔여 직접 의존성 정리 - Docker 서비스 단위 최종 통합 및
-재검증
+**Document Worker** - 실제 서비스 경로에서 `EmbeddingClient.embed_items()`를 통해
+동일한 Embedding API에 연결 완료 - Parsing/Normalizing/Structure/Chunking은 Worker가 담당하고
+모델 추론만 Embedding Service가 담당
+
+**설정/독립성** - RAG 자체 DB session 추가 - RAG의 Backend 직접 import 및 ErrorLog 직접 의존 제거
+- RAG/Embedding 설정을 `pydantic-settings` 기반 서비스별 config로 분리 - `.env`를 shell에서
+직접 source하지 않은 새 프로세스에서도 설정 로딩 검증 완료
+
+**남은 핵심** - Docker Compose 서비스 단위 최종 통합 및 환경변수 hostname 전환 - Docker
+requirements의 `pydantic-settings` 포함 확인 - active collection 기준 Retrieval/Data 검증 - 필요 시
+레거시 `run_embeddings.py` 및 `query_embedding.py` 정리
 
 이 문서를 기준으로 이후 작업자는 **Embedding 모델을 새로 직접 로드하는
 코드를 추가하지 말고, `/v1/embeddings` 계약을 사용하여 서비스에
