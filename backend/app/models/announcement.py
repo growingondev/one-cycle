@@ -62,6 +62,10 @@ class Announcement(Base):
         nullable=True,
         index=True,
     )
+    deadline_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+    )
     publication_status: Mapped[str | None] = mapped_column(
         String(50),
         nullable=True,

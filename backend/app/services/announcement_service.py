@@ -88,7 +88,10 @@ def list_active_announcements(
                 a.region,
                 a.announcement_date,
                 a.publication_status,
-                ki.application_period ->> 'end' AS deadline_date
+                COALESCE(
+                    a.deadline_date::text,
+                    ki.application_period ->> 'end'
+                ) AS deadline_date
             FROM system_state ss
             JOIN announcements a
               ON a.collection_run_id = ss.active_collection_run_id
