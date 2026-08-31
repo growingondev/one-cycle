@@ -38,6 +38,14 @@ def _extract_assistant_content(
             "LLM 응답의 choices[0] 형식이 올바르지 않습니다."
         )
 
+    finish_reason = first_choice.get("finish_reason")
+
+    if finish_reason == "length":
+        raise LLMClientError(
+            "LLM 출력이 최대 토큰 제한에 도달해 중간에 잘렸습니다. "
+            "LLAMA_MAX_TOKENS 또는 llama-server --ctx-size를 확인하세요."
+        )
+
     message = first_choice.get("message")
 
     if not isinstance(message, dict):
@@ -111,7 +119,7 @@ def call_llama_cpp_chat(
             "llama.cpp 서버에 연결할 수 없습니다.\n"
             f"url={config.chat_completions_url}\n"
             f"원인={exc.reason}\n"
-            "Qwen 모델을 로드한 llama-server가 실행 중인지 확인하세요."
+            "LLM 모델을 로드한 llama-server가 실행 중인지 확인하세요."
         ) from exc
     except TimeoutError as exc:
         raise LLMClientError(

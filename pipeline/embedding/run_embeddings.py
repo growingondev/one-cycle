@@ -20,6 +20,7 @@ from pipeline.embedding.config import (
     MAX_LENGTH,
     METADATA_FILENAME,
     MODEL_NAME,
+    MODEL_PATH,
     NORMALIZE_EMBEDDINGS,
     REPORT_FILENAME,
     REQUIRE_CUDA,
@@ -146,6 +147,12 @@ def parse_args() -> argparse.Namespace:
         "--model",
         default=MODEL_NAME,
         help=f"임베딩 모델 ID. 기본값: {MODEL_NAME}",
+    )
+
+    parser.add_argument(
+        "--model-path",
+        default=MODEL_PATH,
+        help=f"임베딩 모델 로컬 경로. 기본값: {MODEL_PATH}",
     )
 
     parser.add_argument(
@@ -321,6 +328,7 @@ def main() -> int:
         # 모델은 8개 파일마다 다시 로드하지 않고 한 번만 로드한다.
         loaded_model = load_bge_m3_model(
             model_name=args.model,
+            model_path=args.model_path,
             use_fp16=USE_FP16,
             require_cuda=(
                 REQUIRE_CUDA and not args.allow_cpu

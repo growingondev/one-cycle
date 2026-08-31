@@ -14,6 +14,7 @@ class AdminAnnouncementItem(BaseModel):
     id: int
     title: str
     region: str | None = None
+    notice_type: str | None = None
     announcement_date: date | None = None
     application_start: date | str | None = None
     application_end: date | str | None = None

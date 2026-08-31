@@ -6,10 +6,7 @@ from dataclasses import dataclass
 from sqlalchemy import text
 
 from backend.app.db.session import SessionLocal
-from pipeline.embedding.model_loader import (
-    LoadedEmbeddingModel,
-    load_bge_m3_model,
-)
+from services.embedding.client import EmbeddingClient
 from rag.generation.config import (
     DEFAULT_GENERATION_CONFIG,
     GenerationConfig,
@@ -22,23 +19,26 @@ from rag.retrieval.config import (
     RetrievalConfig,
 )
 from rag.retrieval.models import CorpusItem, SearchResult
-from rag.retrieval.query_embedding import embed_query
 
 
 class DBRAGPipelineError(RuntimeError):
     """DB 기반 RAG 처리 중 발생하는 오류."""
 
 
+class DBRAGNoEvidenceError(DBRAGPipelineError):
+    """선택한 공고에서 검색 가능한 근거가 없을 때 발생."""
+
+
 @dataclass
 class DBRAGPipeline:
     """
-    BGE-M3 Query Embedding
+    Embedding Service Query Embedding
     → PostgreSQL + pgvector
     → 선택 공고 Top-K
     → 기존 Qwen Generation
     """
 
-    embedding_model: LoadedEmbeddingModel
+    embedding_client: EmbeddingClient
     retrieval_config: RetrievalConfig
     generation_config: GenerationConfig
     top_k: int = 5
@@ -70,17 +70,10 @@ class DBRAGPipeline:
                 "RAG_DB_TOP_K는 1 이상이어야 합니다."
             )
 
-        loaded_model = load_bge_m3_model(
-            model_name=(
-                retrieval_config.embedding_model_name
-            ),
-            use_fp16=retrieval_config.use_fp16,
-            require_cuda=retrieval_config.require_cuda,
-            device_index=retrieval_config.device_index,
-        )
+        embedding_client = EmbeddingClient()
 
         return cls(
-            embedding_model=loaded_model,
+            embedding_client=embedding_client,
             retrieval_config=retrieval_config,
             generation_config=generation_config,
             top_k=top_k,
@@ -90,14 +83,7 @@ class DBRAGPipeline:
         self,
         query: str,
     ):
-        return embed_query(
-            self.embedding_model,
-            query,
-            max_length=(
-                self.retrieval_config.query_max_length
-            ),
-            normalize=True,
-        )
+        return self.embedding_client.embed_query(query)
 
     @staticmethod
     def _vector_literal(vector) -> str:
@@ -211,10 +197,7 @@ class DBRAGPipeline:
             )
 
         if not rows:
-            raise DBRAGPipelineError(
-                "DB pgvector 검색 결과가 없습니다. "
-                f"announcement_id={announcement_id}"
-            )
+            return []
 
         results: list[RetrievalResult] = []
 
@@ -292,30 +275,32 @@ class DBRAGPipeline:
         announcement_id: int,
         query: str,
     ) -> GeneratedAnswer:
-        retrieved = self.retrieve(
+        # hybrid_search.py가 DBRAGPipeline을 참조하므로
+        # 순환 import를 피하기 위해 지연 import한다.
+        from rag.retrieval.hybrid_search import (
+            HybridSearchConfig,
+            hybrid_search,
+        )
+
+        retrieved = hybrid_search(
+            pipeline=self,
             announcement_id=announcement_id,
             query=query,
+            config=HybridSearchConfig(
+                vector_top_k=self.retrieval_config.vector_top_k,
+                bm25_top_k=self.retrieval_config.bm25_top_k,
+                hybrid_top_k=self.retrieval_config.hybrid_top_k,
+                rrf_k=self.retrieval_config.rrf_k,
+            ),
         )
 
-        document_format = (
-            retrieved[0]
-            .item
-            .raw_metadata
-            .get("document_format")
-        )
-
-        if not document_format:
-            document_format = (
-                retrieved[0]
-                .search_result
-                .item
-                .raw_metadata
-                .get("document_format")
+        if not retrieved:
+            raise DBRAGNoEvidenceError(
+                "선택한 공고에서 검색 가능한 근거가 없습니다. "
+                f"announcement_id={announcement_id}"
             )
 
-        # 현재 Chunk 객체의 document_format을
-        # SearchResult 외부에서 별도로 보관하지 않으므로
-        # MVP 대표 문서 형식을 환경변수에서 사용한다.
+        # MVP 대표 문서 형식은 환경변수에서 사용한다.
         document_format = os.getenv(
             "MVP_DOCUMENT_FORMAT",
             "hwpx",

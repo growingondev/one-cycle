@@ -84,6 +84,7 @@ def list_active_announcements(
             SELECT
                 a.id,
                 a.title,
+                a.notice_type,
                 a.region,
                 a.announcement_date,
                 a.publication_status,
@@ -107,6 +108,7 @@ def list_active_announcements(
             AnnouncementListItem(
                 id=row["id"],
                 title=row["title"],
+                notice_type=row["notice_type"],
                 region=row["region"],
                 announcementDate=row["announcement_date"],
                 publicationStatus=row["publication_status"],
@@ -132,6 +134,7 @@ def get_active_announcement(
                 a.id,
                 a.title,
                 a.region,
+                a.notice_type,
                 a.announcement_date,
                 a.publication_status,
                 a.detail_url,
@@ -189,6 +192,7 @@ def get_active_announcement(
         id=row["id"],
         title=row["title"],
         region=row["region"],
+        notice_type=row["notice_type"],
         announcementDate=row["announcement_date"],
         publicationStatus=row["publication_status"],
         detailUrl=row["detail_url"],

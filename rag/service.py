@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
-from rag.db_pipeline import DBRAGPipeline
+from rag.db_pipeline import DBRAGNoEvidenceError, DBRAGPipeline
 
 
 NO_ANSWER_MESSAGE = "제공된 LH 공고문 근거에서 확인할 수 없습니다."
@@ -86,6 +86,13 @@ def answer_question(
             announcement_id=announcement_id,
             query=question,
         )
+
+    except DBRAGNoEvidenceError:
+        return {
+            "answer": NO_ANSWER_MESSAGE,
+            "grounded": False,
+            "evidence": [],
+        }
 
     except Exception:
         return {

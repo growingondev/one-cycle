@@ -1,8 +1,9 @@
 import argparse
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import numpy as np
 from sqlalchemy import select
@@ -32,14 +33,125 @@ def load_json(path: Path):
     return data
 
 
+def _validate_bundle_root_identity(
+    *,
+    document_dir_name: str,
+    announcement_dir_name: str,
+    announcement_key: str,
+    document_id: int | None,
+) -> None:
+    if document_id is None:
+        return
+
+    expected_document_dir = (
+        f"document_{document_id}"
+    )
+
+    if document_dir_name != expected_document_dir:
+        raise RuntimeError(
+            "Worker output_path의 Document 경로가 "
+            "요청한 document_id와 다릅니다. "
+            f"expected={expected_document_dir}, "
+            f"actual={document_dir_name}"
+        )
+
+    if announcement_dir_name != str(
+        announcement_key
+    ):
+        raise RuntimeError(
+            "Worker output_path의 Announcement 경로가 "
+            "요청한 announcement_key와 다릅니다. "
+            f"expected={announcement_key}, "
+            f"actual={announcement_dir_name}"
+        )
+
+
+def _resolve_bundle_root(
+    *,
+    announcement_key: str,
+    document_id: int | None,
+    output_root_path: str | Path | None,
+) -> Path:
+    if output_root_path is None:
+        root = OUTPUT_ROOT / announcement_key
+
+        if document_id is not None:
+            root = root / f"document_{document_id}"
+
+        return root
+
+    raw_path = str(
+        output_root_path
+    ).strip()
+
+    if not raw_path:
+        raise RuntimeError(
+            "output_root_path가 비어 있습니다."
+        )
+
+    # Worker/Backend Docker 계약은 POSIX 절대경로를 사용한다.
+    if raw_path.startswith("/"):
+        logical_path = PurePosixPath(
+            raw_path
+        )
+
+        _validate_bundle_root_identity(
+            document_dir_name=logical_path.name,
+            announcement_dir_name=(
+                logical_path.parent.name
+            ),
+            announcement_key=announcement_key,
+            document_id=document_id,
+        )
+
+        # Windows host에서 /data/...를 Path.resolve()하면
+        # C:\data\...로 잘못 해석되므로 암묵적으로 변환하지 않는다.
+        if os.name == "nt":
+            raise RuntimeError(
+                "Docker POSIX output_path는 Windows host에서 "
+                "직접 접근할 수 없습니다: "
+                f"{raw_path}. "
+                "API 통합은 Docker 환경에서 실행하거나, "
+                "로컬 테스트에서는 Windows native 절대경로를 "
+                "사용하세요."
+            )
+
+        return Path(
+            raw_path
+        ).resolve()
+
+    root = Path(
+        raw_path
+    ).expanduser()
+
+    if not root.is_absolute():
+        raise RuntimeError(
+            "output_root_path는 절대 경로여야 합니다: "
+            f"{root}"
+        )
+
+    root = root.resolve()
+
+    _validate_bundle_root_identity(
+        document_dir_name=root.name,
+        announcement_dir_name=root.parent.name,
+        announcement_key=announcement_key,
+        document_id=document_id,
+    )
+
+    return root
+
+
 def find_bundle(
     announcement_key: str,
     document_id: int | None = None,
+    output_root_path: str | Path | None = None,
 ):
-    root = OUTPUT_ROOT / announcement_key
-
-    if document_id is not None:
-        root = root / f"document_{document_id}"
+    root = _resolve_bundle_root(
+        announcement_key=announcement_key,
+        document_id=document_id,
+        output_root_path=output_root_path,
+    )
 
     for document_format in ("hwpx", "hwp"):
         bundle = {
@@ -97,10 +209,12 @@ def validate_outputs(
     announcement_key: str,
     document_id: int | None = None,
     announcement_db_id: int | None = None,
+    output_root_path: str | Path | None = None,
 ):
     bundle = find_bundle(
         announcement_key,
         document_id=document_id,
+        output_root_path=output_root_path,
     )
 
     expected_announcement_id = (
@@ -414,15 +528,18 @@ def persist_outputs(
     announcement_key,
     document_id: int | None = None,
     announcement_db_id: int | None = None,
+    output_root_path: str | Path | None = None,
 ):
     summary = validate_outputs(
         announcement_key,
         document_id=document_id,
         announcement_db_id=announcement_db_id,
+        output_root_path=output_root_path,
     )
     bundle = find_bundle(
         announcement_key,
         document_id=document_id,
+        output_root_path=output_root_path,
     )
 
     structure = load_json(bundle["structure"])
@@ -696,13 +813,18 @@ def persist_outputs(
 
 
 
-def persist_document_outputs(document_id: int):
+def persist_document_outputs(
+    document_id: int,
+    *,
+    output_root_path: str | Path | None = None,
+):
     context = get_registered_document_context(document_id)
 
     result = persist_outputs(
         context["announcement_key"],
         document_id=context["document_db_id"],
         announcement_db_id=context["announcement_db_id"],
+        output_root_path=output_root_path,
     )
 
     result["announcement_db_id"] = context["announcement_db_id"]

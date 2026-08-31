@@ -39,9 +39,9 @@ def normalize_dataset_name(value: str) -> str:
         "GC": "GC",
         "GOCHANG": "GC",
         "고창": "GC",
-        "HC": "HC",
-        "HWACHEON": "HC",
-        "화천": "HC",
+        "BD": "BD",
+        "BEONDONG": "BD",
+        "서울 번동": "BD",
     }
 
     if dataset not in aliases:
@@ -453,7 +453,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "생략하면 DEFAULT_RUN_NUMBER에 맞춰 "
-            "GC_RUN_001, HC_RUN_001 형식으로 자동 설정"
+            "GC_RUN_001, BD_RUN_001 형식으로 자동 설정"
         ),
     )
 

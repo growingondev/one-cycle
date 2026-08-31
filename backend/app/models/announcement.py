@@ -53,6 +53,10 @@ class Announcement(Base):
         nullable=True,
         index=True,
     )
+    notice_type: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
     announcement_date: Mapped[date | None] = mapped_column(
         Date,
         nullable=True,

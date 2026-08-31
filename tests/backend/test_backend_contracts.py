@@ -8,6 +8,7 @@ from backend.app.services.chat_service import answer_question_via_rag
 from backend.app.services.collection_service import (
     VALID_DOCUMENT_FORMATS,
     _validate_collection_result,
+    persist_collection_result,
 )
 from backend.app.services.error_log_service import (
     VALID_ERROR_TYPES,
@@ -77,6 +78,56 @@ class CollectionContractTest(unittest.TestCase):
             "unknown",
             VALID_DOCUMENT_FORMATS,
         )
+
+    def test_collection_persists_notice_type(self):
+        result = {
+            "execution_id": "notice_type_test",
+            "execution_status": "success",
+            "total_count": 1,
+            "success_count": 1,
+            "failed_count": 0,
+            "fatal_error": None,
+            "data": [
+                {
+                    "source_announcement_id": "LH-001",
+                    "title": "테스트 공고",
+                    "detail_url": "https://example.com/1",
+                    "notice_type": "공공임대",
+                    "region": "대구광역시",
+                    "post_date": "2026-08-14",
+                    "publication_status": "공고중",
+                    "documents": [],
+                }
+            ],
+        }
+
+        db = MagicMock()
+        db.scalar.return_value = None
+
+        def flush_side_effect():
+            for call in db.add.call_args_list:
+                obj = call.args[0]
+                if obj.__class__.__name__ == "CollectionRun":
+                    obj.id = 1
+                elif obj.__class__.__name__ == "Announcement":
+                    obj.id = 2
+
+        db.flush.side_effect = flush_side_effect
+
+        with patch(
+            "backend.app.services.collection_service.SessionLocal"
+        ) as session_local:
+            session_local.begin.return_value.__enter__.return_value = db
+            persist_collection_result(result)
+
+        announcements = [
+            call.args[0]
+            for call in db.add.call_args_list
+            if call.args[0].__class__.__name__ == "Announcement"
+        ]
+
+        self.assertEqual(len(announcements), 1)
+        self.assertEqual(announcements[0].notice_type, "공공임대")
 
 
 class PipelineGatewayContractTest(unittest.TestCase):
@@ -332,10 +383,17 @@ class ChatContractTest(unittest.TestCase):
                 ],
             }
 
-        with patch(
-            "backend.app.services.chat_service."
-            "_load_answer_question",
-            return_value=fake_answer_question,
+        with (
+            patch.dict(
+                os.environ,
+                {"RAG_RUNTIME": "legacy"},
+                clear=False,
+            ),
+            patch(
+                "backend.app.services.chat_service."
+                "_load_answer_question",
+                return_value=fake_answer_question,
+            ),
         ):
             response = answer_question_via_rag(
                 announcement_id=10,
@@ -357,10 +415,17 @@ class ChatContractTest(unittest.TestCase):
         )
 
     def test_invalid_rag_result_is_rejected(self):
-        with patch(
-            "backend.app.services.chat_service."
-            "_load_answer_question",
-            return_value=lambda **kwargs: "invalid-result",
+        with (
+            patch.dict(
+                os.environ,
+                {"RAG_RUNTIME": "legacy"},
+                clear=False,
+            ),
+            patch(
+                "backend.app.services.chat_service."
+                "_load_answer_question",
+                return_value=lambda **kwargs: "invalid-result",
+            ),
         ):
             with self.assertRaises(Exception):
                 answer_question_via_rag(

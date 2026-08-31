@@ -2,7 +2,7 @@
 
 > 목적: 현재 구현 상태를 다른 팀원 또는 AI가 읽고 바로 이어서 개발할 수
 > 있도록 기록한다.\
-> 기준일: 2026-08-19\
+> 기준일: 2026-08-25\
 > 프로젝트: 한글(HWP/HWPX) 공공문서 기반 LH 특화 RAG 챗봇
 
 ## 1. 이번 작업의 범위
@@ -19,7 +19,7 @@
 → RRF Hybrid Search
 → Generation Context 변환
 → System Prompt 조립
-→ llama.cpp / Qwen Generation
+→ llama.cpp / GGUF LLM Generation
 ```
 
 이번 단계의 목표는 **Reranker나 QLoRA를 적용하기 전에 기본 RAG
@@ -194,17 +194,16 @@ PostgreSQL + pgvector
 
 ## 5. Generation 연결
 
-현재 Generation은 Reranker를 거치지 않고 **Hybrid Search 결과를 직접
-입력으로 사용**하도록 수정했다.
+현재 Generation은 Reranker를 거치지 않고 **Hybrid Search 결과를 직접 입력으로 사용**한다.
 
-``` text
+```text
 Hybrid SearchResult Top-K
 → context_builder.py
 → SourceContext
 → prompt_builder.py
 → System Prompt + 사용자 질문 + 검색 근거
 → llm_client.py
-→ llama.cpp / Qwen
+→ llama.cpp / 현재 선택된 GGUF LLM
 → generator.py
 → 최종 답변
 ```
@@ -213,7 +212,7 @@ Hybrid SearchResult Top-K
 
 Hybrid Search의 결과는 다음 주요 값을 가진다.
 
-``` text
+```text
 item
 chunk_id
 fusion_score
@@ -221,12 +220,11 @@ fusion_rank
 matched_by
 ```
 
-기존 Generation은 과거 Retrieval 결과의 `score`, `rank` 형식을 전제로
-하고 있었기 때문에 `context_builder.py`를 수정했다.
+기존 Generation은 과거 Retrieval 결과의 `score`, `rank` 형식을 전제로 하고 있었기 때문에 `context_builder.py`에서 결과 형식을 정규화한다.
 
 현재는 Hybrid 결과의:
 
-``` text
+```text
 fusion_score
 fusion_rank
 ```
@@ -235,15 +233,102 @@ fusion_rank
 
 기존 `SourceContext` 필드 이름인:
 
-``` text
+```text
 reranker_score
 reranker_rank
 ```
 
 은 당장 데이터 구조를 크게 변경하지 않기 위해 유지했다.
 
-현재 단계에서는 이 필드에 Hybrid의 fusion score/rank가 들어가며, **향후
-실제 Reranker를 적용할 때 Reranker 결과로 교체할 수 있다.**
+현재 단계에서는 이 필드에 Hybrid의 fusion score/rank가 들어가며, **향후 실제 Reranker를 적용할 때 Reranker 결과로 교체할 수 있다.**
+
+### Generation Model 교체 구조
+
+Generation 코드는 특정 Qwen/Gemma 모델 이름에 종속되지 않도록 수정했다.
+
+`rag/generation/config.py`에서 다음 값을 환경변수로 읽는다.
+
+```text
+LLAMA_BASE_URL
+LLAMA_MODEL
+LLAMA_TIMEOUT_SECONDS
+LLAMA_TEMPERATURE
+LLAMA_TOP_P
+LLAMA_MAX_TOKENS
+LLAMA_CONTEXT_TOP_K
+LLAMA_MAX_CONTEXT_CHARS
+```
+
+특히 `LLAMA_MODEL`에는 특정 모델의 기본값을 두지 않는다.
+
+성능 테스트에서 모델을 변경할 때 Python 코드를 수정하는 대신:
+
+```text
+1. llama-server에서 로드할 GGUF 파일 변경
+2. llama-server의 --alias 지정
+3. LLAMA_MODEL을 같은 Alias로 설정
+```
+
+한다.
+
+핵심 규칙:
+
+```text
+llama-server --alias
+=
+LLAMA_MODEL
+```
+
+현재 Gemma 테스트 예:
+
+```text
+GGUF
+/home/ubuntu/ddokbot/models/llm/gemma4-12b/gemma-4-12B-it-Q4_0.gguf
+
+llama-server alias
+gemma
+
+LLAMA_MODEL
+gemma
+```
+
+따라서 이후 Qwen이나 다른 llama.cpp 호환 GGUF 모델로 다시 변경하더라도
+Generation Source Code의 모델 이름을 반복 수정하지 않는다.
+
+### Generation Parameter 환경변수화
+
+현재 다음 Generation Parameter도 환경변수로 조정할 수 있다.
+
+```text
+LLAMA_TEMPERATURE
+LLAMA_TOP_P
+LLAMA_MAX_TOKENS
+LLAMA_CONTEXT_TOP_K
+LLAMA_MAX_CONTEXT_CHARS
+```
+
+현재 성능 테스트 기준 주요 값:
+
+```text
+temperature = 0.0
+top_p = 1.0
+max_tokens = 1024
+context_top_k = 5
+max_context_chars = 6000
+```
+
+`LLAMA_MAX_CONTEXT_CHARS`는 각 Chunk마다 적용되는 제한이 아니라,
+Generation Prompt에 포함되는 Retrieval 근거 전체 Content의 최대 문자 수를 제한한다.
+
+예:
+
+```text
+LLAMA_CONTEXT_TOP_K=5
+LLAMA_MAX_CONTEXT_CHARS=6000
+```
+
+이면 최대 5개 Source를 후보로 사용하되,
+실제 Prompt에 포함되는 Retrieval Content 전체는 약 6000자 범위로 제한한다.
 
 ------------------------------------------------------------------------
 
@@ -268,9 +353,9 @@ QLoRA는 중간발표 이후 Generation 성능 고도화 단계에서 검토한�
 
 ## 7. End-to-End Generation 테스트 상태
 
-마지막 E2E 테스트에서는 다음 단계까지 정상적으로 실행됐다.
+기존 Retrieval 단계에서는 다음 연결을 검증했다.
 
-``` text
+```text
 테스트 Chunk/Embedding DB 저장        PASS
 테스트 데이터 임시 Active            PASS
 BGE-M3 Query Embedding                PASS
@@ -281,37 +366,91 @@ Hybrid Top-K 생성                     PASS
 Generation 단계 진입                  PASS
 ```
 
-이후 llama.cpp 호출에서:
+기존 로컬 테스트에서는 llama.cpp 서버가 실행되지 않아:
 
-``` text
+```text
 http://127.0.0.1:8080/v1/chat/completions
 Connection refused
 ```
 
-가 발생했다.
+가 발생했었다.
 
-원인은 **로컬 Mac에서 llama.cpp Qwen 서버가 실행되고 있지 않았기
-때문**이다.
+이후 AWS에서 Gemma GGUF 모델을 llama.cpp Server에 로드하여 Generation 단독 연결을 다시 확인했다.
 
-즉 현재 확인하지 못한 부분은 오직:
+현재 AWS llama.cpp 실행 기준:
 
-``` text
-System Prompt + Hybrid Context
-→ 실제 Qwen inference
-→ 최종 답변
+```text
+Model
+/home/ubuntu/ddokbot/models/llm/gemma4-12b/gemma-4-12B-it-Q4_0.gguf
+
+Alias
+gemma
+
+Context Size
+8192
+```
+
+`GET /v1/models`에서:
+
+```text
+model id: gemma
+n_ctx: 8192
+```
+
+를 확인했다.
+
+또한 `POST /v1/chat/completions` 직접 호출에서:
+
+```text
+한국어 content 생성
+finish_reason: stop
+```
+
+을 확인했다.
+
+초기 작은 출력 Token 제한 테스트에서는 Gemma의 reasoning 출력이 먼저 생성되면서:
+
+```text
+finish_reason: length
+content: ""
+```
+
+상태가 발생했다.
+
+출력 Token 제한을 늘린 뒤 정상적인 `content`와 `finish_reason: stop`을 확인했으며,
+현재 프로젝트 테스트 기준:
+
+```env
+LLAMA_MAX_TOKENS=1024
+```
+
+로 조정했다.
+
+따라서 현재 검증 상태는:
+
+```text
+Retrieval 개별 단계                  PASS
+Hybrid → Generation 연결            PASS
+llama.cpp Gemma Server              PASS
+/v1/models                           PASS
+/v1/chat/completions 직접 호출       PASS
+FastAPI /api/chat 전체 E2E           추가 검증 필요
 ```
 
 이다.
 
-Retrieval이나 Hybrid → Generation 연결에서 발생한 오류는 아니다.
+남은 최종 검증은 다음 전체 Runtime 흐름이다.
 
-추후 llama.cpp 서버를 실행한 뒤 다음 E2E 검증을 한 번 수행해야 한다.
-
-``` text
-Hybrid Retrieval
+```text
+사용자 질문
+→ FastAPI /api/chat
+→ rag.service:answer_question
+→ DB Retrieval
+→ Generation Context
 → Prompt
-→ Qwen
-→ 최종 답변
+→ llama.cpp / Gemma
+→ ChatResponse
+→ Frontend
 ```
 
 ------------------------------------------------------------------------
@@ -388,18 +527,58 @@ item.raw_metadata = raw_metadata
 
 ### 8.5 Generation ConnectionRefusedError
 
-오류:
+기존 오류:
 
-``` text
+```text
 Connection refused
 http://127.0.0.1:8080/v1/chat/completions
 ```
 
 원인:
 
-Generation 코드 문제가 아니라 llama.cpp 서버 미실행.
+Generation 코드 문제가 아니라 당시 테스트 환경에서 llama.cpp Server가 실행되지 않은 상태였다.
 
-추후 Qwen GGUF를 로드한 llama-server 실행 후 최종 E2E 테스트 필요.
+이후 AWS에서 Gemma GGUF 모델을 로드한 llama-server를 실행하여:
+
+```text
+GET /v1/models
+POST /v1/chat/completions
+```
+
+직접 호출을 정상 확인했다.
+
+현재는 Connection Refused 문제가 해결되었으며,
+남은 작업은 FastAPI `/api/chat`부터 llama.cpp까지 이어지는 전체 End-to-End 검증이다.
+
+### 8.6 Gemma 출력 Token 부족
+
+초기 테스트에서 작은 `max_tokens` 값으로 요청했을 때 Gemma가 reasoning token을 먼저 사용하면서:
+
+```text
+finish_reason: length
+content: ""
+```
+
+응답이 발생했다.
+
+이는 llama.cpp 연결 실패가 아니라 출력 Token 한도가 실제 답변 생성 전에 소진된 경우다.
+
+출력 한도를 늘려:
+
+```text
+finish_reason: stop
+content: 정상 한국어 답변
+```
+
+을 확인했다.
+
+현재 성능 테스트 기준:
+
+```env
+LLAMA_MAX_TOKENS=1024
+```
+
+를 사용한다.
 
 ------------------------------------------------------------------------
 
@@ -439,11 +618,34 @@ rag/generation/
 └── generator.py
 ```
 
-이번 Hybrid 구조에 맞춰 수정한 핵심 파일:
+현재 Generation에서 특히 중요한 파일:
 
-``` text
+```text
+rag/generation/config.py
 rag/generation/context_builder.py
+rag/generation/prompt_builder.py
+rag/generation/llm_client.py
 rag/generation/generator.py
+```
+
+역할:
+
+```text
+config.py
+→ Model 및 Generation Runtime Parameter 환경변수 관리
+
+context_builder.py
+→ Retrieval 결과를 SourceContext로 변환
+→ 전체 Retrieval Context 문자 수 제한
+
+prompt_builder.py
+→ LH 공고문 기반 System/User Prompt 구성
+
+llm_client.py
+→ llama.cpp OpenAI 호환 /v1/chat/completions 호출
+
+generator.py
+→ Generation 전체 흐름 및 최종 답변 검증
 ```
 
 ------------------------------------------------------------------------
@@ -481,98 +683,141 @@ rag/test_generation_pipeline.py
 
 ## 11. 현재 완료/미완료 상태
 
-  -----------------------------------------------------------------------
-  단계                    상태                    비고
-  ----------------------- ----------------------- -----------------------
-  구조화                  완료                    기존 파이프라인
-
-  Chunking                완료                    구조 기반 Chunk 생성
-
-  BGE-M3 Embedding        완료                    1024 dimension
-
-  DB Persistence          완료                    Chunk ↔ Embedding 1:1
-                                                  검증
-
-  Vector Search           완료                    pgvector
-
-  Keyword Search          완료                    문자열 검색 보완
-
-  Hybrid Search           완료                    RRF
-
-  Hybrid → Generation     완료                    SearchResult 직접 지원
-  연결                                            
-
-  Prompt 구성             완료                    LH 공고 근거 제한
-
-  실제 Qwen Generation    최종 재검증 필요        llama.cpp 서버
-                                                  미실행으로 마지막 호출
-                                                  미검증
-
-  Reranker                보류                    중간발표 이후
-
-  QLoRA                   보류                    중간발표 이후
-  -----------------------------------------------------------------------
+| 단계 | 상태 | 비고 |
+|---|---|---|
+| 구조화 | 완료 | 기존 파이프라인 |
+| Chunking | 완료 | 구조 기반 Chunk 생성 |
+| BGE-M3 Embedding | 완료 | 1024 dimension |
+| DB Persistence | 완료 | Chunk ↔ Embedding 1:1 검증 |
+| Vector Search | 완료 | pgvector |
+| Keyword Search | 완료 | 문자열 검색 보완 |
+| Hybrid Search | 완료 | RRF |
+| Hybrid → Generation 연결 | 완료 | SearchResult 직접 지원 |
+| Prompt 구성 | 완료 | LH 공고 근거 제한 |
+| LLM 교체 대응 | 완료 | 특정 Qwen/Gemma 이름에 Source Code 비종속 |
+| Generation Parameter 환경변수화 | 완료 | temperature/top_p/max_tokens/context 설정 |
+| Retrieval Context 전체 길이 제한 | 완료 | `LLAMA_MAX_CONTEXT_CHARS` |
+| Gemma llama.cpp 실행 | 완료 | AWS Server 실행 확인 |
+| `/v1/models` | 완료 | alias `gemma` 확인 |
+| `/v1/chat/completions` 직접 호출 | 완료 | 한국어 응답 / `finish_reason: stop` 확인 |
+| FastAPI `/api/chat` 전체 E2E | 재검증 필요 | DB Retrieval부터 ChatResponse까지 확인 필요 |
+| No-Evidence 분리 | 코드 수정 | 실제 API E2E 재검증 필요 |
+| Reranker | 보류 | 성능 고도화 단계 |
+| QLoRA | 보류 | 성능 고도화 단계 |
 
 ------------------------------------------------------------------------
 
 ## 12. 다음 개발자가 바로 해야 할 작업
 
-### 중간발표 전
+### 현재 우선 검증
 
-우선 llama.cpp/Qwen 서버를 실행한 상태에서 E2E Generation을 한 번
-검증한다.
+llama.cpp 단독 Gemma Generation은 확인했으므로,
+다음 단계는 실제 Backend Chat API 전체 흐름을 검증하는 것이다.
 
 확인할 것:
 
-``` text
+```text
 사용자 질문
-→ Hybrid Top-K가 올바른가?
-→ 검색된 Chunk가 Prompt에 들어가는가?
-→ Qwen이 해당 근거만 사용해 답하는가?
+→ /api/chat
+→ announcement_id 전달
+→ DB Retrieval
+→ 검색 결과가 올바른가?
+→ Context가 전체 문자 제한 안에서 구성되는가?
+→ Prompt에 올바른 근거가 들어가는가?
+→ Gemma가 해당 근거만 사용해 답하는가?
 → 숫자/금액/날짜가 원문과 일치하는가?
-→ 근거가 없는 질문에서 환각하지 않는가?
+→ grounded/evidence가 올바르게 반환되는가?
 ```
 
-그 다음 실제 사용자 API 흐름에서 다음 연결을 확인한다.
+특히 검색 결과가 없는 경우와 실제 LLM 생성 실패를 구분하여 확인한다.
 
-``` text
-사용자가 선택한 공고
-→ announcement_id
-→ Hybrid Retrieval
-→ Generation
-→ API Response
-→ Frontend
+검색 결과 없음:
+
+```text
+answer:
+제공된 LH 공고문 근거에서 확인할 수 없습니다.
+
+grounded:
+false
+
+evidence:
+[]
 ```
 
-### 중간발표 이후 성능 고도화
+실제 Generation 오류:
 
-``` text
+```text
+검색 결과 없음과 동일하게 처리하지 않음
+Generation 실패 경로로 처리
+```
+
+### 성능 테스트 중 LLM 교체 방법
+
+모델을 바꿀 때 Generation Python 코드를 수정하지 않는다.
+
+```text
+1. 새 GGUF Model 준비
+2. 기존 llama-server 종료
+3. 새 GGUF 파일로 llama-server 실행
+4. --alias 지정
+5. LLAMA_MODEL을 같은 Alias로 설정
+6. /v1/models 확인
+7. /v1/chat/completions Smoke Test
+8. 동일 평가셋으로 RAG 성능 테스트
+```
+
+예:
+
+```text
+Gemma
+--alias gemma
+LLAMA_MODEL=gemma
+
+Qwen
+--alias qwen
+LLAMA_MODEL=qwen
+```
+
+필요하면 다음 환경변수도 모델별로 조정한다.
+
+```text
+LLAMA_TEMPERATURE
+LLAMA_TOP_P
+LLAMA_MAX_TOKENS
+LLAMA_CONTEXT_TOP_K
+LLAMA_MAX_CONTEXT_CHARS
+```
+
+### 성능 고도화
+
+```text
 Hybrid Search
 → Reranker
 → 최종 Context Top-K
 → Generation
 ```
 
-을 추가한다.
+을 검토한다.
 
 검토 항목:
 
-1.  Reranker 모델 선정
-2.  Hybrid Top-N / Reranker Top-K 결정
-3.  검색 평가 데이터셋 구성
-4.  Recall@K / MRR 등 Retrieval 평가
-5.  Prompt 개선
-6.  QLoRA 적용 여부 및 학습 데이터 구성
-7.  QLoRA 적용 전/후 Generation 품질 비교
-8.  응답 속도 및 GPU 메모리 측정
+1. Reranker 모델 선정
+2. Hybrid Top-N / Reranker Top-K 결정
+3. 검색 평가 데이터셋 구성
+4. Recall@K / MRR 등 Retrieval 평가
+5. Prompt 개선
+6. Generation Parameter 비교
+7. QLoRA 적용 여부 및 학습 데이터 구성
+8. QLoRA 적용 전/후 Generation 품질 비교
+9. 모델별 응답 속도 및 GPU 메모리 측정
 
 ------------------------------------------------------------------------
 
 ## 13. 최종 목표 구조
 
-현재 중간발표 기준:
+현재 구현 기준:
 
-``` text
+```text
 HWP/HWPX
 → Parsing
 → Normalization / Structure
@@ -580,18 +825,36 @@ HWP/HWPX
 → BGE-M3 Embedding
 → PostgreSQL + pgvector
 → Vector Search
-        +
+      +
   Keyword Search
 → RRF Hybrid Search
 → Context Builder
 → System Prompt
-→ Qwen (llama.cpp)
+→ llama.cpp
+→ 현재 선택된 GGUF LLM
 → 근거 기반 답변
 ```
 
-발표 이후 목표:
+현재 성능 테스트 LLM:
 
-``` text
+```text
+Gemma GGUF
+```
+
+Generation Source Code는 특정 모델에 고정하지 않으며:
+
+```text
+GGUF Model
+→ llama-server --alias
+→ LLAMA_MODEL
+→ Generation
+```
+
+구조로 모델을 교체한다.
+
+성능 고도화 목표:
+
+```text
 HWP/HWPX
 → Parsing
 → Structure
@@ -603,7 +866,8 @@ HWP/HWPX
 → Reranker
 → 최종 Context
 → System Prompt
-→ QLoRA 적용 Qwen 후보
+→ 선택된 LLM
+→ 필요 시 QLoRA 적용 모델 비교
 → 근거 기반 답변
 ```
 
@@ -611,17 +875,18 @@ HWP/HWPX
 
 ## 14. 중요한 개발 원칙
 
-1.  특정 테스트 문서(`announcement_001`)에 종속되는 코드를 실제
-    Runtime에 넣지 않는다.
-2.  `limit=5`는 테스트 전용이며 운영 파이프라인에는 적용하지 않는다.
-3.  검색은 사용자가 선택한 `announcement_id` 범위 안에서 수행한다.
-4.  문서 임베딩과 Query Embedding은 동일한 BGE-M3 계열 설정을 유지한다.
-5.  Hybrid Search에서는 Vector/Keyword 원점수를 단순 합산하지 않고 RRF로
-    결합한다.
-6.  Generation은 Retrieval 결과에 없는 정보를 임의로 생성하지 않도록
-    Prompt에서 제한한다.
-7.  Reranker와 QLoRA는 현재 필수 Runtime이 아니라 향후 성능 개선 단계다.
-8.  DB Persistence와 데이터 Active 상태는 별개 개념이므로 운영 연결 시
-    구분한다.
-9.  테스트 스크립트와 실제 Runtime 구현을 혼동하지 않는다.
-10. 다음 작업자는 실제 Qwen Generation E2E 검증부터 이어서 진행한다.
+1. 특정 테스트 문서(`announcement_001`)에 종속되는 코드를 실제 Runtime에 넣지 않는다.
+2. `limit=5`는 테스트 전용이며 운영 파이프라인에는 적용하지 않는다.
+3. 검색은 사용자가 선택한 `announcement_id` 범위 안에서 수행한다.
+4. 문서 임베딩과 Query Embedding은 동일한 BGE-M3 계열 설정을 유지한다.
+5. Hybrid Search에서는 Vector/Keyword 원점수를 단순 합산하지 않고 RRF로 결합한다.
+6. Generation은 Retrieval 결과에 없는 정보를 임의로 생성하지 않도록 Prompt에서 제한한다.
+7. Reranker와 QLoRA는 현재 필수 Runtime이 아니라 향후 성능 개선 단계다.
+8. DB Persistence와 데이터 Active 상태는 별개 개념이므로 운영 연결 시 구분한다.
+9. 테스트 스크립트와 실제 Runtime 구현을 혼동하지 않는다.
+10. Generation Model 이름을 Python Source Code에 고정하지 않는다.
+11. 모델 교체 시 llama-server `--alias`와 `LLAMA_MODEL`을 일치시킨다.
+12. `LLAMA_MAX_TOKENS`와 llama.cpp `--ctx-size`는 서로 다른 설정이다. 전자는 최대 출력 Token 수이고 후자는 Server의 전체 Context 크기다.
+13. `LLAMA_MAX_CONTEXT_CHARS`는 개별 Chunk가 아니라 Generation에 전달되는 Retrieval 근거 전체 길이를 제한한다.
+14. 검색 결과 없음(no-evidence)과 실제 LLM Generation 실패를 동일한 오류로 처리하지 않는다.
+15. 다음 작업자는 FastAPI `/api/chat` 기준 전체 End-to-End 검증부터 이어서 진행한다.
