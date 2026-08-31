@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import traceback
+import logging
 from dataclasses import dataclass, replace
 
 from rag.db_pipeline import DBRAGPipeline
@@ -9,7 +9,9 @@ from rag.retrieval.keyword_search import (
     search_bm25,
 )
 from rag.retrieval.models import SearchResult
-from backend.app.services.error_log_service import record_error
+
+
+logger = logging.getLogger(__name__)
 
 
 class HybridSearchError(RuntimeError):
@@ -180,6 +182,7 @@ def _hybrid_search_impl(
         raw_metadata = dict(
             original_item.raw_metadata or {}
         )
+
         raw_metadata["hybrid"] = {
             "vector_rank": data["vector_rank"],
             "bm25_rank": data["bm25_rank"],
@@ -221,8 +224,8 @@ def hybrid_search(
     """
     Hybrid Retrieval의 외부 진입점.
 
-    실제 Retrieval 오류는 이 경계에서 Backend 공통 ErrorLog에
-    한 번만 기록한 뒤 원래 예외를 다시 올립니다.
+    실제 Retrieval 오류는 이 경계에서
+    RAG 자체 로그에 기록한 뒤 원래 예외를 다시 올린다.
     """
     try:
         return _hybrid_search_impl(
@@ -232,24 +235,9 @@ def hybrid_search(
             config=config,
         )
 
-    except Exception as error:
-        try:
-            record_error(
-                error_type="rag",
-                stage="retrieval",
-                message=str(error),
-                announcement_id=(
-                    announcement_id
-                    if isinstance(announcement_id, int)
-                    and announcement_id > 0
-                    else None
-                ),
-                error_code=type(error).__name__,
-                stack_trace=traceback.format_exc(),
-            )
-        except Exception as log_error:
-            print(
-                f"[WARNING] Retrieval ErrorLog 기록 실패: {log_error}"
-            )
-
+    except Exception:
+        logger.exception(
+            "Hybrid Retrieval 실패: announcement_id=%s",
+            announcement_id,
+        )
         raise

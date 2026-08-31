@@ -1,55 +1,43 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
-
-def _env_float(name: str, default: float) -> float:
-    value = os.getenv(name)
-
-    if value is None or not value.strip():
-        return default
-
-    return float(value)
-
-
-def _env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-
-    if value is None or not value.strip():
-        return default
-
-    return int(value)
+from services.rag.config import settings
 
 
 @dataclass(frozen=True)
 class GenerationConfig:
     """llama.cpp 기반 LLM 답변 생성 설정."""
 
-    base_url: str = os.getenv(
-        "LLAMA_BASE_URL",
-        "http://127.0.0.1:8080",
-    ).strip()
+    base_url: str = settings.llama_base_url
 
-    chat_completions_path: str = "/v1/chat/completions"
-
-    model_name: str = os.getenv(
-        "LLAMA_MODEL",
-        "",
-    ).strip()
-
-    temperature: float = _env_float("LLAMA_TEMPERATURE", 0.0)
-    top_p: float = _env_float("LLAMA_TOP_P", 1.0)
-    max_tokens: int = _env_int("LLAMA_MAX_TOKENS", 1024)
-
-    timeout_seconds: int = _env_int(
-        "LLAMA_TIMEOUT_SECONDS",
-        180,
+    chat_completions_path: str = (
+        "/v1/chat/completions"
     )
 
-    context_top_k: int = _env_int("LLAMA_CONTEXT_TOP_K", 5)
+    model_name: str = settings.llama_model
 
-    max_chars_per_context: int = _env_int("LLAMA_MAX_CONTEXT_CHARS", 6000)
+    temperature: float = (
+        settings.llama_temperature
+    )
+
+    top_p: float = settings.llama_top_p
+
+    max_tokens: int = (
+        settings.llama_max_tokens
+    )
+
+    timeout_seconds: int = (
+        settings.llama_timeout_seconds
+    )
+
+    context_top_k: int = (
+        settings.llama_context_top_k
+    )
+
+    max_chars_per_context: int = (
+        settings.llama_max_context_chars
+    )
 
     require_source_markers: bool = True
 
@@ -61,7 +49,8 @@ class GenerationConfig:
 
         if not self.chat_completions_path.startswith("/"):
             raise ValueError(
-                "chat_completions_path는 '/'로 시작해야 합니다."
+                "chat_completions_path는 "
+                "'/'로 시작해야 합니다."
             )
 
         if not self.model_name:
@@ -86,17 +75,20 @@ class GenerationConfig:
 
         if self.timeout_seconds <= 0:
             raise ValueError(
-                "LLAMA_TIMEOUT_SECONDS는 1 이상이어야 합니다."
+                "LLAMA_TIMEOUT_SECONDS는 "
+                "1 이상이어야 합니다."
             )
 
         if self.context_top_k <= 0:
             raise ValueError(
-                "context_top_k는 1 이상이어야 합니다."
+                "context_top_k는 "
+                "1 이상이어야 합니다."
             )
 
         if self.max_chars_per_context <= 0:
             raise ValueError(
-                "max_chars_per_context는 1 이상이어야 합니다."
+                "max_chars_per_context는 "
+                "1 이상이어야 합니다."
             )
 
     @property
