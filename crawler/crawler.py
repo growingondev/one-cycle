@@ -808,7 +808,7 @@ def crawl_lh_notices() -> dict:
                 driver,
                 10,
             ).until(
-                EC.presence_of_all_elements_located(
+                EC.visibility_of_all_elements_located(
                     (
                         By.CSS_SELECTOR,
                         ".mVw.bbs_tit "
@@ -960,7 +960,6 @@ def crawl_lh_notices() -> dict:
 
             driver.back()
 
-            time.sleep(1)
 
     except Exception as exc:
         fatal_error = (
