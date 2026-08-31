@@ -2129,3 +2129,180 @@ rollback                  = PASS
 따라서 실제 PostgreSQL과 Backend Announcement List Service에서도
 `announcements.deadline_date` 우선 조회가 정상 동작하며,
 검증 과정에서 기존 DB 상태는 변경되지 않았다.
+
+## 31. 2026-08-31 Backend / Document Worker Docker 분리 및 로컬 Compose 검증
+
+### 목적
+
+기존 API 수준의 서비스 분리가 완료된 상태에서 Backend(+Crawler)와 Document Worker를 독립 Docker 컨테이너로 실행할 수 있도록 런타임을 분리하고, 로컬 Docker Compose 환경에서 PostgreSQL 및 서비스 간 연결을 검증했다.
+
+이번 단계는 Windows 로컬 환경에서의 Docker 분리 및 통신 검증이며, AWS 서버에는 아직 신규 Docker 구성을 반영하지 않았다.
+
+### Backend Docker 분리
+
+Backend 전용 Docker 런타임을 다음 기준으로 구성했다.
+
+~~~text
+Python 3.12
+FastAPI 0.141.1
+Uvicorn 0.51.0
+SQLAlchemy 2.0.51
+psycopg 3.3.4
+Alembic 1.19.0
+pgvector 0.5.0
+Selenium 4.47.0
+webdriver-manager 4.1.2
+Google Chrome
+~~~
+
+Backend와 Crawler는 별도 서비스로 나누지 않고 동일 Backend 컨테이너에서 실행한다.
+
+Crawler가 수집한 문서는 다음 경로에 저장하도록 구성했다.
+
+~~~text
+CRAWLER_STAGING_DIR=/data/documents
+~~~
+
+Backend 컨테이너 검증 결과:
+
+~~~text
+FastAPI startup                  PASS
+GET /api/health                  PASS
+GET /api/health/db               PASS
+PostgreSQL connection            PASS
+Selenium / Chrome startup        PASS
+~~~
+
+### Document Worker Docker 분리
+
+Document Worker는 다음 런타임 기준으로 분리했다.
+
+~~~text
+Python 3.12
+OpenJDK 11
+JPype1 1.7.1
+FastAPI 0.141.1
+Uvicorn 0.51.0
+numpy 2.5.1
+httpx 0.28.1
+~~~
+
+AWS 기존 실행 환경의 Java 11을 기준으로 Docker 런타임도 OpenJDK 11로 맞췄다.
+
+Java / Parser 검증 결과:
+
+~~~text
+OpenJDK 11 startup               PASS
+JPype -> Java 11 JVM             PASS
+hwplib HWPReader class load      PASS
+hwpxlib HWPXReader class load    PASS
+actual HWP parsing               PASS
+actual HWPX parsing              PASS
+~~~
+
+실제 HWP 문서에서는 Section 1개, 일반 문단 79개, 최상위 표 58개, 중첩 표 36개를 추출했고, 실제 HWPX 문서에서는 Section 2개, 일반 문단 191개, 최상위 표 90개, 중첩 표 61개를 추출했다.
+
+Document Worker의 정상 처리 경로에서는 `document_worker/service.py`가 HWP/HWPX JAR 경로를 명시적으로 Parser에 전달하므로 Parser CLI의 자동 JAR 탐색 경로에 의존하지 않는다.
+
+### 공유 문서 저장소
+
+Backend와 Document Worker가 같은 원본 문서를 볼 수 있도록 동일한 Host bind mount를 `/data/documents`에 연결했다.
+
+로컬 기본 경로:
+
+~~~text
+C:\Project\one-cycle\runtime\documents
+~~~
+
+컨테이너 내부 경로:
+
+~~~text
+Backend          /data/documents
+Document Worker  /data/documents
+~~~
+
+Backend 컨테이너에서 테스트 파일을 작성하고 Document Worker 컨테이너에서 동일 파일을 읽어 공유 저장소가 실제로 동작하는 것을 확인했다.
+
+~~~text
+Backend write -> Worker read     PASS
+~~~
+
+`runtime/`은 Git 및 Docker Build Context에 포함되지 않도록 `.gitignore`와 `.dockerignore`에서 제외했다.
+
+### Docker Compose 연결
+
+현재 로컬 Compose 서비스는 다음과 같다.
+
+~~~text
+postgres
+backend
+document-worker
+~~~
+
+서비스 내부 연결 기준:
+
+~~~text
+PostgreSQL       postgres:5432
+Backend          backend:18000
+Document Worker  document-worker:18003
+RAG              rag:18002          (추후 추가)
+Embedding        embedding:18001    (추후 추가)
+~~~
+
+검증 결과:
+
+~~~text
+PostgreSQL container healthy                  PASS
+Backend container startup                     PASS
+Document Worker container startup             PASS
+Host -> Document Worker HTTP                  PASS
+Backend -> document-worker:18003 HTTP         PASS
+Backend <-> Worker shared /data/documents     PASS
+Backend recreate 후 API health                PASS
+Backend recreate 후 DB health                 PASS
+~~~
+
+Embedding과 RAG 서비스는 아직 Compose에 추가되지 않았으므로 실제 Document Worker -> Embedding 및 Backend -> RAG E2E는 후속 통합 단계에서 검증한다.
+
+### Admin 환경설정 정비
+
+기존 Admin 인증 코드에서 직접 `os.getenv()`를 사용하던 부분을 Backend 공통 `Settings` 기반으로 통일했다.
+
+추가된 설정:
+
+~~~text
+admin_id
+admin_password
+admin_jwt_secret
+admin_jwt_expire_seconds
+admin_cookie_name
+admin_cookie_secure
+admin_cookie_samesite
+~~~
+
+Admin API 계약 테스트 결과:
+
+~~~text
+4 passed
+~~~
+
+### AWS 반영 상태
+
+이번 Docker 분리 작업은 현재 로컬에서만 검증 완료된 상태다.
+
+AWS의 기존 Backend 실행 프로세스와 PostgreSQL 컨테이너는 이번 검증 과정에서 변경하지 않았다.
+
+후속 단계에서는 `develop-api`에 반영된 Embedding / RAG / LLM Docker 파일을 전체 Compose에 통합한 뒤 AWS의 `/home/ubuntu/ddokbot/one-cycle_api`에서 최신 코드를 받아 이미지를 다시 빌드하고 GPU/모델 실행 및 전체 서비스 E2E를 검증한다.
+
+따라서 현재 상태는 다음과 같이 구분한다.
+
+~~~text
+로컬 Backend / Worker Docker 분리        완료
+로컬 PostgreSQL / Backend / Worker 연결   완료
+로컬 공유 문서 저장소 검증                완료
+Embedding / RAG / LLM Docker 파일 반영      완료 (develop-api)
+Embedding / RAG / LLM 실제 실행 검증        미완료
+로컬 전체 서비스 E2E                      미완료
+AWS 신규 Docker 구성 반영                 미완료
+AWS 전체 Docker E2E                       미완료
+~~~

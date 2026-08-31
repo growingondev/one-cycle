@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     document_worker_base_url: str = ""
     document_worker_timeout_seconds: float = 600.0
 
+    # Admin authentication
+    admin_id: str = ""
+    admin_password: str = ""
+    admin_jwt_secret: str = ""
+    admin_jwt_expire_seconds: int = 3600
+    admin_cookie_name: str = "admin_access_token"
+    admin_cookie_secure: bool = False
+    admin_cookie_samesite: str = "lax"
+
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",
