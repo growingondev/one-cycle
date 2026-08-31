@@ -22,12 +22,6 @@ REQUIRED_FIELDS = (
 
 # ============================================================
 # Structure Domain → 핵심정보 Field 연결 규칙
-#
-# 1순위: Structure가 이미 만든 domain.category / topic
-# 2순위: Section 제목·classification_text의 keyword
-#
-# Structure 단계의 의미 분류 결과를 재사용하는 것이 목적이므로
-# 키워드는 분류 실패/낮은 신뢰도 Section을 위한 보조 수단이다.
 # ============================================================
 FIELD_RULES: dict[str, dict[str, tuple[str, ...]]] = {
     "application_period": {
@@ -224,8 +218,6 @@ FIELD_RULES: dict[str, dict[str, tuple[str, ...]]] = {
 }
 
 
-# eligibility로 분류된 Section이라도 소득/자산 정보라면
-# income_asset_criteria 쪽으로도 별도 수집한다.
 INCOME_ASSET_KEYWORDS = FIELD_RULES[
     "income_asset_criteria"
 ]["keywords"]
@@ -235,28 +227,125 @@ INCOME_ASSET_KEYWORDS = FIELD_RULES[
 # supply_information 검증 규칙
 # ============================================================
 SUPPLY_TITLE_KEYWORDS = (
-    "공급정보", "공급 정보", "공급대상", "공급 대상",
-    "공급계획", "공급 계획", "공급내역", "공급 내역",
-    "공급현황", "공급 현황", "주택공급", "주택 공급",
-    "주택형별", "임대조건", "임대 조건",
+    "공급정보",
+    "공급 정보",
+    "공급대상",
+    "공급 대상",
+    "공급계획",
+    "공급 계획",
+    "공급내역",
+    "공급 내역",
+    "공급현황",
+    "공급 현황",
+    "주택공급",
+    "주택 공급",
+    "주택형별",
+    "임대조건",
+    "임대 조건",
 )
 
 SUPPLY_DATA_KEYWORDS = (
-    "주택형", "전용면적",
-    "공급호수", "공급 호수", "모집호수", "모집 호수",
-    "공급세대", "공급 세대", "공급세대수", "공급 세대수",
-    "모집세대", "모집 세대", "모집세대수", "모집 세대수",
-    "임대보증금", "임대 보증금", "월임대료", "월 임대료",
-    "임대조건", "임대 조건",
-    "공급위치", "공급 위치", "건설위치", "건설 위치",
+    "주택형",
+    "전용면적",
+    "공급호수",
+    "공급 호수",
+    "모집호수",
+    "모집 호수",
+    "공급세대",
+    "공급 세대",
+    "공급세대수",
+    "공급 세대수",
+    "모집세대",
+    "모집 세대",
+    "모집세대수",
+    "모집 세대수",
+    "임대보증금",
+    "임대 보증금",
+    "월임대료",
+    "월 임대료",
+    "임대조건",
+    "임대 조건",
+    "공급위치",
+    "공급 위치",
+    "건설위치",
+    "건설 위치",
 )
 
 SUPPLY_EXCLUSION_KEYWORDS = (
-    "개인정보 수집", "개인정보 이용", "개인정보 제공", "개인정보 처리",
-    "민감정보 수집", "민감정보 이용", "민감정보 활용",
-    "동의 거부", "동의여부", "동의 여부",
-    "제3자 제공", "개인정보의 제3자",
-    "보유·이용 기간", "보유 이용 기간",
+    "개인정보 수집",
+    "개인정보 이용",
+    "개인정보 제공",
+    "개인정보 처리",
+    "민감정보 수집",
+    "민감정보 이용",
+    "민감정보 활용",
+    "동의 거부",
+    "동의여부",
+    "동의 여부",
+    "제3자 제공",
+    "개인정보의 제3자",
+    "보유·이용 기간",
+    "보유 이용 기간",
+)
+
+
+# ============================================================
+# 신청자격 공급계층 규칙
+#
+# 이 값들은 "summary 문장 생성"에 사용하지 않는다.
+# target_groups 구조화와 자세히 보기용 그룹 분리에만 사용한다.
+# ============================================================
+ELIGIBILITY_TARGET_GROUPS = (
+    {
+        "code": "college_student",
+        "label": "대학생계층",
+        "keywords": (
+            "대학생계층",
+            "대학생 계층",
+            "대학생",
+            "취업준비생",
+        ),
+    },
+    {
+        "code": "youth",
+        "label": "청년계층",
+        "keywords": (
+            "청년계층",
+            "청년 계층",
+            "청년",
+            "사회초년생",
+        ),
+    },
+    {
+        "code": "newlywed_family",
+        "label": "신혼부부·예비신혼부부·한부모가족",
+        "keywords": (
+            "신혼부부",
+            "예비신혼부부",
+            "예비 신혼부부",
+            "한부모가족",
+            "한부모 가족",
+            "신혼·신생아",
+            "신혼 신생아",
+        ),
+    },
+    {
+        "code": "senior",
+        "label": "고령자",
+        "keywords": (
+            "고령자계층",
+            "고령자 계층",
+            "고령자",
+        ),
+    },
+    {
+        "code": "housing_benefit",
+        "label": "주거급여수급자",
+        "keywords": (
+            "주거급여수급자",
+            "주거급여 수급자",
+        ),
+    },
 )
 
 
@@ -381,12 +470,14 @@ def _content_text(content: Any) -> str:
     if direct_text:
         values.append(direct_text)
 
-    # 구조화 표 record의 value도 포함한다.
     structured_table = content.get(
         "structured_table"
     )
 
-    if isinstance(structured_table, dict):
+    if isinstance(
+        structured_table,
+        dict,
+    ):
         for node in _iter_nested_dicts(
             structured_table
         ):
@@ -404,7 +495,6 @@ def _content_text(content: Any) -> str:
                         cleaned
                     )
 
-            # key-value 구조가 있으면 key도 포함
             key = node.get("key")
 
             if isinstance(
@@ -419,7 +509,6 @@ def _content_text(content: Any) -> str:
                         cleaned
                     )
 
-    # cells가 있는 fallback 표도 원문 보존
     cells = content.get("cells")
 
     if isinstance(cells, list):
@@ -454,7 +543,9 @@ def _section_direct_text(
 
     title = _clean_text(
         section.get("title")
-        or section.get("normalized_title")
+        or section.get(
+            "normalized_title"
+        )
     )
 
     if title:
@@ -570,7 +661,8 @@ def _domain_info(
 
     try:
         confidence = float(
-            domain.get("confidence") or 0.0
+            domain.get("confidence")
+            or 0.0
         )
     except (
         TypeError,
@@ -589,13 +681,26 @@ def _count_keyword_matches(
     text: str,
     keywords: Iterable[str],
 ) -> int:
-    normalized_text = _normalized_match_text(text)
+    normalized_text = (
+        _normalized_match_text(text)
+    )
     matched: set[str] = set()
 
     for keyword in keywords:
-        normalized_keyword = _normalized_match_text(keyword)
-        if normalized_keyword and normalized_keyword in normalized_text:
-            matched.add(normalized_keyword)
+        normalized_keyword = (
+            _normalized_match_text(
+                keyword
+            )
+        )
+
+        if (
+            normalized_keyword
+            and normalized_keyword
+            in normalized_text
+        ):
+            matched.add(
+                normalized_keyword
+            )
 
     return len(matched)
 
@@ -608,17 +713,33 @@ def _is_valid_supply_section(
     title_text = " ".join(
         _deduplicate_texts(
             (
-                _clean_text(section.get("title")),
-                _clean_text(section.get("normalized_title")),
-                _clean_text(section.get("search_title")),
+                _clean_text(
+                    section.get("title")
+                ),
+                _clean_text(
+                    section.get(
+                        "normalized_title"
+                    )
+                ),
+                _clean_text(
+                    section.get(
+                        "search_title"
+                    )
+                ),
             )
         )
     )
 
-    body_text = _section_direct_text(section)
-    full_text = f"{title_text} {body_text}"
+    body_text = _section_direct_text(
+        section
+    )
+    full_text = (
+        f"{title_text} {body_text}"
+    )
 
-    category, topic, _ = _domain_info(section)
+    category, topic, _ = (
+        _domain_info(section)
+    )
 
     supply_topics = {
         "supply_information",
@@ -627,49 +748,59 @@ def _is_valid_supply_section(
         "supply_price",
         "rental_condition",
         "housing_information",
-        # Structure domain_rules.json에서 실제 사용하는 topic
         "supply_target",
         "supply_scale",
     }
-    supply_categories = {"supply", "housing", "price"}
+    supply_categories = {
+        "supply",
+        "housing",
+        "price",
+    }
 
-    # 다른 용도로 이미 명확히 분류된 Section은 본문에 공급 관련 단어가
-    # 우연히 포함되어도 공급정보 후보로 재사용하지 않는다.
-    if category and category not in supply_categories:
+    if (
+        category
+        and category
+        not in supply_categories
+    ):
         return False
 
-    strong_topic = topic in supply_topics
+    strong_topic = (
+        topic in supply_topics
+    )
     title_match = _contains_keyword(
         title_text,
         SUPPLY_TITLE_KEYWORDS,
     )
-    data_evidence_count = _count_keyword_matches(
-        full_text,
-        SUPPLY_DATA_KEYWORDS,
+    data_evidence_count = (
+        _count_keyword_matches(
+            full_text,
+            SUPPLY_DATA_KEYWORDS,
+        )
     )
-    excluded_context = _contains_keyword(
-        full_text,
-        SUPPLY_EXCLUSION_KEYWORDS,
+    excluded_context = (
+        _contains_keyword(
+            full_text,
+            SUPPLY_EXCLUSION_KEYWORDS,
+        )
     )
 
-    # 개인정보/민감정보/동의 문맥은 공급이라는 표현이 우연히 들어갈 수 있다.
-    # 실제 공급 데이터 특징이 충분하지 않으면 공급정보에서 제외한다.
-    if excluded_context and data_evidence_count < 2:
+    if (
+        excluded_context
+        and data_evidence_count < 2
+    ):
         return False
 
-    # Structure의 구체적인 supply topic은 강한 근거로 사용한다.
     if strong_topic:
         return True
 
-    # 제목 자체가 명확한 공급정보 제목이면 인정한다.
     if title_match:
         return True
 
-    # 넓은 category만 있는 경우 실제 공급 데이터 특징을 함께 요구한다.
     if category in supply_categories:
-        return data_evidence_count >= 1
+        return (
+            data_evidence_count >= 1
+        )
 
-    # domain 분류가 없는 fallback은 실제 공급 데이터 특징이 2개 이상일 때만 인정한다.
     return data_evidence_count >= 2
 
 
@@ -681,7 +812,9 @@ def _score_section_for_field(
 
     if (
         field == "supply_information"
-        and not _is_valid_supply_section(section)
+        and not _is_valid_supply_section(
+            section
+        )
     ):
         return 0
 
@@ -697,19 +830,22 @@ def _score_section_for_field(
 
     score = 0
 
-    # domain topic은 가장 강한 근거
-    if topic and topic in set(
-        rule["topics"]
+    if (
+        topic
+        and topic in set(
+            rule["topics"]
+        )
     ):
         score += 100
 
-    # category는 넓은 범위라 두 번째 근거
-    if category and category in set(
-        rule["categories"]
+    if (
+        category
+        and category in set(
+            rule["categories"]
+        )
     ):
         score += 50
 
-    # 높은 신뢰도 domain이면 약간 가산
     if score > 0:
         score += int(
             max(
@@ -722,22 +858,25 @@ def _score_section_for_field(
             * 10
         )
 
-    # 제목/본문 fallback
     matched_keyword_count = sum(
         1
-        for keyword in rule["keywords"]
+        for keyword in rule[
+            "keywords"
+        ]
         if _contains_keyword(
             classification_text,
             (keyword,),
         )
     )
 
-    score += min(
-        matched_keyword_count,
-        5,
-    ) * 10
+    score += (
+        min(
+            matched_keyword_count,
+            5,
+        )
+        * 10
+    )
 
-    # eligibility와 income/asset 분리
     if field == "eligibility":
         if _contains_keyword(
             classification_text,
@@ -755,8 +894,6 @@ def _score_section_for_field(
         ):
             score += 60
 
-    # winner는 schedule 전체를 다 먹지 않도록
-    # 당첨/발표 관련 키워드가 없으면 schedule category만으로는 제외한다.
     if field == "winner_announcement":
         winner_keyword_match = (
             _contains_keyword(
@@ -774,7 +911,6 @@ def _score_section_for_field(
         ):
             return 0
 
-    # application period 역시 일반 일정 전체를 모두 가져오지 않는다.
     if field == "application_period":
         app_keyword_match = (
             _contains_keyword(
@@ -806,7 +942,9 @@ def _collect_entities(
     *,
     entity_type: str,
 ) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
+    result: list[
+        dict[str, Any]
+    ] = []
     seen: set[
         tuple[str, str]
     ] = set()
@@ -814,7 +952,9 @@ def _collect_entities(
     for node in _iter_nested_dicts(
         value
     ):
-        entities = node.get("entities")
+        entities = node.get(
+            "entities"
+        )
 
         if not isinstance(
             entities,
@@ -882,7 +1022,9 @@ def _extract_date_bounds(
     str | None,
     list[dict[str, Any]],
 ]:
-    dates: list[dict[str, Any]] = []
+    dates: list[
+        dict[str, Any]
+    ] = []
     seen: set[str] = set()
 
     for match in matches:
@@ -890,9 +1032,11 @@ def _extract_date_bounds(
             "_section"
         ]
 
-        for entity in _collect_entities(
-            section,
-            entity_type="date",
+        for entity in (
+            _collect_entities(
+                section,
+                entity_type="date",
+            )
         ):
             normalized = _clean_text(
                 entity.get(
@@ -909,7 +1053,6 @@ def _extract_date_bounds(
             seen.add(normalized)
             dates.append(entity)
 
-    # ISO-like YYYY-MM-DD / YYYY-MM 값은 문자열 정렬이 가능하다.
     normalized_dates = sorted(
         (
             entity[
@@ -927,7 +1070,6 @@ def _extract_date_bounds(
         if normalized_dates
         else None
     )
-
     end = (
         normalized_dates[-1]
         if normalized_dates
@@ -939,7 +1081,6 @@ def _extract_date_bounds(
         end,
         dates,
     )
-
 
 
 # ============================================================
@@ -968,25 +1109,37 @@ _DATE_PATTERN = re.compile(
 def _date_match_to_entity(
     match: re.Match[str],
 ) -> dict[str, Any]:
-    year = int(match.group("year"))
+    year = int(
+        match.group("year")
+    )
 
     if year < 100:
         year += 2000
 
-    month = int(match.group("month"))
-    day = int(match.group("day"))
-
-    normalized = (
-        f"{year:04d}-{month:02d}-{day:02d}"
+    month = int(
+        match.group("month")
+    )
+    day = int(
+        match.group("day")
     )
 
-    hour_value = match.group("hour")
+    normalized = (
+        f"{year:04d}-"
+        f"{month:02d}-"
+        f"{day:02d}"
+    )
+
+    hour_value = match.group(
+        "hour"
+    )
 
     if hour_value is not None:
         hour = int(hour_value)
         minute = int(
             match.group("minute")
-            or match.group("minute_word")
+            or match.group(
+                "minute_word"
+            )
             or 0
         )
 
@@ -1005,14 +1158,22 @@ def _date_match_to_entity(
             hour = 0
 
         normalized += (
-            f" {hour:02d}:{minute:02d}"
+            f" {hour:02d}:"
+            f"{minute:02d}"
         )
 
     return {
-        "raw": match.group(0).strip(),
-        "normalized_value": normalized,
-        "precision": "regex_fallback",
+        "raw": (
+            match.group(0).strip()
+        ),
+        "normalized_value": (
+            normalized
+        ),
+        "precision": (
+            "regex_fallback"
+        ),
     }
+
 
 _APPLICATION_RANGE_SEPARATORS = {
     "~",
@@ -1038,23 +1199,21 @@ _APPLICATION_RANGE_END_LABELS = {
     "신청종료",
 }
 
-_APPLICATION_RANGE_QUOTE_PATTERN = re.compile(
-    r"""[‘’'"“”`]"""
+_APPLICATION_RANGE_QUOTE_PATTERN = (
+    re.compile(
+        r"""[‘’'"“”`]"""
+    )
 )
 
 
 def _is_application_range_bridge(
     value: str,
 ) -> bool:
-    """
-    두 날짜 사이의 문자열이 신청기간을 연결하는
-    표현인지 판별한다.
-
-    특정 공고나 날짜를 기준으로 하지 않고,
-    범위 구분자와 시작/마감 의미 표현을 기준으로 판단한다.
-    """
-
-    normalized = _normalized_match_text(value)
+    normalized = (
+        _normalized_match_text(
+            value
+        )
+    )
 
     normalized = (
         _APPLICATION_RANGE_QUOTE_PATTERN.sub(
@@ -1066,26 +1225,21 @@ def _is_application_range_bridge(
     if not normalized:
         return False
 
-    # 일반적인 날짜 범위 표현
     if (
         normalized
         in _APPLICATION_RANGE_SEPARATORS
     ):
         return True
 
-    # 날짜 사이가 지나치게 멀면
-    # 서로 다른 일정일 가능성이 높다.
     if len(normalized) > 32:
         return False
 
-    # 시작일 2026... 마감일 2026...
     if (
         normalized
         in _APPLICATION_RANGE_END_LABELS
     ):
         return True
 
-    # 시작일 2026...부터 마감일 2026...
     for separator in (
         _APPLICATION_RANGE_SEPARATORS
     ):
@@ -1106,8 +1260,11 @@ def _is_application_range_bridge(
 
     return False
 
+
 def _extract_application_range(
-    matches: list[dict[str, Any]],
+    matches: list[
+        dict[str, Any]
+    ],
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -1131,15 +1288,18 @@ def _extract_application_range(
 
     best = None
 
-    for match_index, item in enumerate(
-        matches[:8]
-    ):
+    for (
+        match_index,
+        item,
+    ) in enumerate(matches[:8]):
         text = _clean_text(
             item.get("text")
         )
 
         found = list(
-            _DATE_PATTERN.finditer(text)
+            _DATE_PATTERN.finditer(
+                text
+            )
         )
 
         for left, right in zip(
@@ -1151,23 +1311,33 @@ def _extract_application_range(
                 right.start()
             ]
 
-            if not _is_application_range_bridge(
-                between
+            if (
+                not _is_application_range_bridge(
+                    between
+                )
             ):
                 continue
 
             label = text[
-                max(0, left.start() - 180):
+                max(
+                    0,
+                    left.start() - 180,
+                ):
                 left.start()
             ]
 
             normalized_label = (
-                _normalized_match_text(label)
+                _normalized_match_text(
+                    label
+                )
             )
 
             score = 0
 
-            for keyword, weight in (
+            for (
+                keyword,
+                weight,
+            ) in (
                 positive_keywords.items()
             ):
                 if (
@@ -1178,7 +1348,10 @@ def _extract_application_range(
                 ):
                     score += weight
 
-            for keyword, weight in (
+            for (
+                keyword,
+                weight,
+            ) in (
                 negative_keywords.items()
             ):
                 if (
@@ -1193,10 +1366,14 @@ def _extract_application_range(
                 continue
 
             start_entity = (
-                _date_match_to_entity(left)
+                _date_match_to_entity(
+                    left
+                )
             )
             end_entity = (
-                _date_match_to_entity(right)
+                _date_match_to_entity(
+                    right
+                )
             )
 
             candidate = (
@@ -1208,18 +1385,24 @@ def _extract_application_range(
 
             if (
                 best is None
-                or candidate[:2] > best[:2]
+                or candidate[:2]
+                > best[:2]
             ):
                 best = candidate
 
     if best is None:
         return None
 
-    return best[2], best[3]
+    return (
+        best[2],
+        best[3],
+    )
 
 
 def _summary_lines(
-    matches: list[dict[str, Any]],
+    matches: list[
+        dict[str, Any]
+    ],
 ) -> list[str]:
     result: list[str] = []
 
@@ -1265,9 +1448,17 @@ def _compact_summary(
 
 
 def _best_summary_line(
-    matches: list[dict[str, Any]],
-    required: tuple[str, ...],
-    preferred: tuple[str, ...],
+    matches: list[
+        dict[str, Any]
+    ],
+    required: tuple[
+        str,
+        ...
+    ],
+    preferred: tuple[
+        str,
+        ...
+    ],
     max_length: int = 200,
 ) -> str:
     best = None
@@ -1276,11 +1467,15 @@ def _best_summary_line(
         _summary_lines(matches)
     ):
         normalized = (
-            _normalized_match_text(line)
+            _normalized_match_text(
+                line
+            )
         )
 
         if not any(
-            _normalized_match_text(keyword)
+            _normalized_match_text(
+                keyword
+            )
             in normalized
             for keyword in required
         ):
@@ -1290,7 +1485,9 @@ def _best_summary_line(
             10
             for keyword in preferred
             if (
-                _normalized_match_text(keyword)
+                _normalized_match_text(
+                    keyword
+                )
                 in normalized
             )
         )
@@ -1303,7 +1500,8 @@ def _best_summary_line(
 
         if (
             best is None
-            or candidate[:2] > best[:2]
+            or candidate[:2]
+            > best[:2]
         ):
             best = candidate
 
@@ -1316,72 +1514,721 @@ def _best_summary_line(
     )
 
 
-def _build_eligibility_summary(
-    matches: list[dict[str, Any]],
+# ============================================================
+# 신청자격 - 공급계층 구조화
+# ============================================================
+def _normalize_eligibility_line(
+    value: Any,
 ) -> str:
-    best: tuple[int, int, str] | None = None
+    text = _clean_text(value)
 
-    for index, line in enumerate(_summary_lines(matches)):
-        cleaned = re.sub(r"^\s*[•▪■※*-]+\s*", "", line).strip()
-        normalized = _normalized_match_text(cleaned)
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
 
-        if not any(
-            _normalized_match_text(keyword) in normalized
-            for keyword in (
-                "무주택",
-                "신청자격",
-                "입주자격",
-                "모집공고일 현재",
-                "모두 갖춘 자",
+    return text.strip()
+
+
+def _eligibility_search_lines(
+    matches: list[
+        dict[str, Any]
+    ],
+) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+
+    for match in matches[:10]:
+        text = _clean_text(
+            match.get("text")
+        )
+
+        if not text:
+            continue
+
+        for raw_line in (
+            text.splitlines()
+        ):
+            line = (
+                _normalize_eligibility_line(
+                    raw_line
+                )
             )
+
+            if not line:
+                continue
+
+            normalized = (
+                _normalized_match_text(
+                    line
+                )
+            )
+
+            if normalized in seen:
+                continue
+
+            seen.add(normalized)
+            result.append(line)
+
+    return result
+
+
+def _line_has_group_keyword(
+    line: str,
+    keywords: tuple[str, ...],
+) -> bool:
+    normalized = (
+        _normalized_match_text(
+            line
+        )
+    )
+
+    return any(
+        _normalized_match_text(
+            keyword
+        )
+        in normalized
+        for keyword in keywords
+    )
+
+
+def _is_probable_target_group_line(
+    line: str,
+    keywords: tuple[str, ...],
+) -> bool:
+    """
+    실제 공급계층의 제목/자격 시작 문장인지 판별한다.
+
+    공고 제목이나 단순 언급에 포함된
+    '청년', '고령자' 등은 계층 시작점에서 제외한다.
+    """
+
+    if not _line_has_group_keyword(
+        line,
+        keywords,
+    ):
+        return False
+
+    cleaned = (
+        _normalize_eligibility_line(
+            line
+        )
+    )
+
+    normalized = (
+        _normalized_match_text(
+            cleaned
+        )
+    )
+
+    # -----------------------------------------------
+    # 공고 제목 / 일반 안내에서 우연히 등장한 경우 제외
+    # -----------------------------------------------
+    exclusion_keywords = (
+        "주택관리번호",
+        "주택명",
+        "입주자 모집공고",
+        "입주자모집공고문",
+        "행복주택 입주자 모집",
+        "영구임대 입주자 모집",
+        "청약통장",
+        "은행 방문",
+        "문의처",
+    )
+
+    if _contains_keyword(
+        cleaned,
+        exclusion_keywords,
+    ):
+        return False
+
+    # -----------------------------------------------
+    # 1. 가장 강한 근거:
+    #
+    # 3-1. 대학생 계층
+    # 3-2. 청년 계층
+    # 3-3. 신혼부부·한부모가족 계층
+    # -----------------------------------------------
+    if re.search(
+        r"^\s*\d+(?:-\d+)+(?:[.)])?\s*.*계층",
+        cleaned,
+    ):
+        return True
+
+    # -----------------------------------------------
+    # 2. 짧은 계층 제목
+    #
+    # 대학생 계층
+    # 청년계층
+    # 고령자
+    # -----------------------------------------------
+    if (
+        len(cleaned) <= 50
+        and (
+            "계층" in normalized
+            or normalized
+            in {
+                _normalized_match_text(
+                    keyword
+                )
+                for keyword in keywords
+            }
+        )
+    ):
+        return True
+
+    # -----------------------------------------------
+    # 3. 실제 신청자격 시작 문장
+    # -----------------------------------------------
+    qualification_contexts = (
+        "입주자모집공고일",
+        "모집공고일현재",
+        "신청자격",
+        "입주자격",
+        "아래의요건",
+        "모두갖춘자",
+    )
+
+    if any(
+        _normalized_match_text(
+            keyword
+        )
+        in normalized
+        for keyword
+        in qualification_contexts
+    ):
+        return True
+
+    return False
+
+
+def _extract_eligibility_target_groups(
+    matches: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    eligibility 후보에서 실제 모집 공급계층을 구조화한다.
+
+    핵심 원칙:
+    - 단순히 키워드가 등장한 줄 뒤 5개를 가져오지 않는다.
+    - 각 공급계층의 시작점을 찾는다.
+    - 현재 공급계층 시작점부터 다음 공급계층 시작점 직전까지를
+      해당 계층의 details 후보로 사용한다.
+    - 공통 안내문/타 계층 내용이 섞이는 것을 줄인다.
+    """
+
+    lines = _eligibility_search_lines(
+        matches
+    )
+
+    if not lines:
+        return []
+
+    # --------------------------------------------------------
+    # 1. 각 공급계층의 "시작점" 탐색
+    # --------------------------------------------------------
+    group_starts: list[
+        dict[str, Any]
+    ] = []
+
+    for index, line in enumerate(lines):
+        for rule in ELIGIBILITY_TARGET_GROUPS:
+            keywords = rule["keywords"]
+
+            if not _line_has_group_keyword(
+                line,
+                keywords,
+            ):
+                continue
+
+            if not _is_probable_target_group_line(
+                line,
+                keywords,
+            ):
+                continue
+
+            group_starts.append(
+                {
+                    "index": index,
+                    "rule": rule,
+                    "line": line,
+                }
+            )
+
+    if not group_starts:
+        return []
+
+    # 같은 index에서 여러 계층이 동시에 잡힐 수 있다.
+    # 예:
+    # "대학생, 청년, 예비신혼부부..." 같은 공통 안내문
+    #
+    # 이런 줄은 개별 계층의 시작점으로 쓰지 않는 것이 안전하다.
+    index_counts: dict[int, int] = {}
+
+    for item in group_starts:
+        index = int(item["index"])
+
+        index_counts[index] = (
+            index_counts.get(
+                index,
+                0,
+            )
+            + 1
+        )
+
+    filtered_starts: list[
+        dict[str, Any]
+    ] = []
+
+    for item in group_starts:
+        index = int(item["index"])
+        line = str(item["line"])
+
+        # 한 줄에서 여러 계층이 동시에 발견되면
+        # 공통 설명일 가능성이 높으므로
+        # 개별 계층 블록 시작점으로 사용하지 않는다.
+        if index_counts[index] > 1:
+            continue
+
+        # 너무 긴 문장은 제목/소제목보다 본문 설명일 가능성이 높다.
+        if len(line) > 120:
+            continue
+
+        filtered_starts.append(
+            item
+        )
+
+    # --------------------------------------------------------
+    # 2. 위 필터에서 시작점이 하나도 안 남은 경우
+    #    짧은 계층명 라인을 한 번 더 탐색
+    # --------------------------------------------------------
+    if not filtered_starts:
+        for index, line in enumerate(lines):
+            normalized_line = (
+                _normalized_match_text(
+                    line
+                )
+            )
+
+            for rule in ELIGIBILITY_TARGET_GROUPS:
+                matched_keywords = [
+                    keyword
+                    for keyword
+                    in rule["keywords"]
+                    if (
+                        _normalized_match_text(
+                            keyword
+                        )
+                        in normalized_line
+                    )
+                ]
+
+                if not matched_keywords:
+                    continue
+
+                # 짧은 제목/소제목 형태만 인정
+                if len(line) <= 60:
+                    filtered_starts.append(
+                        {
+                            "index": index,
+                            "rule": rule,
+                            "line": line,
+                        }
+                    )
+                    break
+
+    if not filtered_starts:
+        return []
+
+    # 문서 순서대로 정렬
+    filtered_starts.sort(
+        key=lambda item: (
+            int(item["index"]),
+        )
+    )
+
+    # --------------------------------------------------------
+    # 3. 같은 계층이 여러 번 시작점으로 잡혔을 경우
+    #    첫 번째 유효 시작점만 사용
+    # --------------------------------------------------------
+    unique_starts: list[
+        dict[str, Any]
+    ] = []
+
+    seen_codes: set[str] = set()
+
+    for item in filtered_starts:
+        rule = item["rule"]
+        code = str(
+            rule["code"]
+        )
+
+        if code in seen_codes:
+            continue
+
+        seen_codes.add(code)
+        unique_starts.append(
+            item
+        )
+
+    # --------------------------------------------------------
+    # 4. 각 계층 시작점 ~ 다음 계층 시작점 직전까지
+    # --------------------------------------------------------
+    groups: list[
+        dict[str, Any]
+    ] = []
+
+    detail_exclusion_keywords = (
+        "청약통장 가입은행",
+        "은행 방문",
+        "직접 발급",
+        "인터넷",
+        "문의처",
+        "문의",
+        "콜센터",
+        "제출서류",
+        "신청방법",
+        "신청절차",
+        "주택관리번호",
+    )
+
+    for start_position, item in enumerate(
+        unique_starts
+    ):
+        start_index = int(
+            item["index"]
+        )
+        rule = item["rule"]
+
+        if (
+            start_position + 1
+            < len(unique_starts)
+        ):
+            end_index = int(
+                unique_starts[
+                    start_position + 1
+                ]["index"]
+            )
+        else:
+            # 마지막 계층은 너무 멀리까지 먹지 않도록
+            # 최대 20줄까지만 사용한다.
+            end_index = min(
+                len(lines),
+                start_index + 20,
+            )
+
+        block = lines[
+            start_index:end_index
+        ]
+
+        details: list[str] = []
+        seen_details: set[str] = set()
+
+        for detail in block:
+            detail = (
+                _normalize_eligibility_line(
+                    detail
+                )
+            )
+
+            if not detail:
+                continue
+
+            normalized = (
+                _normalized_match_text(
+                    detail
+                )
+            )
+
+            if normalized in seen_details:
+                continue
+
+            # 자격 상세와 무관한 안내 문구 제거
+            if _contains_keyword(
+                detail,
+                detail_exclusion_keywords,
+            ):
+                continue
+
+            # 지나치게 짧고 일반적인 텍스트 제외
+            if len(detail) <= 2:
+                continue
+
+            # UI 과다 노출 방지
+            detail = _compact_summary(
+                detail,
+                350,
+            )
+
+            seen_details.add(
+                normalized
+            )
+            details.append(
+                detail
+            )
+
+            if len(details) >= 8:
+                break
+
+        groups.append(
+            {
+                "code": rule["code"],
+                "label": rule["label"],
+                "details": details,
+            }
+        )
+
+    return groups
+
+def _extract_common_eligibility_conditions(
+    matches: list[
+        dict[str, Any]
+    ],
+) -> list[str]:
+    lines = (
+        _eligibility_search_lines(
+            matches
+        )
+    )
+
+    result: list[str] = []
+
+    no_home_keywords = (
+        "무주택세대구성원",
+        "무주택 세대구성원",
+        "무주택자",
+        "무주택자인",
+        "무주택자로서",
+    )
+
+    if any(
+        _contains_keyword(
+            line,
+            no_home_keywords,
+        )
+        for line in lines
+    ):
+        result.append("무주택자")
+
+    return result
+
+
+def _build_eligibility_summary(
+    matches: list[
+        dict[str, Any]
+    ],
+) -> str:
+    """
+    신청자격 카드에 표시할 대표 문장을 원문에서 선택한다.
+
+    중요:
+    - 새 문장을 조립하지 않는다.
+    - "실제 모집하는 공급계층은 ..." 같은 고정 문구를 생성하지 않는다.
+    - eligibility 후보 Section에 실제 존재하는 원문 한 줄을 점수화한다.
+    """
+    best: tuple[
+        int,
+        int,
+        str,
+    ] | None = None
+
+    target_keywords = (
+        "대학생",
+        "취업준비생",
+        "청년",
+        "사회초년생",
+        "신혼부부",
+        "예비신혼부부",
+        "한부모가족",
+        "고령자",
+        "주거급여수급자",
+    )
+
+    qualification_keywords = (
+        "무주택",
+        "신청자격",
+        "입주자격",
+        "자격요건",
+        "공급대상",
+        "신청대상",
+        "모집공고일 현재",
+        "입주자모집공고일 현재",
+        "모두 갖춘 자",
+    )
+
+    negative_keywords = (
+        "확인하시기 바랍니다",
+        "자세한 내용",
+        "참고자료",
+        "이해를 돕기 위한",
+        "자격 해당여부는",
+        "서류제출",
+        "제출서류",
+        "신청방법",
+        "문의",
+        "페이지",
+    )
+
+    for index, line in enumerate(
+        _summary_lines(matches)
+    ):
+        cleaned = re.sub(
+            r"^\s*[•▪■※◆●*-]+\s*",
+            "",
+            line,
+        ).strip()
+
+        if not cleaned:
+            continue
+
+        normalized = (
+            _normalized_match_text(
+                cleaned
+            )
+        )
+
+        target_count = sum(
+            1
+            for keyword
+            in target_keywords
+            if (
+                _normalized_match_text(
+                    keyword
+                )
+                in normalized
+            )
+        )
+
+        qualification_count = (
+            sum(
+                1
+                for keyword
+                in qualification_keywords
+                if (
+                    _normalized_match_text(
+                        keyword
+                    )
+                    in normalized
+                )
+            )
+        )
+
+        # 아무 자격/대상 문맥도 없는 줄은 카드 대표문장에서 제외한다.
+        if (
+            target_count == 0
+            and qualification_count == 0
         ):
             continue
 
         score = 0
+
+        # 실제 공급계층이 여러 개 포함된 원문을 강하게 우선한다.
+        score += (
+            target_count * 25
+        )
+
+        # 자격/무주택/공고일 문맥을 우선한다.
+        score += (
+            qualification_count * 15
+        )
+
         positive_weights = {
             "모집공고일 현재": 35,
+            "입주자모집공고일 현재": 35,
             "무주택세대구성원": 35,
             "무주택자로서": 30,
+            "무주택자": 20,
             "아래의 요건": 25,
             "모두 갖춘 자": 30,
-            "만19세": 15,
-            "거주": 10,
-            "청약종합저축": 10,
-            "신청자격": 10,
-            "입주자격": 10,
-        }
-        negative_weights = {
-            "자격 해당여부는": 50,
-            "이해를 돕기 위한": 50,
-            "참고자료": 40,
-            "확인하시기 바랍니다": 35,
-            "자세한 내용": 25,
-            "페이지": 15,
+            "신청자격": 15,
+            "입주자격": 15,
+            "자격요건": 15,
+            "공급대상": 15,
         }
 
-        for keyword, weight in positive_weights.items():
-            if _normalized_match_text(keyword) in normalized:
+        for (
+            keyword,
+            weight,
+        ) in (
+            positive_weights.items()
+        ):
+            if (
+                _normalized_match_text(
+                    keyword
+                )
+                in normalized
+            ):
                 score += weight
 
-        for keyword, weight in negative_weights.items():
-            if _normalized_match_text(keyword) in normalized:
-                score -= weight
+        for keyword in (
+            negative_keywords
+        ):
+            if (
+                _normalized_match_text(
+                    keyword
+                )
+                in normalized
+            ):
+                score -= 40
 
-        candidate = (score, -index, _compact_summary(cleaned, 220))
-        if best is None or candidate[:2] > best[:2]:
+        # 단독 제목보다는 실제 서술 문장을 선호한다.
+        if len(cleaned) < 15:
+            score -= 25
+
+        # 지나치게 긴 안내문은 대표문장 후보에서 감점한다.
+        if len(cleaned) > 350:
+            score -= 25
+
+        candidate = (
+            score,
+            -index,
+            _compact_summary(
+                cleaned,
+                250,
+            ),
+        )
+
+        if (
+            best is None
+            or candidate[:2]
+            > best[:2]
+        ):
             best = candidate
 
-    return best[2] if best is not None else ""
+    if (
+        best is None
+        or best[0] <= 0
+    ):
+        return ""
+
+    return best[2]
 
 
 def _build_supply_summary(
-    matches: list[dict[str, Any]],
+    matches: list[
+        dict[str, Any]
+    ],
 ) -> str:
-    best: tuple[int, int, str] | None = None
+    best: tuple[
+        int,
+        int,
+        str,
+    ] | None = None
 
-    for index, line in enumerate(_summary_lines(matches)):
-        cleaned = re.sub(r"^\s*[•▪■※*-]+\s*", "", line).strip()
-        normalized = _normalized_match_text(cleaned)
+    for index, line in enumerate(
+        _summary_lines(matches)
+    ):
+        cleaned = re.sub(
+            r"^\s*[•▪■※*-]+\s*",
+            "",
+            line,
+        ).strip()
+
+        normalized = (
+            _normalized_match_text(
+                cleaned
+            )
+        )
 
         data_keywords = (
             "세대",
@@ -1392,28 +2239,50 @@ def _build_supply_summary(
             "임대보증금",
             "월임대료",
         )
+
         data_count = sum(
             1
-            for keyword in data_keywords
-            if _normalized_match_text(keyword) in normalized
+            for keyword
+            in data_keywords
+            if (
+                _normalized_match_text(
+                    keyword
+                )
+                in normalized
+            )
         )
 
-        # '공급대상 변경' 같은 안내문은 공급 데이터가 아니다.
         if data_count == 0:
             continue
 
         if any(
-            _normalized_match_text(keyword) in normalized
-            for keyword in ("입주자격", "신청자격", "선정이 불가")
+            _normalized_match_text(
+                keyword
+            )
+            in normalized
+            for keyword in (
+                "입주자격",
+                "신청자격",
+                "선정이 불가",
+            )
         ):
             continue
 
-        # 표가 셀 단위로 풀린 경우의 단독 헤더는 요약으로 사용하지 않는다.
-        if len(cleaned) < 12 or not re.search(r"\d", cleaned):
+        if (
+            len(cleaned) < 12
+            or not re.search(
+                r"\d",
+                cleaned,
+            )
+        ):
             continue
 
         score = data_count * 25
-        for keyword, weight in {
+
+        for (
+            keyword,
+            weight,
+        ) in {
             "공급대상": 15,
             "모집호수": 30,
             "공급호수": 30,
@@ -1421,10 +2290,18 @@ def _build_supply_summary(
             "임대보증금": 20,
             "월임대료": 20,
         }.items():
-            if _normalized_match_text(keyword) in normalized:
+            if (
+                _normalized_match_text(
+                    keyword
+                )
+                in normalized
+            ):
                 score += weight
 
-        for keyword, weight in {
+        for (
+            keyword,
+            weight,
+        ) in {
             "입주자격": 40,
             "신청자격": 40,
             "새로 계약": 30,
@@ -1441,43 +2318,104 @@ def _build_supply_summary(
             "선정이 불가": 50,
             "신청자의 세대구성원": 40,
         }.items():
-            if _normalized_match_text(keyword) in normalized:
+            if (
+                _normalized_match_text(
+                    keyword
+                )
+                in normalized
+            ):
                 score -= weight
 
         if score <= 0:
             continue
 
-        candidate = (score, -index, _compact_summary(cleaned, 220))
-        if best is None or candidate[:2] > best[:2]:
+        candidate = (
+            score,
+            -index,
+            _compact_summary(
+                cleaned,
+                220,
+            ),
+        )
+
+        if (
+            best is None
+            or candidate[:2]
+            > best[:2]
+        ):
             best = candidate
 
-    return best[2] if best is not None else ""
+    return (
+        best[2]
+        if best is not None
+        else ""
+    )
 
 
 def _build_income_asset_summary(
-    matches: list[dict[str, Any]],
+    matches: list[
+        dict[str, Any]
+    ],
 ) -> str:
-    best: tuple[int, int, str] | None = None
+    best: tuple[
+        int,
+        int,
+        str,
+    ] | None = None
 
-    for index, line in enumerate(_summary_lines(matches)):
-        cleaned = re.sub(r"^\s*[•▪■※*-]+\s*", "", line).strip()
-        cleaned = re.sub(r"^\s*\d+[.)]?\s*", "", cleaned).strip()
+    for index, line in enumerate(
+        _summary_lines(matches)
+    ):
+        cleaned = re.sub(
+            r"^\s*[•▪■※*-]+\s*",
+            "",
+            line,
+        ).strip()
+
+        cleaned = re.sub(
+            r"^\s*\d+[.)]?\s*",
+            "",
+            cleaned,
+        ).strip()
+
         cleaned = re.sub(
             r"\[(?:완화조건|배제조건)\]\s*",
             "",
             cleaned,
         ).strip()
-        normalized = _normalized_match_text(cleaned)
 
-        has_income = _normalized_match_text("소득") in normalized
-        has_asset = any(
-            _normalized_match_text(keyword) in normalized
-            for keyword in ("자산", "총자산", "자동차")
+        normalized = (
+            _normalized_match_text(
+                cleaned
+            )
         )
-        if not has_income and not has_asset:
+
+        has_income = (
+            _normalized_match_text(
+                "소득"
+            )
+            in normalized
+        )
+        has_asset = any(
+            _normalized_match_text(
+                keyword
+            )
+            in normalized
+            for keyword in (
+                "자산",
+                "총자산",
+                "자동차",
+            )
+        )
+
+        if (
+            not has_income
+            and not has_asset
+        ):
             continue
 
         score = 0
+
         positive_weights = {
             "소득기준": 25,
             "자산기준": 25,
@@ -1495,27 +2433,64 @@ def _build_income_asset_summary(
             "자세한 내용": 20,
         }
 
-        for keyword, weight in positive_weights.items():
-            if _normalized_match_text(keyword) in normalized:
+        for (
+            keyword,
+            weight,
+        ) in positive_weights.items():
+            if (
+                _normalized_match_text(
+                    keyword
+                )
+                in normalized
+            ):
                 score += weight
 
-        for keyword, weight in negative_weights.items():
-            if _normalized_match_text(keyword) in normalized:
+        for (
+            keyword,
+            weight,
+        ) in negative_weights.items():
+            if (
+                _normalized_match_text(
+                    keyword
+                )
+                in normalized
+            ):
                 score -= weight
 
-        candidate = (score, -index, _compact_summary(cleaned, 220))
-        if best is None or candidate[:2] > best[:2]:
+        candidate = (
+            score,
+            -index,
+            _compact_summary(
+                cleaned,
+                220,
+            ),
+        )
+
+        if (
+            best is None
+            or candidate[:2]
+            > best[:2]
+        ):
             best = candidate
 
-    return best[2] if best is not None else ""
+    return (
+        best[2]
+        if best is not None
+        else ""
+    )
 
 
 def _extract_document_items(
-    matches: list[dict[str, Any]],
+    matches: list[
+        dict[str, Any]
+    ],
 ) -> list[str]:
     text = _normalized_match_text(
         "\n".join(
-            match.get("text", "")
+            match.get(
+                "text",
+                "",
+            )
             for match in matches[:8]
         )
     )
@@ -1549,11 +2524,17 @@ def _extract_document_items(
 
     result: list[str] = []
 
-    for keyword, display in rules:
+    for (
+        keyword,
+        display,
+    ) in rules:
         if (
-            _normalized_match_text(keyword)
+            _normalized_match_text(
+                keyword
+            )
             in text
-            and display not in result
+            and display
+            not in result
         ):
             result.append(display)
 
@@ -1573,9 +2554,11 @@ def _collect_phone_numbers(
             "_section"
         ]
 
-        for entity in _collect_entities(
-            section,
-            entity_type="phone",
+        for entity in (
+            _collect_entities(
+                section,
+                entity_type="phone",
+            )
         ):
             value = (
                 _clean_text(
@@ -1595,17 +2578,19 @@ def _collect_phone_numbers(
                 seen.add(value)
                 phones.append(value)
 
-    # Entity가 없는 경우 텍스트에서 보수적으로 fallback
     phone_pattern = re.compile(
         r"(?<!\d)"
-        r"(?:0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4}|"
+        r"(?:0\d{1,2}[-\s]?"
+        r"\d{3,4}[-\s]?\d{4}|"
         r"1\d{3}[-\s]?\d{4})"
         r"(?!\d)"
     )
 
     for match in matches:
-        for value in phone_pattern.findall(
-            match["text"]
+        for value in (
+            phone_pattern.findall(
+                match["text"]
+            )
         ):
             normalized = re.sub(
                 r"\s+",
@@ -1622,44 +2607,69 @@ def _collect_phone_numbers(
     return phones
 
 
-
 # ============================================================
 # 핵심값 단위 추출 보조 함수
 # ============================================================
 def _extract_structured_key_values(
     section: dict[str, Any],
 ) -> list[dict[str, str]]:
-    """structured_table 안의 key/value를 가능한 형태에서 수집한다."""
-    result: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    result: list[
+        dict[str, str]
+    ] = []
+    seen: set[
+        tuple[str, str]
+    ] = set()
 
-    for node in _iter_nested_dicts(section):
-        key_values = node.get("key_values")
+    for node in _iter_nested_dicts(
+        section
+    ):
+        key_values = node.get(
+            "key_values"
+        )
 
-        if isinstance(key_values, list):
+        if isinstance(
+            key_values,
+            list,
+        ):
             for item in key_values:
-                if not isinstance(item, dict):
+                if not isinstance(
+                    item,
+                    dict,
+                ):
                     continue
 
                 key = _clean_text(
                     item.get("key")
-                    or item.get("label")
-                    or item.get("header")
+                    or item.get(
+                        "label"
+                    )
+                    or item.get(
+                        "header"
+                    )
                 )
                 value = _clean_text(
                     item.get("value")
-                    or item.get("text")
+                    or item.get(
+                        "text"
+                    )
                 )
 
-                if not key and not value:
+                if (
+                    not key
+                    and not value
+                ):
                     continue
 
-                pair = (key, value)
+                pair = (
+                    key,
+                    value,
+                )
 
                 if pair in seen:
                     continue
 
                 seen.add(pair)
+
                 result.append(
                     {
                         "key": key,
@@ -1667,22 +2677,39 @@ def _extract_structured_key_values(
                     }
                 )
 
-        key = _clean_text(node.get("key"))
+        key = _clean_text(
+            node.get("key")
+        )
         value = node.get("value")
 
-        if key and isinstance(
-            value,
-            (str, int, float),
+        if (
+            key
+            and isinstance(
+                value,
+                (
+                    str,
+                    int,
+                    float,
+                ),
+            )
         ):
-            value_text = _clean_text(value)
-            pair = (key, value_text)
+            value_text = _clean_text(
+                value
+            )
+            pair = (
+                key,
+                value_text,
+            )
 
             if pair not in seen:
                 seen.add(pair)
+
                 result.append(
                     {
                         "key": key,
-                        "value": value_text,
+                        "value": (
+                            value_text
+                        ),
                     }
                 )
 
@@ -1696,7 +2723,6 @@ def _extract_relevant_snippets(
     max_items: int = 12,
     max_length: int = 500,
 ) -> list[str]:
-    """Section 전체가 아니라 핵심 키워드가 있는 짧은 문장/항목만 추출한다."""
     if not text:
         return []
 
@@ -1719,44 +2745,72 @@ def _extract_relevant_snippets(
         ):
             continue
 
-        if len(cleaned) > max_length:
+        if (
+            len(cleaned)
+            > max_length
+        ):
             sentences = re.split(
-                r"(?<=[.!?。])\s+|(?<=다\.)\s*",
+                r"(?<=[.!?。])\s+"
+                r"|(?<=다\.)\s*",
                 cleaned,
             )
 
             selected = [
-                _clean_text(sentence)
-                for sentence in sentences
-                if _clean_text(sentence)
-                and _contains_keyword(
-                    sentence,
-                    keywords,
+                _clean_text(
+                    sentence
+                )
+                for sentence
+                in sentences
+                if (
+                    _clean_text(
+                        sentence
+                    )
+                    and _contains_keyword(
+                        sentence,
+                        keywords,
+                    )
                 )
             ]
 
-            result.extend(selected)
+            result.extend(
+                selected
+            )
         else:
             result.append(cleaned)
 
-    return _deduplicate_texts(
-        result
-    )[:max_items]
+    return (
+        _deduplicate_texts(
+            result
+        )[:max_items]
+    )
 
 
 def _key_value_matches_for_field(
-    matches: list[dict[str, Any]],
+    matches: list[
+        dict[str, Any]
+    ],
     field: str,
 ) -> list[dict[str, str]]:
-    keywords = FIELD_RULES[field]["keywords"]
-    result: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    keywords = FIELD_RULES[
+        field
+    ]["keywords"]
+
+    result: list[
+        dict[str, str]
+    ] = []
+    seen: set[
+        tuple[str, str]
+    ] = set()
 
     for match in matches:
-        section = match["_section"]
+        section = match[
+            "_section"
+        ]
 
-        for item in _extract_structured_key_values(
-            section
+        for item in (
+            _extract_structured_key_values(
+                section
+            )
         ):
             key = item["key"]
             value = item["value"]
@@ -1770,7 +2824,10 @@ def _key_value_matches_for_field(
             ):
                 continue
 
-            pair = (key, value)
+            pair = (
+                key,
+                value,
+            )
 
             if pair in seen:
                 continue
@@ -1781,6 +2838,9 @@ def _key_value_matches_for_field(
     return result
 
 
+# ============================================================
+# 날짜 정규화
+# ============================================================
 _DATE_WITH_TIME_PATTERN = re.compile(
     r"[‘’']?"
     r"(?P<year>\d{2,4})[.\-/년]\s*"
@@ -1799,15 +2859,15 @@ _DATE_WITH_TIME_PATTERN = re.compile(
 
 _DATE_RANGE_PATTERN = re.compile(
     r"[‘’']?"
-    # 시작일:
-    # 2026.09.10 / 2026-09-10 / 2026/09/10 / 2026년 9월 10일
-    r"(?P<start_year>\d{2,4})(?:[.\-/]|년)\s*"
-    r"(?P<start_month>\d{1,2})(?:[.\-/]|월)\s*"
-    r"(?P<start_day>\d{1,2})(?:일)?"
+    r"(?P<start_year>\d{2,4})"
+    r"(?:[.\-/]|년)\s*"
+    r"(?P<start_month>\d{1,2})"
+    r"(?:[.\-/]|월)\s*"
+    r"(?P<start_day>\d{1,2})"
+    r"(?:일)?"
     r"\s*\.?"
     r"(?:\s*\([^)]*\))?"
     r"\s*"
-    # 시간은 범위 인식을 위해 읽되, 최종 카드 값에는 저장하지 않는다.
     r"(?:(?P<start_ampm>오전|오후)\s*)?"
     r"(?P<start_hour>\d{1,2})?"
     r"(?::|시)?\s*"
@@ -1815,11 +2875,12 @@ _DATE_RANGE_PATTERN = re.compile(
     r"(?:분)?"
     r"\s*(?:~|∼|～|부터)\s*"
     r"[‘’']?"
-    # 종료 연도는 생략 가능하며, 생략 시 시작 연도를 상속한다.
-    # 9.11 / 9-11 / 9/11 / 9월 11일 모두 허용한다.
-    r"(?:(?P<end_year>\d{2,4})(?:[.\-/]|년)\s*)?"
-    r"(?P<end_month>\d{1,2})(?:[.\-/]|월)\s*"
-    r"(?P<end_day>\d{1,2})(?:일)?"
+    r"(?:(?P<end_year>\d{2,4})"
+    r"(?:[.\-/]|년)\s*)?"
+    r"(?P<end_month>\d{1,2})"
+    r"(?:[.\-/]|월)\s*"
+    r"(?P<end_day>\d{1,2})"
+    r"(?:일)?"
     r"\s*\.?"
     r"(?:\s*\([^)]*\))?"
     r"\s*"
@@ -1852,11 +2913,19 @@ def _normalize_time_parts(
         return None
 
     hour = int(hour_raw)
-    minute = int(minute_raw or 0)
+    minute = int(
+        minute_raw or 0
+    )
 
-    if ampm == "오후" and hour < 12:
+    if (
+        ampm == "오후"
+        and hour < 12
+    ):
         hour += 12
-    elif ampm == "오전" and hour == 12:
+    elif (
+        ampm == "오전"
+        and hour == 12
+    ):
         hour = 0
 
     if not (
@@ -1865,7 +2934,10 @@ def _normalize_time_parts(
     ):
         return None
 
-    return f"{hour:02d}:{minute:02d}"
+    return (
+        f"{hour:02d}:"
+        f"{minute:02d}"
+    )
 
 
 def _format_date_time(
@@ -1875,14 +2947,12 @@ def _format_date_time(
     day: int,
     time_value: str | None,
 ) -> str:
-    date_value = (
+    # 핵심정보 카드에는 시간대를 노출하지 않고 날짜만 저장한다.
+    return (
         f"{year:04d}-"
         f"{month:02d}-"
         f"{day:02d}"
     )
-    # 핵심정보 카드에는 시간대를 노출하지 않고 날짜만 저장한다.
-    # time_value는 원문의 날짜·시간 범위를 정확히 인식하기 위해 파싱만 한다.
-    return date_value
 
 
 def _normalize_date_match(
@@ -1891,13 +2961,19 @@ def _normalize_date_match(
     year = _normalize_year_value(
         match.group("year")
     )
-    month = int(match.group("month"))
-    day = int(match.group("day"))
+    month = int(
+        match.group("month")
+    )
+    day = int(
+        match.group("day")
+    )
 
-    time_value = _normalize_time_parts(
-        match.group("ampm"),
-        match.group("hour"),
-        match.group("minute"),
+    time_value = (
+        _normalize_time_parts(
+            match.group("ampm"),
+            match.group("hour"),
+            match.group("minute"),
+        )
     )
 
     return _format_date_time(
@@ -1911,16 +2987,22 @@ def _normalize_date_match(
 def _normalize_date_range_match(
     match: re.Match[str],
 ) -> tuple[str, str]:
-    """'26.8.31 ~ 9.2처럼 종료 연도가 생략된 범위를 복원한다."""
-
-    start_year = _normalize_year_value(
-        match.group("start_year")
+    start_year = (
+        _normalize_year_value(
+            match.group(
+                "start_year"
+            )
+        )
     )
     start_month = int(
-        match.group("start_month")
+        match.group(
+            "start_month"
+        )
     )
     start_day = int(
-        match.group("start_day")
+        match.group(
+            "start_day"
+        )
     )
 
     end_year_raw = match.group(
@@ -1928,37 +3010,64 @@ def _normalize_date_range_match(
     )
 
     if end_year_raw:
-        end_year = _normalize_year_value(
-            end_year_raw
+        end_year = (
+            _normalize_year_value(
+                end_year_raw
+            )
         )
     else:
-        # 종료 연도가 생략되면 시작 연도를 상속한다.
         end_year = start_year
 
     end_month = int(
-        match.group("end_month")
+        match.group(
+            "end_month"
+        )
     )
     end_day = int(
-        match.group("end_day")
+        match.group(
+            "end_day"
+        )
     )
 
-    # 12월 → 1월처럼 연말을 넘는 범위도 방어적으로 처리한다.
     if (
         not end_year_raw
-        and (end_month, end_day)
-        < (start_month, start_day)
+        and (
+            end_month,
+            end_day,
+        )
+        < (
+            start_month,
+            start_day,
+        )
     ):
         end_year += 1
 
-    start_time = _normalize_time_parts(
-        match.group("start_ampm"),
-        match.group("start_hour"),
-        match.group("start_minute"),
+    start_time = (
+        _normalize_time_parts(
+            match.group(
+                "start_ampm"
+            ),
+            match.group(
+                "start_hour"
+            ),
+            match.group(
+                "start_minute"
+            ),
+        )
     )
-    end_time = _normalize_time_parts(
-        match.group("end_ampm"),
-        match.group("end_hour"),
-        match.group("end_minute"),
+
+    end_time = (
+        _normalize_time_parts(
+            match.group(
+                "end_ampm"
+            ),
+            match.group(
+                "end_hour"
+            ),
+            match.group(
+                "end_minute"
+            ),
+        )
     )
 
     start = _format_date_time(
@@ -1985,7 +3094,9 @@ def _keyword_positions(
     result: list[int] = []
 
     for keyword in keywords:
-        needle = _clean_text(keyword).lower()
+        needle = _clean_text(
+            keyword
+        ).lower()
 
         if not needle:
             continue
@@ -2002,7 +3113,10 @@ def _keyword_positions(
                 break
 
             result.append(index)
-            start = index + len(needle)
+            start = (
+                index
+                + len(needle)
+            )
 
     return sorted(set(result))
 
@@ -2015,27 +3129,32 @@ def _distance_to_nearest_keyword(
         return 10**9
 
     return min(
-        abs(position - keyword_position)
+        abs(
+            position
+            - keyword_position
+        )
         for keyword_position
         in keyword_positions
     )
 
 
 def _collect_application_search_texts(
-    matches: list[dict[str, Any]],
+    matches: list[
+        dict[str, Any]
+    ],
 ) -> list[str]:
     """
-    application_period 후보 Section뿐 아니라
-    그 하위 Section의 본문/표까지 함께 검색 대상으로 만든다.
-
-    상위 Section은 application_period로 정상 분류됐지만
-    실제 날짜가 child Section/Table에 들어 있는 경우를 보완한다.
+    application_period 후보 Section과 하위 Section을 함께 탐색한다.
     """
     result: list[str] = []
     seen: set[str] = set()
 
-    def add_text(value: str) -> None:
-        cleaned = _clean_text(value)
+    def add_text(
+        value: str,
+    ) -> None:
+        cleaned = _clean_text(
+            value
+        )
 
         if not cleaned:
             return
@@ -2053,21 +3172,28 @@ def _collect_application_search_texts(
         result.append(cleaned)
 
     for match in matches:
-        # 기존 후보 Section 본문
         add_text(
             _clean_text(
                 match.get("text")
             )
         )
 
-        section = match.get("_section")
+        section = match.get(
+            "_section"
+        )
 
-        if not isinstance(section, dict):
+        if not isinstance(
+            section,
+            dict,
+        ):
             continue
 
-        # 후보 Section의 하위 Section까지 검색한다.
-        for child, _ in _iter_sections(
-            section.get("children")
+        for child, _ in (
+            _iter_sections(
+                section.get(
+                    "children"
+                )
+            )
         ):
             add_text(
                 _section_direct_text(
@@ -2079,7 +3205,9 @@ def _collect_application_search_texts(
 
 
 def _extract_application_period_values(
-    matches: list[dict[str, Any]],
+    matches: list[
+        dict[str, Any]
+    ],
 ) -> tuple[
     str | None,
     str | None,
@@ -2089,12 +3217,9 @@ def _extract_application_period_values(
     신청/접수 문맥에서 실제 신청기간을 추출한다.
 
     우선순위:
-    1. 신청/접수/일정 문맥과 가까운 날짜 범위
-    2. 같은 문맥과 가까운 개별 날짜
-    3. 상위 application Section의 child Section/Table까지 탐색
-
-    특정 공고의 날짜를 하드코딩하지 않고
-    날짜 표현과 신청 문맥을 기준으로 판단한다.
+    1. 날짜 범위
+    2. 개별 날짜 1~2개
+    3. 하위 Section/Table까지 탐색
     """
     positive_keywords = tuple(
         dict.fromkeys(
@@ -2130,14 +3255,14 @@ def _extract_application_period_values(
         )
     )
 
-    # 1순위: "~", "부터" 등으로 연결된 실제 신청 기간
     range_candidates: list[
         dict[str, Any]
     ] = []
 
-    for text_index, text_value in enumerate(
-        search_texts
-    ):
+    for (
+        text_index,
+        text_value,
+    ) in enumerate(search_texts):
         keyword_positions = (
             _keyword_positions(
                 text_value,
@@ -2171,15 +3296,19 @@ def _extract_application_period_values(
 
             left = max(
                 0,
-                range_match.start() - 180,
+                range_match.start()
+                - 180,
             )
             right = min(
                 len(text_value),
-                range_match.end() + 180,
+                range_match.end()
+                + 180,
             )
 
             context = _clean_text(
-                text_value[left:right]
+                text_value[
+                    left:right
+                ]
             )
 
             context_has_keyword = (
@@ -2189,8 +3318,6 @@ def _extract_application_period_values(
                 )
             )
 
-            # application_period 후보 Section 안이므로 기존 250자보다
-            # 완화하되, 지나치게 멀리 떨어진 일정은 제외한다.
             if (
                 distance > 500
                 and not context_has_keyword
@@ -2201,12 +3328,20 @@ def _extract_application_period_values(
                 {
                     "start": start,
                     "end": end,
-                    "raw": _clean_text(
-                        range_match.group(0)
+                    "raw": (
+                        _clean_text(
+                            range_match.group(
+                                0
+                            )
+                        )
                     ),
                     "context": context,
-                    "distance": distance,
-                    "text_index": text_index,
+                    "distance": (
+                        distance
+                    ),
+                    "text_index": (
+                        text_index
+                    ),
                 }
             )
 
@@ -2214,40 +3349,48 @@ def _extract_application_period_values(
         range_candidates.sort(
             key=lambda item: (
                 item["distance"],
-                item["text_index"],
+                item[
+                    "text_index"
+                ],
                 item["start"],
                 item["end"],
             )
         )
 
-        selected = range_candidates[0]
+        selected = (
+            range_candidates[0]
+        )
 
         return (
             selected["start"],
             selected["end"],
             [
                 {
-                    "raw": selected["raw"],
+                    "raw": (
+                        selected["raw"]
+                    ),
                     "normalized_value": (
-                        f"{selected['start']} ~ "
+                        f"{selected['start']}"
+                        " ~ "
                         f"{selected['end']}"
                     ),
                     "context": (
-                        selected["context"]
+                        selected[
+                            "context"
+                        ]
                     ),
                 }
             ],
         )
 
-    # 2순위 fallback:
-    # 명시적인 날짜 범위가 없고 날짜가 각각 존재하는 경우
     date_candidates: list[
         dict[str, Any]
     ] = []
 
-    for text_index, text_value in enumerate(
-        search_texts
-    ):
+    for (
+        text_index,
+        text_value,
+    ) in enumerate(search_texts):
         keyword_positions = (
             _keyword_positions(
                 text_value,
@@ -2281,15 +3424,19 @@ def _extract_application_period_values(
 
             left = max(
                 0,
-                date_match.start() - 160,
+                date_match.start()
+                - 160,
             )
             right = min(
                 len(text_value),
-                date_match.end() + 160,
+                date_match.end()
+                + 160,
             )
 
             context = _clean_text(
-                text_value[left:right]
+                text_value[
+                    left:right
+                ]
             )
 
             context_has_keyword = (
@@ -2307,15 +3454,23 @@ def _extract_application_period_values(
 
             date_candidates.append(
                 {
-                    "raw": _clean_text(
-                        date_match.group(0)
+                    "raw": (
+                        _clean_text(
+                            date_match.group(
+                                0
+                            )
+                        )
                     ),
                     "normalized_value": (
                         normalized
                     ),
                     "context": context,
-                    "distance": distance,
-                    "text_index": text_index,
+                    "distance": (
+                        distance
+                    ),
+                    "text_index": (
+                        text_index
+                    ),
                 }
             )
 
@@ -2323,11 +3478,15 @@ def _extract_application_period_values(
         key=lambda item: (
             item["distance"],
             item["text_index"],
-            item["normalized_value"],
+            item[
+                "normalized_value"
+            ],
         )
     )
 
-    unique: list[dict[str, Any]] = []
+    unique: list[
+        dict[str, Any]
+    ] = []
     seen: set[str] = set()
 
     for item in date_candidates:
@@ -2344,12 +3503,13 @@ def _extract_application_period_values(
     if not unique:
         return None, None, []
 
-    # 신청 문맥과 가까운 후보 최대 2개만 기간으로 사용한다.
     selected = unique[:2]
     selected.sort(
-        key=lambda item: item[
-            "normalized_value"
-        ]
+        key=lambda item: (
+            item[
+                "normalized_value"
+            ]
+        )
     )
 
     start = selected[0][
@@ -2367,15 +3527,22 @@ def _extract_application_period_values(
         {
             "raw": item["raw"],
             "normalized_value": (
-                item["normalized_value"]
+                item[
+                    "normalized_value"
+                ]
             ),
-            "context": item["context"],
+            "context": (
+                item["context"]
+            ),
         }
         for item in selected
     ]
 
-    return start, end, public_dates
-
+    return (
+        start,
+        end,
+        public_dates,
+    )
 
 
 # ============================================================
@@ -2397,9 +3564,11 @@ def _collect_field_matches(
     ) in _iter_sections(
         structure.get("sections")
     ):
-        score = _score_section_for_field(
-            section,
-            field,
+        score = (
+            _score_section_for_field(
+                section,
+                field,
+            )
         )
 
         if score <= 0:
@@ -2431,7 +3600,8 @@ def _collect_field_matches(
                 ),
                 "section_path": [
                     value
-                    for value in section_path
+                    for value
+                    in section_path
                     if value
                 ],
                 "domain": {
@@ -2453,8 +3623,6 @@ def _collect_field_matches(
             }
         )
 
-    # 점수가 높은 Section 우선.
-    # 원래 문서 순서는 같은 점수일 때 Python stable sort로 보존된다.
     candidates.sort(
         key=lambda item: (
             -int(
@@ -2479,9 +3647,7 @@ def _public_sources(
         dict[str, Any]
     ] = []
 
-    for match in matches[
-        :limit
-    ]:
+    for match in matches[:limit]:
         result.append(
             {
                 "section_id": (
@@ -2490,9 +3656,7 @@ def _public_sources(
                     ]
                 ),
                 "title": (
-                    match[
-                        "title"
-                    ]
+                    match["title"]
                 ),
                 "section_path": (
                     match[
@@ -2500,14 +3664,10 @@ def _public_sources(
                     ]
                 ),
                 "domain": (
-                    match[
-                        "domain"
-                    ]
+                    match["domain"]
                 ),
                 "score": (
-                    match[
-                        "score"
-                    ]
+                    match["score"]
                 ),
             }
         )
@@ -2542,9 +3702,9 @@ def _build_generic_field(
         snippets.extend(
             _extract_relevant_snippets(
                 match["text"],
-                FIELD_RULES[field][
-                    "keywords"
-                ],
+                FIELD_RULES[
+                    field
+                ]["keywords"],
             )
         )
 
@@ -2556,26 +3716,38 @@ def _build_generic_field(
         snippets[:10]
     )
 
-    if not key_values and not text_value:
+    if (
+        not key_values
+        and not text_value
+    ):
         return {
             "status": "not_found",
             "text": "",
             "key_values": [],
-            "sources": _public_sources(
-                matches
+            "sources": (
+                _public_sources(
+                    matches
+                )
             ),
         }
 
     return {
         "status": "extracted",
         "text": text_value,
-        "key_values": key_values[:20],
-        "sources": _public_sources(
-            matches
+        "key_values": (
+            key_values[:20]
+        ),
+        "sources": (
+            _public_sources(
+                matches
+            )
         ),
     }
 
 
+# ============================================================
+# 최종 7개 필드 생성
+# ============================================================
 def _build_application_period(
     matches: list[
         dict[str, Any]
@@ -2600,7 +3772,9 @@ def _build_application_period(
             "summary": (
                 f"{start} ~ {end}"
                 if start and end
-                else start or end or ""
+                else start
+                or end
+                or ""
             ),
         }
     )
@@ -2612,7 +3786,9 @@ def _build_application_period(
             "key_values"
         )
     ):
-        result["status"] = "not_found"
+        result["status"] = (
+            "not_found"
+        )
 
     return result
 
@@ -2626,11 +3802,40 @@ def _build_eligibility(
         "eligibility",
         matches,
     )
-    result["summary"] = (
+
+    target_groups = (
+        _extract_eligibility_target_groups(
+            matches
+        )
+    )
+
+    common_conditions = (
+        _extract_common_eligibility_conditions(
+            matches
+        )
+    )
+
+    # 카드용 summary:
+    # 하드코딩한 문장을 조립하지 않고,
+    # 문서 원문에서 대표 문장 한 줄을 선택한다.
+    summary = (
         _build_eligibility_summary(
             matches
         )
     )
+
+    result.update(
+        {
+            "summary": summary,
+            "target_groups": (
+                target_groups
+            ),
+            "common_conditions": (
+                common_conditions
+            ),
+        }
+    )
+
     return result
 
 
@@ -2639,8 +3844,6 @@ def _build_supply_information(
         dict[str, Any]
     ],
 ) -> dict[str, Any]:
-    """최종 공급정보 생성 전에 후보 Section을 한 번 더 검증한다."""
-
     valid_matches = [
         match
         for match in matches
@@ -2653,11 +3856,13 @@ def _build_supply_information(
         "supply_information",
         valid_matches,
     )
+
     result["summary"] = (
         _build_supply_summary(
             valid_matches
         )
     )
+
     return result
 
 
@@ -2670,11 +3875,13 @@ def _build_income_asset_criteria(
         "income_asset_criteria",
         matches,
     )
+
     result["summary"] = (
         _build_income_asset_summary(
             matches
         )
     )
+
     return result
 
 
@@ -2721,7 +3928,9 @@ def _build_winner_announcement(
     ] = []
 
     for match_item in matches:
-        text_value = match_item["text"]
+        text_value = (
+            match_item["text"]
+        )
 
         keyword_positions = (
             _keyword_positions(
@@ -2745,46 +3954,63 @@ def _build_winner_announcement(
                 )
             )
 
-            # Section 안의 "가장 이른 날짜"가 아니라
-            # "당첨자/예비입주자 발표" 표현과 가까운 날짜만 후보로 사용한다.
             if distance > 180:
                 continue
 
-            normalized = (
-                _normalize_date_match(
-                    date_match
+            try:
+                normalized = (
+                    _normalize_date_match(
+                        date_match
+                    )
                 )
-            )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
 
             left = max(
                 0,
-                date_match.start() - 100,
+                date_match.start()
+                - 100,
             )
             right = min(
                 len(text_value),
-                date_match.end() + 100,
+                date_match.end()
+                + 100,
             )
 
             winner_dates.append(
                 {
-                    "raw": _clean_text(
-                        date_match.group(0)
+                    "raw": (
+                        _clean_text(
+                            date_match.group(
+                                0
+                            )
+                        )
                     ),
                     "normalized_value": (
                         normalized
                     ),
-                    "context": _clean_text(
-                        text_value[left:right]
+                    "context": (
+                        _clean_text(
+                            text_value[
+                                left:right
+                            ]
+                        )
                     ),
-                    "distance": distance,
+                    "distance": (
+                        distance
+                    ),
                 }
             )
 
-    # keyword와 가까운 날짜를 우선한다.
     winner_dates.sort(
         key=lambda item: (
             item["distance"],
-            item["normalized_value"],
+            item[
+                "normalized_value"
+            ],
         )
     )
 
@@ -2808,15 +4034,23 @@ def _build_winner_announcement(
         {
             "raw": item["raw"],
             "normalized_value": (
-                item["normalized_value"]
+                item[
+                    "normalized_value"
+                ]
             ),
-            "context": item["context"],
+            "context": (
+                item["context"]
+            ),
         }
         for item in deduped
     ]
 
-    result["dates"] = public_dates
-    result["announcement_date"] = (
+    result["dates"] = (
+        public_dates
+    )
+    result[
+        "announcement_date"
+    ] = (
         deduped[0][
             "normalized_value"
         ]
@@ -2829,12 +4063,15 @@ def _build_winner_announcement(
         and not result.get(
             "key_values"
         )
-        and not result.get("text")
+        and not result.get(
+            "text"
+        )
     ):
-        result["status"] = "not_found"
+        result["status"] = (
+            "not_found"
+        )
 
     return result
-
 
 
 def _build_contact_information(
@@ -2851,16 +4088,22 @@ def _build_contact_information(
         matches
     )
 
-    result["phone_numbers"] = phones
+    result["phone_numbers"] = (
+        phones
+    )
 
     if (
         not phones
         and not result.get(
             "key_values"
         )
-        and not result.get("text")
+        and not result.get(
+            "text"
+        )
     ):
-        result["status"] = "not_found"
+        result["status"] = (
+            "not_found"
+        )
 
     return result
 
@@ -2897,33 +4140,11 @@ def extract_key_information(
     """
     Structure 최종 결과에서 Backend key_information 7개 필드를 추출한다.
 
-    입력:
-        structure_path
-            step4-1_value_normalized.json
-
-        verification_path
-            step4-3_verification.json
-
-        context
-            document_processor가 넘긴 DB/Pipeline context.
-            현재 추출 판단에 DB 값을 섞지 않고 metadata 확인용으로만 사용한다.
-
-    반환:
-        {
-            "application_period": {...},
-            "eligibility": {...},
-            "supply_information": {...},
-            "income_asset_criteria": {...},
-            "required_documents": {...},
-            "winner_announcement": {...},
-            "contact_information": {...},
-        }
-
     원칙:
     - Structure의 domain 분류를 최우선 근거로 사용
     - 규칙 분류가 부족한 경우에만 제목/본문 keyword fallback
     - 원문에 없는 값을 추측하지 않음
-    - 찾지 못한 필드는 빈 dict가 아니라 status=not_found로 명시
+    - 찾지 못한 필드는 status=not_found
     - source section을 함께 남겨 후속 검수 가능
     """
 
@@ -2958,11 +4179,14 @@ def extract_key_information(
         )
 
     matches = {
-        field: _collect_field_matches(
-            structure,
-            field,
+        field: (
+            _collect_field_matches(
+                structure,
+                field,
+            )
         )
-        for field in REQUIRED_FIELDS
+        for field
+        in REQUIRED_FIELDS
     }
 
     result: dict[
@@ -3020,14 +4244,16 @@ def extract_key_information(
         ),
     }
 
-    # 최종 계약 보장
     missing = [
         field
-        for field in REQUIRED_FIELDS
-        if field not in result
-        or not isinstance(
-            result[field],
-            dict,
+        for field
+        in REQUIRED_FIELDS
+        if (
+            field not in result
+            or not isinstance(
+                result[field],
+                dict,
+            )
         )
     ]
 
