@@ -4,9 +4,10 @@ import base64
 import hashlib
 import hmac
 import json
-import os
 import time
 from typing import Any
+
+from backend.app.core.config import Settings
 
 
 class TokenError(RuntimeError):
@@ -27,7 +28,7 @@ def _b64url_decode(data: str) -> bytes:
 
 
 def _get_secret() -> str:
-    secret = os.getenv("ADMIN_JWT_SECRET", "").strip()
+    secret = Settings().admin_jwt_secret.strip()
     if not secret:
         raise AuthConfigurationError(
             "ADMIN_JWT_SECRET 환경변수가 설정되지 않았습니다."
@@ -45,8 +46,9 @@ def authenticate_admin(
     ADMIN_ID, ADMIN_PASSWORD를 반드시 .env에 설정한다.
     추후 관리자 테이블이 추가되면 이 함수 내부만 DB 인증으로 교체한다.
     """
-    expected_id = os.getenv("ADMIN_ID", "").strip()
-    expected_password = os.getenv("ADMIN_PASSWORD", "")
+    settings = Settings()
+    expected_id = settings.admin_id.strip()
+    expected_password = settings.admin_password
 
     if not expected_id or not expected_password:
         raise AuthConfigurationError(
@@ -67,7 +69,7 @@ def authenticate_admin(
 
 def create_admin_token(admin_id: str) -> str:
     now = int(time.time())
-    ttl = int(os.getenv("ADMIN_JWT_EXPIRE_SECONDS", "3600"))
+    ttl = Settings().admin_jwt_expire_seconds
 
     header = {
         "alg": "HS256",
@@ -144,11 +146,10 @@ def verify_admin_token(token: str) -> dict[str, str]:
 
 
 def get_auth_cookie_options() -> dict[str, Any]:
-    secure = os.getenv("ADMIN_COOKIE_SECURE", "false").lower() == "true"
-    ttl = int(os.getenv("ADMIN_JWT_EXPIRE_SECONDS", "3600"))
+    settings = Settings()
     return {
-        "name": os.getenv("ADMIN_COOKIE_NAME", "admin_access_token"),
-        "secure": secure,
-        "samesite": os.getenv("ADMIN_COOKIE_SAMESITE", "lax"),
-        "max_age": ttl,
+        "name": settings.admin_cookie_name,
+        "secure": settings.admin_cookie_secure,
+        "samesite": settings.admin_cookie_samesite,
+        "max_age": settings.admin_jwt_expire_seconds,
     }
