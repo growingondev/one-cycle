@@ -1,0 +1,12 @@
+--extra-index-url https://download.pytorch.org/whl/cu130
+
+fastapi==0.141.1
+FlagEmbedding==1.4.0
+numpy==2.5.1
+pydantic==2.13.4
+pydantic-settings==2.14.2
+sentence-transformers==5.7.0
+sentencepiece==0.2.2
+torch==2.13.0
+transformers==4.57.1
+uvicorn==0.51.0
