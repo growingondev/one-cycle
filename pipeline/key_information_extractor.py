@@ -1828,6 +1828,7 @@ _DATE_RANGE_PATTERN = re.compile(
     r"(?::|시)?\s*"
     r"(?P<end_minute>\d{1,2})?"
     r"(?:분)?"
+    r"\s*(?:까지)?"
 )
 
 
@@ -2020,6 +2021,63 @@ def _distance_to_nearest_keyword(
     )
 
 
+def _collect_application_search_texts(
+    matches: list[dict[str, Any]],
+) -> list[str]:
+    """
+    application_period 후보 Section뿐 아니라
+    그 하위 Section의 본문/표까지 함께 검색 대상으로 만든다.
+
+    상위 Section은 application_period로 정상 분류됐지만
+    실제 날짜가 child Section/Table에 들어 있는 경우를 보완한다.
+    """
+    result: list[str] = []
+    seen: set[str] = set()
+
+    def add_text(value: str) -> None:
+        cleaned = _clean_text(value)
+
+        if not cleaned:
+            return
+
+        normalized = re.sub(
+            r"\s+",
+            " ",
+            cleaned,
+        ).strip()
+
+        if normalized in seen:
+            return
+
+        seen.add(normalized)
+        result.append(cleaned)
+
+    for match in matches:
+        # 기존 후보 Section 본문
+        add_text(
+            _clean_text(
+                match.get("text")
+            )
+        )
+
+        section = match.get("_section")
+
+        if not isinstance(section, dict):
+            continue
+
+        # 후보 Section의 하위 Section까지 검색한다.
+        for child, _ in _iter_sections(
+            section.get("children")
+        ):
+            add_text(
+                _section_direct_text(
+                    child
+                )
+            )
+
+    return result
+
+
 def _extract_application_period_values(
     matches: list[dict[str, Any]],
 ) -> tuple[
@@ -2027,34 +2085,59 @@ def _extract_application_period_values(
     str | None,
     list[dict[str, Any]],
 ]:
-    """신청/접수 문맥에서 실제 기간 범위를 우선 추출한다."""
+    """
+    신청/접수 문맥에서 실제 신청기간을 추출한다.
 
-    positive_keywords = (
-        "신청기간",
-        "신청 기간",
-        "접수기간",
-        "접수 기간",
-        "접수시작",
-        "접수 시작",
-        "접수마감",
-        "접수 마감",
-        "신청시작",
-        "신청 시작",
-        "신청마감",
-        "신청 마감",
-        "청약 접수",
-        "청약접수",
-        "신청접수",
-        "신청 접수",
+    우선순위:
+    1. 신청/접수/일정 문맥과 가까운 날짜 범위
+    2. 같은 문맥과 가까운 개별 날짜
+    3. 상위 application Section의 child Section/Table까지 탐색
+
+    특정 공고의 날짜를 하드코딩하지 않고
+    날짜 표현과 신청 문맥을 기준으로 판단한다.
+    """
+    positive_keywords = tuple(
+        dict.fromkeys(
+            (
+                *FIELD_RULES[
+                    "application_period"
+                ]["keywords"],
+                "모집일정",
+                "모집 일정",
+                "접수시작",
+                "접수 시작",
+                "접수마감",
+                "접수 마감",
+                "신청시작",
+                "신청 시작",
+                "신청마감",
+                "신청 마감",
+                "청약접수",
+                "청약 접수",
+                "신청접수",
+                "신청 접수",
+                "신청접수일",
+                "신청 접수일",
+                "인터넷신청",
+                "인터넷 신청",
+            )
+        )
     )
 
-    # 1순위: "~"로 연결된 실제 신청 기간을 하나의 range로 인식한다.
+    search_texts = (
+        _collect_application_search_texts(
+            matches
+        )
+    )
+
+    # 1순위: "~", "부터" 등으로 연결된 실제 신청 기간
     range_candidates: list[
         dict[str, Any]
     ] = []
 
-    for match_item in matches:
-        text_value = match_item["text"]
+    for text_index, text_value in enumerate(
+        search_texts
+    ):
         keyword_positions = (
             _keyword_positions(
                 text_value,
@@ -2067,11 +2150,17 @@ def _extract_application_period_values(
                 text_value
             )
         ):
-            start, end = (
-                _normalize_date_range_match(
-                    range_match
+            try:
+                start, end = (
+                    _normalize_date_range_match(
+                        range_match
+                    )
                 )
-            )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
 
             distance = (
                 _distance_to_nearest_keyword(
@@ -2082,24 +2171,29 @@ def _extract_application_period_values(
 
             left = max(
                 0,
-                range_match.start() - 120,
+                range_match.start() - 180,
             )
             right = min(
                 len(text_value),
-                range_match.end() + 120,
+                range_match.end() + 180,
             )
 
             context = _clean_text(
                 text_value[left:right]
             )
 
-            # 신청/접수 문맥이 없는 날짜범위는 제외한다.
-            if (
-                distance > 250
-                and not _contains_keyword(
+            context_has_keyword = (
+                _contains_keyword(
                     context,
                     positive_keywords,
                 )
+            )
+
+            # application_period 후보 Section 안이므로 기존 250자보다
+            # 완화하되, 지나치게 멀리 떨어진 일정은 제외한다.
+            if (
+                distance > 500
+                and not context_has_keyword
             ):
                 continue
 
@@ -2112,15 +2206,17 @@ def _extract_application_period_values(
                     ),
                     "context": context,
                     "distance": distance,
+                    "text_index": text_index,
                 }
             )
 
     if range_candidates:
-        # 신청/접수 키워드와 가장 가까운 범위를 선택한다.
         range_candidates.sort(
             key=lambda item: (
                 item["distance"],
+                item["text_index"],
                 item["start"],
+                item["end"],
             )
         )
 
@@ -2144,13 +2240,14 @@ def _extract_application_period_values(
         )
 
     # 2순위 fallback:
-    # 완전한 날짜만 존재하는 문서에서는 신청/접수 키워드와 가까운 날짜를 사용한다.
+    # 명시적인 날짜 범위가 없고 날짜가 각각 존재하는 경우
     date_candidates: list[
         dict[str, Any]
     ] = []
 
-    for match_item in matches:
-        text_value = match_item["text"]
+    for text_index, text_value in enumerate(
+        search_texts
+    ):
         keyword_positions = (
             _keyword_positions(
                 text_value,
@@ -2163,6 +2260,18 @@ def _extract_application_period_values(
                 text_value
             )
         ):
+            try:
+                normalized = (
+                    _normalize_date_match(
+                        date_match
+                    )
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
+
             distance = (
                 _distance_to_nearest_keyword(
                     date_match.start(),
@@ -2170,14 +2279,31 @@ def _extract_application_period_values(
                 )
             )
 
-            if distance > 250:
-                continue
+            left = max(
+                0,
+                date_match.start() - 160,
+            )
+            right = min(
+                len(text_value),
+                date_match.end() + 160,
+            )
 
-            normalized = (
-                _normalize_date_match(
-                    date_match
+            context = _clean_text(
+                text_value[left:right]
+            )
+
+            context_has_keyword = (
+                _contains_keyword(
+                    context,
+                    positive_keywords,
                 )
             )
+
+            if (
+                distance > 500
+                and not context_has_keyword
+            ):
+                continue
 
             date_candidates.append(
                 {
@@ -2187,14 +2313,16 @@ def _extract_application_period_values(
                     "normalized_value": (
                         normalized
                     ),
+                    "context": context,
                     "distance": distance,
+                    "text_index": text_index,
                 }
             )
 
-    # 가까운 날짜 우선 → 동일 문맥 내에서 시간순
     date_candidates.sort(
         key=lambda item: (
             item["distance"],
+            item["text_index"],
             item["normalized_value"],
         )
     )
@@ -2216,7 +2344,7 @@ def _extract_application_period_values(
     if not unique:
         return None, None, []
 
-    # fallback에서는 가까운 후보 최대 2개만 기간으로 사용한다.
+    # 신청 문맥과 가까운 후보 최대 2개만 기간으로 사용한다.
     selected = unique[:2]
     selected.sort(
         key=lambda item: item[
@@ -2235,7 +2363,18 @@ def _extract_application_period_values(
         else start
     )
 
-    return start, end, selected
+    public_dates = [
+        {
+            "raw": item["raw"],
+            "normalized_value": (
+                item["normalized_value"]
+            ),
+            "context": item["context"],
+        }
+        for item in selected
+    ]
+
+    return start, end, public_dates
 
 
 
