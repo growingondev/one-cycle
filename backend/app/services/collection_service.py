@@ -235,6 +235,13 @@ def persist_collection_result(
             announcement = Announcement(
                 collection_run_id=collection_run.id,
                 source_announcement_id=source_announcement_id,
+                notice_number=(
+                    str(
+                        raw_announcement.get("notice_number")
+                        or ""
+                    ).strip()
+                    or None
+                ),
                 title=title,
                 detail_url=detail_url,
                 notice_type=(
