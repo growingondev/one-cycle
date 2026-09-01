@@ -298,6 +298,7 @@ export function DetailScreen({
 
   // 💡 제출서류 근거 확인 토글을 위한 상태
 const [showDocsEvidence, setShowDocsEvidence] = useState(false);
+const [showEligibilityDetails, setShowEligibilityDetails] = useState(false);
 const chatContainerRef = useRef<HTMLDivElement>(null);
 const [glossary, setGlossary] = useState<Record<string, string>>({});
 
@@ -555,24 +556,18 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
   ];
 
 
-  const eligibilityData: [string, string][] = [
-    [
-      "신청 자격",
-      compactCardValue(
-        eligibility.summary,
-        "공고문 세부 자격 요건을 확인하세요.",
-        230
-      ),
-    ],
-    [
-      "소득/자산",
-      compactCardValue(
-        incomeAssetCriteria.summary,
-        "공고문 소득·자산 기준을 확인하세요.",
-        230
-      ),
-    ],
-  ];
+  const eligStatus = eligibility.status ?? "not_found";
+  
+  // 1. 요약 텍스트
+  const eligSummary = eligibility.summary ?? compactCardValue(eligibility.summary, "공고문 세부 자격 요건을 확인하세요.", 230);
+  const incomeSummary = incomeAssetCriteria.summary ?? compactCardValue(incomeAssetCriteria.summary, "공고문 소득·자산 기준을 확인하세요.", 230);
+  
+  // 2. 공통 조건 & 계층별 조건 (snake_case, camelCase 호환)
+  const commonConditions = eligibility.common_conditions ?? eligibility.commonConditions ?? [];
+  const targetGroups = eligibility.target_groups ?? eligibility.targetGroups ?? [];
+  
+  // 상세 버튼을 보여줄지 여부 (상세 데이터가 하나라도 추출되었을 때만 노출)
+  const hasEligibilityDetails = eligStatus === "extracted" && (commonConditions.length > 0 || targetGroups.length > 0);
 
 
   const extractedDocumentItems = Array.isArray(
@@ -668,7 +663,85 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
           <div className={`${isSummaryOpen ? "block mt-4" : "hidden"} xl:block xl:mt-4`}>
             <SummaryCard icon="calendar" title="신청 일정" rows={scheduleData} />
             <SummaryCard icon="home" title="공급 정보" rows={supplyData} />
-            <SummaryCard icon="eligibility" title="신청 자격" rows={eligibilityData} />
+            <div className="relative border border-slate-200 rounded-lg p-4 mb-3">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="flex items-center gap-2 text-blue-600 text-[16px] lg:text-[17px] font-bold">
+                  <BadgeCheck size={20} /> 신청 자격
+                </h3>
+                
+                {/* 🟢 API에서 상세 조건 배열을 넘겨주었을 때만 버튼 노출 */}
+                {hasEligibilityDetails && (
+                  <button
+                    onClick={() => setShowEligibilityDetails(!showEligibilityDetails)}
+                    className="flex items-center gap-1 text-[13px] bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100 transition-colors"
+                  >
+                    <BadgeCheck size={14} /> {showEligibilityDetails ? "상세 닫기" : "상세 자격"}
+                  </button>
+                )}
+              </div>
+
+              {/* 기본 요약 (항상 노출) */}
+              <div className="grid grid-cols-[80px_1fr] lg:grid-cols-[100px_1fr] gap-2 items-baseline text-[14px] lg:text-[15px] leading-relaxed mb-2">
+                <b className="text-slate-500 font-semibold">신청 자격</b>
+                <span className="text-slate-900 font-medium break-words whitespace-pre-line">
+                  {eligSummary}
+                </span>
+              </div>
+              <div className="grid grid-cols-[80px_1fr] lg:grid-cols-[100px_1fr] gap-2 items-baseline text-[14px] lg:text-[15px] leading-relaxed mb-2">
+                <b className="text-slate-500 font-semibold">소득/자산</b>
+                <span className="text-slate-900 font-medium break-words whitespace-pre-line">
+                  {incomeSummary}
+                </span>
+              </div>
+
+              {/* 🟢 상세 보기 영역 (버튼 클릭 시 펼쳐짐) */}
+              {showEligibilityDetails && (
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg mt-4 max-h-96 overflow-auto">
+                  
+                  {/* 공통 조건 */}
+                  {commonConditions.length > 0 && (
+                    <div className="mb-5">
+                      <h4 className="text-[14px] font-bold text-slate-800 mb-2">■ 공통 신청조건</h4>
+                      <ul className="list-disc pl-5 text-[13.5px] text-slate-700 space-y-1">
+                        {commonConditions.map((cond: string, idx: number) => (
+                          <li key={`common-${idx}`}>{cond}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* 계층별 상세조건 (동적 렌더링) */}
+                  {targetGroups.length > 0 && (
+                    <div>
+                      <h4 className="text-[14px] font-bold text-slate-800 mb-3">■ 계층별 상세조건</h4>
+                      <div className="space-y-3">
+                        {targetGroups.map((group: any, idx: number) => {
+                          const label = group.label || "상세 자격";
+                          let details = group.details || [];
+                          
+                          // 💡 팀원 요청사항: details[0]이 label과 의미상 중복되면 숨김 처리
+                          if (details.length > 0 && details[0].replace(/\s/g, '').includes(label.replace(/\s/g, ''))) {
+                            details = details.slice(1);
+                          }
+
+                          return (
+                            <div key={group.code || idx} className="bg-white border border-slate-200 p-3.5 rounded-lg shadow-sm text-[13.5px]">
+                              <b className="text-blue-700 block mb-2">{label}</b>
+                              <ul className="list-disc pl-4 text-slate-600 space-y-1.5 break-keep">
+                                {details.map((desc: string, i: number) => (
+                                  <li key={`desc-${i}`}>{desc}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  
+                </div>
+              )}
+            </div>
 
             {/* 💡 제출서류 및 근거 확인 영역 (수정된 부분) */}
             <div className="relative border border-slate-200 rounded-lg p-4 mb-2">
