@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import os
-
 import httpx
 import numpy as np
+
+from services.embedding.config import settings
 
 
 class EmbeddingClientError(RuntimeError):
@@ -28,10 +28,7 @@ class EmbeddingClient:
     ) -> None:
         self.base_url = (
             base_url
-            or os.getenv(
-                "EMBEDDING_SERVICE_URL",
-                "http://127.0.0.1:18001",
-            )
+            or settings.embedding_service_url
         ).rstrip("/")
 
         self.timeout_seconds = timeout_seconds

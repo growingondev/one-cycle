@@ -57,3 +57,4 @@ evaluation/results/*
 # Evaluation pipeline outputs
 evaluation/outputs/*
 !evaluation/outputs/.gitkeep
+/runtime/

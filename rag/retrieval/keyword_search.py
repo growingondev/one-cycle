@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import text
 
-from backend.app.db.session import SessionLocal
+from rag.db.session import SessionLocal
 from rag.retrieval.models import CorpusItem, SearchResult
 
 

@@ -6,10 +6,8 @@ services:
     container_name: one-cycle-postgres
     restart: unless-stopped
 
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    env_file:
+      - ../.env
 
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
@@ -22,12 +20,164 @@ services:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
+          "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"
         ]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  backend:
+    build:
+      context: ..
+      dockerfile: infra/backend/Dockerfile
+
+    image: one-cycle-backend:dev
+    container_name: one-cycle-backend
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
+    environment:
+      APP_ENVIRONMENT: docker
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      RAG_SERVICE_BASE_URL: http://rag:18002
+      DOCUMENT_WORKER_BASE_URL: http://document-worker:18003
+      CRAWLER_STAGING_DIR: /data/documents
+
+    volumes:
+      - "${DOCUMENT_STORAGE_HOST_PATH:-../runtime/documents}:/data/documents"
+
+    ports:
+      - "127.0.0.1:18000:18000"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  document-worker:
+    build:
+      context: ..
+      dockerfile: infra/document-worker/Dockerfile
+
+    image: one-cycle-document-worker:dev
+    container_name: one-cycle-document-worker
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
+    environment:
+      EMBEDDING_SERVICE_URL: http://embedding:18001
+
+    volumes:
+      - "${DOCUMENT_STORAGE_HOST_PATH:-../runtime/documents}:/data/documents"
+
+    ports:
+      - "127.0.0.1:18003:18003"
+
+  embedding:
+    profiles: ["ai"]
+    platform: linux/amd64
+
+    build:
+      context: ..
+      dockerfile: docker/embedding/Dockerfile
+
+    image: one-cycle-embedding:dev
+    container_name: one-cycle-embedding
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
+    environment:
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-BAAI/bge-m3}
+      EMBEDDING_MODEL_PATH: /models/bge-m3
+      EMBEDDING_USE_FP16: ${EMBEDDING_USE_FP16:-true}
+      EMBEDDING_REQUIRE_CUDA: ${EMBEDDING_REQUIRE_CUDA:-true}
+      EMBEDDING_DEVICE_INDEX: ${EMBEDDING_DEVICE_INDEX:-0}
+
+    volumes:
+      - "${EMBEDDING_MODEL_HOST_PATH:-../models/embedding/bge-m3}:/models/bge-m3:ro"
+
+    ports:
+      - "127.0.0.1:18001:18001"
+
+    gpus: all
+
+  llm:
+    profiles: ["ai"]
+    platform: linux/amd64
+
+    build:
+      context: ..
+      dockerfile: docker/llm/Dockerfile
+      args:
+        LLAMA_CPP_REF: ${LLAMA_CPP_REF:-master}
+
+    image: one-cycle-llm:dev
+    container_name: one-cycle-llm
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
+    environment:
+      LLM_MODEL_PATH: "/models/${LLM_MODEL_FILE:-gemma-4-12B-it-Q4_0.gguf}"
+      LLM_MODEL_ALIAS: ${LLM_MODEL_ALIAS:-gemma}
+      LLM_HOST: 0.0.0.0
+      LLM_PORT: "8080"
+      LLM_CTX_SIZE: ${LLM_CTX_SIZE:-4096}
+      LLM_GPU_LAYERS: ${LLM_GPU_LAYERS:-all}
+      LLM_PARALLEL: ${LLM_PARALLEL:-1}
+      LLM_THREADS: ${LLM_THREADS:-4}
+      LLM_THREADS_BATCH: ${LLM_THREADS_BATCH:-4}
+      LLM_REASONING: ${LLM_REASONING:-off}
+
+    volumes:
+      - "${LLM_MODEL_HOST_PATH:-../models/llm}:/models:ro"
+
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    gpus: all
+
+  rag:
+    profiles: ["ai"]
+    platform: linux/amd64
+
+    build:
+      context: ..
+      dockerfile: docker/rag/Dockerfile
+
+    image: one-cycle-rag:dev
+    container_name: one-cycle-rag
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      EMBEDDING_SERVICE_URL: http://embedding:18001
+      LLAMA_BASE_URL: http://llm:8080
+      LLAMA_MODEL: ${LLAMA_MODEL:-gemma}
+
+    ports:
+      - "127.0.0.1:18002:18002"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
+      llm:
+        condition: service_healthy
+
 
 volumes:
   postgres_data:

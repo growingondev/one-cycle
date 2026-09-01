@@ -1970,3 +1970,378 @@ Backend의 RAG 및 Document Processing Runtime은 모두 내부 HTTP Service를 
 다음 단계는 Docker Compose에서 Backend, Document Worker, RAG, Embedding, LLM, PostgreSQL의 실행 환경과 Service DNS, shared volume을 통합하는 것이다.
 
 ---
+
+## 30. 2026-08-31 공고 마감일 데이터 소스 정비
+
+사용자 공고 목록의 `deadlineDate`가 기존에는 문서 처리 결과인
+`key_information.application_period.end`에만 의존하고 있었다.
+
+LH 공고 목록 Crawler는 이미 공고 메타데이터에서 `deadline_date`를
+수집하고 있으므로, 공고 목록에 표시하는 마감일은 Crawler 원본 값을
+우선 사용하도록 Backend 데이터 흐름을 정비했다.
+
+### 변경된 데이터 흐름
+
+기존:
+
+~~~text
+Document Processing
+→ Key Information Extraction
+→ key_information.application_period.end
+→ Backend Announcement List API
+→ deadlineDate
+~~~
+
+변경:
+
+~~~text
+LH Announcement List
+→ Crawler deadline_date
+→ announcements.deadline_date
+→ Backend Announcement List API
+→ deadlineDate
+~~~
+
+기존 데이터와의 호환성을 위해 목록 조회에서는 다음 우선순위를 적용한다.
+
+~~~text
+1. announcements.deadline_date
+2. key_information.application_period.end
+~~~
+
+SQL 기준:
+
+~~~sql
+COALESCE(
+    a.deadline_date::text,
+    ki.application_period ->> 'end'
+)
+~~~
+
+따라서 신규 수집 공고는 Crawler가 수집한 원본 마감일을 우선 사용하고,
+기존 공고에서 `deadline_date`가 NULL인 경우에는 기존 핵심정보 값을
+fallback으로 사용할 수 있다.
+
+### DB Schema 변경
+
+`announcements` 테이블에 다음 컬럼을 추가했다.
+
+~~~text
+deadline_date DATE NULL
+~~~
+
+Alembic migration:
+
+~~~text
+5f4c391df25e
+add deadline date to announcements
+~~~
+
+이전 Revision:
+
+~~~text
+3d70b82ff082
+~~~
+
+### Collection Persistence 변경
+
+`persist_collection_result()`에서 Crawler 결과의 다음 값을 저장한다.
+
+~~~text
+raw_announcement["deadline_date"]
+→ _parse_date()
+→ Announcement.deadline_date
+~~~
+
+기존 `_parse_date()`가 지원하는 날짜 형식을 그대로 사용한다.
+
+~~~text
+YYYY-MM-DD
+YYYY.MM.DD
+YYYY/MM/DD
+~~~
+
+### 검증 결과
+
+신규 Deadline 계약 테스트:
+
+~~~text
+2 tests PASS
+~~~
+
+검증 항목:
+
+~~~text
+Crawler deadline_date parsing / persistence        PASS
+Announcement DB deadline priority                  PASS
+Key Information fallback SQL contract              PASS
+Frontend API field deadlineDate contract           PASS
+~~~
+
+기존 Backend Contract 테스트:
+
+~~~text
+19 tests PASS
+~~~
+
+전체 Backend 회귀 테스트:
+
+~~~text
+113 passed
+4 failed
+4 subtests passed
+~~~
+
+실패한 4개 테스트는 기존부터 확인된
+`KeyInformationExtractor` 관련 테스트와 동일하다.
+
+~~~text
+test_application_period
+test_application_period_korean_ampm_range
+test_application_period_labeled_range
+test_supply_summary_is_compact
+~~~
+
+이번 `deadline_date` 변경으로 새롭게 발생한 Backend 회귀 실패는 없다.
+
+### 실제 PostgreSQL Service 검증
+
+로컬 PostgreSQL의 기존 Announcement를 대상으로 트랜잭션 내부에서
+임시 `deadline_date`를 설정한 뒤 실제
+`list_active_announcements()`를 호출했다.
+
+검증 결과:
+
+~~~text
+temporary deadline_date = 2099-12-31
+API deadlineDate        = 2099-12-31
+service priority        = PASS
+~~~
+
+검증 종료 후 transaction rollback을 수행했다.
+
+~~~text
+active_collection_run_id = None
+deadline_date             = None
+rollback                  = PASS
+~~~
+
+따라서 실제 PostgreSQL과 Backend Announcement List Service에서도
+`announcements.deadline_date` 우선 조회가 정상 동작하며,
+검증 과정에서 기존 DB 상태는 변경되지 않았다.
+
+## 31. 2026-08-31 Backend / Document Worker Docker 분리 및 로컬 Compose 검증
+
+### 목적
+
+기존 API 수준의 서비스 분리가 완료된 상태에서 Backend(+Crawler)와 Document Worker를 독립 Docker 컨테이너로 실행할 수 있도록 런타임을 분리하고, 로컬 Docker Compose 환경에서 PostgreSQL 및 서비스 간 연결을 검증했다.
+
+이번 단계는 Windows 로컬 환경에서의 Docker 분리 및 통신 검증이며, AWS 서버에는 아직 신규 Docker 구성을 반영하지 않았다.
+
+### Backend Docker 분리
+
+Backend 전용 Docker 런타임을 다음 기준으로 구성했다.
+
+~~~text
+Python 3.12
+FastAPI 0.141.1
+Uvicorn 0.51.0
+SQLAlchemy 2.0.51
+psycopg 3.3.4
+Alembic 1.19.0
+pgvector 0.5.0
+Selenium 4.47.0
+webdriver-manager 4.1.2
+Google Chrome
+~~~
+
+Backend와 Crawler는 별도 서비스로 나누지 않고 동일 Backend 컨테이너에서 실행한다.
+
+Crawler가 수집한 문서는 다음 경로에 저장하도록 구성했다.
+
+~~~text
+CRAWLER_STAGING_DIR=/data/documents
+~~~
+
+Backend 컨테이너 검증 결과:
+
+~~~text
+FastAPI startup                  PASS
+GET /api/health                  PASS
+GET /api/health/db               PASS
+PostgreSQL connection            PASS
+Selenium / Chrome startup        PASS
+~~~
+
+### Document Worker Docker 분리
+
+Document Worker는 다음 런타임 기준으로 분리했다.
+
+~~~text
+Python 3.12
+OpenJDK 11
+JPype1 1.7.1
+FastAPI 0.141.1
+Uvicorn 0.51.0
+numpy 2.5.1
+httpx 0.28.1
+~~~
+
+AWS 기존 실행 환경의 Java 11을 기준으로 Docker 런타임도 OpenJDK 11로 맞췄다.
+
+Java / Parser 검증 결과:
+
+~~~text
+OpenJDK 11 startup               PASS
+JPype -> Java 11 JVM             PASS
+hwplib HWPReader class load      PASS
+hwpxlib HWPXReader class load    PASS
+actual HWP parsing               PASS
+actual HWPX parsing              PASS
+~~~
+
+실제 HWP 문서에서는 Section 1개, 일반 문단 79개, 최상위 표 58개, 중첩 표 36개를 추출했고, 실제 HWPX 문서에서는 Section 2개, 일반 문단 191개, 최상위 표 90개, 중첩 표 61개를 추출했다.
+
+Document Worker의 정상 처리 경로에서는 `document_worker/service.py`가 HWP/HWPX JAR 경로를 명시적으로 Parser에 전달하므로 Parser CLI의 자동 JAR 탐색 경로에 의존하지 않는다.
+
+### 공유 문서 저장소
+
+Backend와 Document Worker가 같은 원본 문서를 볼 수 있도록 동일한 Host bind mount를 `/data/documents`에 연결했다.
+
+로컬 기본 경로:
+
+~~~text
+C:\Project\one-cycle\runtime\documents
+~~~
+
+컨테이너 내부 경로:
+
+~~~text
+Backend          /data/documents
+Document Worker  /data/documents
+~~~
+
+Backend 컨테이너에서 테스트 파일을 작성하고 Document Worker 컨테이너에서 동일 파일을 읽어 공유 저장소가 실제로 동작하는 것을 확인했다.
+
+~~~text
+Backend write -> Worker read     PASS
+~~~
+
+`runtime/`은 Git 및 Docker Build Context에 포함되지 않도록 `.gitignore`와 `.dockerignore`에서 제외했다.
+
+### Docker Compose 연결
+
+현재 로컬 Compose 서비스는 다음과 같다.
+
+~~~text
+postgres
+backend
+document-worker
+~~~
+
+서비스 내부 연결 기준:
+
+~~~text
+PostgreSQL       postgres:5432
+Backend          backend:18000
+Document Worker  document-worker:18003
+RAG              rag:18002          (추후 추가)
+Embedding        embedding:18001    (추후 추가)
+~~~
+
+검증 결과:
+
+~~~text
+PostgreSQL container healthy                  PASS
+Backend container startup                     PASS
+Document Worker container startup             PASS
+Host -> Document Worker HTTP                  PASS
+Backend -> document-worker:18003 HTTP         PASS
+Backend <-> Worker shared /data/documents     PASS
+Backend recreate 후 API health                PASS
+Backend recreate 후 DB health                 PASS
+~~~
+
+Embedding과 RAG 서비스는 아직 Compose에 추가되지 않았으므로 실제 Document Worker -> Embedding 및 Backend -> RAG E2E는 후속 통합 단계에서 검증한다.
+
+### Admin 환경설정 정비
+
+기존 Admin 인증 코드에서 직접 `os.getenv()`를 사용하던 부분을 Backend 공통 `Settings` 기반으로 통일했다.
+
+추가된 설정:
+
+~~~text
+admin_id
+admin_password
+admin_jwt_secret
+admin_jwt_expire_seconds
+admin_cookie_name
+admin_cookie_secure
+admin_cookie_samesite
+~~~
+
+Admin API 계약 테스트 결과:
+
+~~~text
+4 passed
+~~~
+
+### AWS 반영 상태
+
+이번 Docker 분리 작업은 현재 로컬에서만 검증 완료된 상태다.
+
+AWS의 기존 Backend 실행 프로세스와 PostgreSQL 컨테이너는 이번 검증 과정에서 변경하지 않았다.
+
+후속 단계에서는 `develop-api`에 반영된 Embedding / RAG / LLM Docker 파일을 전체 Compose에 통합한 뒤 AWS의 `/home/ubuntu/ddokbot/one-cycle_api`에서 최신 코드를 받아 이미지를 다시 빌드하고 GPU/모델 실행 및 전체 서비스 E2E를 검증한다.
+
+따라서 현재 상태는 다음과 같이 구분한다.
+
+~~~text
+로컬 Backend / Worker Docker 분리        완료
+로컬 PostgreSQL / Backend / Worker 연결   완료
+로컬 공유 문서 저장소 검증                완료
+Embedding / RAG / LLM Docker 파일 반영      완료 (develop-api)
+Embedding / RAG / LLM 실제 실행 검증        미완료
+로컬 전체 서비스 E2E                      미완료
+AWS 신규 Docker 구성 반영                 미완료
+AWS 전체 Docker E2E                       미완료
+~~~
+
+## 32. 2026-09-01 전체 Docker Compose 1차 통합
+
+Embedding / RAG / LLM Docker 정의를 기존 PostgreSQL / Backend / Document Worker Compose 구성에 연결했다.
+
+현재 Compose는 `ai` profile 사용 시 다음 6개 서비스를 인식한다.
+
+~~~text
+postgres
+backend
+document-worker
+embedding
+llm
+rag
+~~~
+
+로컬에서는 GPU와 모델 파일이 필요하지 않은 RAG를 실제 빌드 및 실행하여 다음 항목을 검증했다.
+
+~~~text
+RAG image build                    PASS
+RAG container startup              PASS
+GET /health                        PASS
+Backend -> rag:18002 Docker DNS     PASS
+~~~
+
+Embedding과 LLM은 NVIDIA GPU 및 실제 모델 마운트가 필요하므로 로컬 실행 검증 대상에서 제외했다. 두 서비스와 전체 6서비스 E2E는 AWS NVIDIA L4 환경에서 검증한다.
+
+현재 상태:
+
+~~~text
+PostgreSQL                          PASS
+Backend(+Crawler)                   PASS
+Document Worker                     PASS
+RAG                                 PASS
+Backend -> RAG 내부 통신            PASS
+Embedding                           AWS 검증 대기
+LLM                                 AWS 검증 대기
+전체 6서비스 E2E                    AWS 검증 대기
+~~~

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import logging
 import re
-import traceback
 from typing import Any
 
 from .config import DEFAULT_GENERATION_CONFIG, GenerationConfig
@@ -10,7 +10,8 @@ from .llm_client import call_llama_cpp_chat
 from .models import GeneratedAnswer, PromptPayload
 from .prompt_builder import build_prompt
 
-from backend.app.services.error_log_service import record_error
+
+logger = logging.getLogger(__name__)
 
 
 class GenerationError(RuntimeError):
@@ -183,11 +184,11 @@ def _generate_answer_impl(
                 prompt.system_prompt
                 + "\n\n"
                 + "중요: 이전 생성에서 한국어 외 언어 또는 "
-                  "내부 프롬프트 내용이 노출될 수 있습니다. "
-                  "이번 답변은 반드시 자연스러운 한국어 답변 "
-                  "본문만 출력하세요. 중국어·일본어·역할명·"
-                  "청크 ID·프롬프트·검색 점수 내용을 절대 "
-                  "출력하지 마세요."
+                "내부 프롬프트 내용이 노출될 수 있습니다. "
+                "이번 답변은 반드시 자연스러운 한국어 답변 "
+                "본문만 출력하세요. 중국어·일본어·역할명·"
+                "청크 ID·프롬프트·검색 점수 내용을 절대 "
+                "출력하지 마세요."
             ),
             user_prompt=prompt.user_prompt,
             query=prompt.query,
@@ -247,8 +248,7 @@ def generate_answer(
     Generation의 외부 진입점.
 
     실제 Generation / llama.cpp 오류는 이 경계에서
-    Backend 공통 ErrorLog에 한 번만 기록한 뒤
-    원래 예외를 다시 올립니다.
+    RAG 자체 로그에 기록한 뒤 원래 예외를 다시 올린다.
     """
     try:
         return _generate_answer_impl(
@@ -259,24 +259,9 @@ def generate_answer(
             config=config,
         )
 
-    except Exception as error:
-        try:
-            record_error(
-                error_type="llm",
-                stage="generation",
-                message=(
-                    f"{error} "
-                    f"announcement={announcement_directory}"
-                ),
-                error_code=type(error).__name__,
-                stack_trace=traceback.format_exc(),
-            )
-        except Exception as log_error:
-            # ErrorLog 저장 실패가 원래 Generation 오류를
-            # 가리지 않도록 기존 예외를 그대로 유지합니다.
-            print(
-                f"[WARNING] Generation ErrorLog 기록 실패: "
-                f"{log_error}"
-            )
-
+    except Exception:
+        logger.exception(
+            "Generation 실패: announcement=%s",
+            announcement_directory,
+        )
         raise

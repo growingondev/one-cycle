@@ -311,7 +311,7 @@ export function ListScreen({
           <button
             key={a.id}
             onClick={() => goToDetail(a)}
-            className="w-full grid grid-cols-[60px_100px_minmax(300px,1fr)_100px_110px_110px_100px] items-center min-h-[68px] border-b border-slate-100 bg-white hover:bg-blue-50/50 text-[15px] text-slate-700 transition-colors px-2 text-center"
+            className="w-full grid grid-cols-[60px_100px_minmax(300px,1fr)_100px_110px_110px_100px] items-center min-h-[68px] border-b border-slate-100 bg-white hover:bg-blue-50/50 text-[17px] text-slate-700 transition-colors px-2 text-center"
           >
             <div className="font-bold text-[16px] text-slate-500">
               {a.notice_number || a.id}
@@ -329,11 +329,11 @@ export function ListScreen({
               {a.region ?? "-"}
             </div>
             
-            <div>
+            <div className="text-[17px]">
               {formatDateOnly(a.post_date || a.announcementDate)}
             </div>
             
-            <div>
+            <div className="text-[17px]">
               {formatDateOnly(a.deadlineDate || a.deadline_date)}
             </div>
 

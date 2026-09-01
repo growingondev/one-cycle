@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 from sqlalchemy import text
 
-from backend.app.db.session import SessionLocal
+from rag.db.session import SessionLocal
+from services.rag.config import settings
 from services.embedding.client import EmbeddingClient
 from rag.generation.config import (
     DEFAULT_GENERATION_CONFIG,
@@ -53,17 +53,7 @@ class DBRAGPipeline:
         retrieval_config.validate()
         generation_config.validate()
 
-        raw_top_k = os.getenv(
-            "RAG_DB_TOP_K",
-            "5",
-        ).strip()
-
-        try:
-            top_k = int(raw_top_k)
-        except ValueError as exc:
-            raise DBRAGPipelineError(
-                "RAG_DB_TOP_K는 정수여야 합니다."
-            ) from exc
+        top_k = settings.rag_db_top_k
 
         if top_k <= 0:
             raise DBRAGPipelineError(
@@ -300,11 +290,12 @@ class DBRAGPipeline:
                 f"announcement_id={announcement_id}"
             )
 
-        # MVP 대표 문서 형식은 환경변수에서 사용한다.
-        document_format = os.getenv(
-            "MVP_DOCUMENT_FORMAT",
-            "hwpx",
-        ).strip().lower()
+        # MVP 대표 문서 형식은 RAG Settings에서 사용한다.
+        document_format = (
+            settings.mvp_document_format
+            .strip()
+            .lower()
+        )
 
         return generate_answer(
             query=query,
