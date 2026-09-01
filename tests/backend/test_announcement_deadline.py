@@ -79,6 +79,7 @@ class AnnouncementListDeadlineContractTest(unittest.TestCase):
         rows_result.mappings.return_value.all.return_value = [
             {
                 "id": 10,
+                "notice_number": None,
                 "title": "Deadline list test",
                 "notice_type": "public-rental",
                 "region": "seoul",

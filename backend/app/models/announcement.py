@@ -45,6 +45,12 @@ class Announcement(Base):
         nullable=False,
     )
 
+    # Display number from the LH announcement list
+    notice_number: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+
     title: Mapped[str] = mapped_column(Text, nullable=False)
     detail_url: Mapped[str] = mapped_column(Text, nullable=False)
 
