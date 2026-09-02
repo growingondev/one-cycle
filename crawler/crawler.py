@@ -11,11 +11,10 @@ from urllib.parse import parse_qs, urlparse
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
+
 
 
 # 프로젝트 루트를 import 경로에 추가
@@ -29,17 +28,12 @@ if str(PROJECT_ROOT) not in sys.path:
 # 문서 실제 형식 판별
 # ==========================================
 
-try:
-    from pipeline.parser.format_detector import (
-        detect_actual_document_format,
-    )
-except ImportError:
-    def detect_actual_document_format(path: Path) -> str:
-        """
-        format_detector를 불러올 수 없는 환경에서의 fallback.
-        실제 운영에서는 pipeline.parser.format_detector 사용을 권장한다.
-        """
-        return path.suffix.lower().replace(".", "")
+def detect_actual_document_format(path: Path) -> str:
+    """
+    Crawler는 다운로드된 파일의 확장자만 추출하여 임시 반환합니다.
+    (실제 HWP/HWPX 내부 형식 검증 및 변환 책임은 Document Worker에게 있습니다.)
+    """
+    return path.suffix.lower().replace(".", "")
 
 
 # ==========================================
