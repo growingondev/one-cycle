@@ -6,3 +6,7 @@ services:
   rag:
     environment:
       POSTGRES_DB: one_cycle_evaluation_tmp
+
+  document-worker:
+    volumes:
+      - "../evaluation/source_documents:/app/evaluation/source_documents:ro"
