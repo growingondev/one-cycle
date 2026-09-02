@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     document_worker_base_url: str = ""
     document_worker_timeout_seconds: float = 600.0
 
+    # Host-accessible mirror of the Document Worker output root.
+    pipeline_output_host_path: str = ""
+
     # Admin authentication
     admin_id: str = ""
     admin_password: str = ""
