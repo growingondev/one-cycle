@@ -419,5 +419,22 @@ class IntegrationServiceTest(unittest.TestCase):
         )
 
 
+class KeyInformationStageMappingTest(
+    unittest.TestCase
+):
+    def test_extraction_stage_is_structuring_error(
+        self,
+    ):
+        from backend.app.services.integration_service import (
+            _error_type_for_stage,
+        )
+
+        self.assertEqual(
+            _error_type_for_stage(
+                "key_information_extraction"
+            ),
+            "structuring",
+        )
+
 if __name__ == "__main__":
     unittest.main()

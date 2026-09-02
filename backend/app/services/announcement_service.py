@@ -54,14 +54,23 @@ def list_active_announcements(
 
     where = " AND ".join(conditions)
 
+    notice_number_order = (
+        "CASE "
+        "WHEN a.notice_number ~ '^[0-9]+$' "
+        "THEN a.notice_number::integer "
+        "END"
+    )
+
     if sort_order == "oldest":
         order_by = (
             "a.announcement_date ASC NULLS LAST, "
+            f"{notice_number_order} ASC NULLS LAST, "
             "a.id ASC"
         )
     else:
         order_by = (
             "a.announcement_date DESC NULLS LAST, "
+            f"{notice_number_order} DESC NULLS LAST, "
             "a.id DESC"
         )
 
@@ -83,6 +92,7 @@ def list_active_announcements(
             f"""
             SELECT
                 a.id,
+                a.notice_number,
                 a.title,
                 a.notice_type,
                 a.region,
@@ -110,6 +120,7 @@ def list_active_announcements(
         items=[
             AnnouncementListItem(
                 id=row["id"],
+                notice_number=row["notice_number"],
                 title=row["title"],
                 notice_type=row["notice_type"],
                 region=row["region"],

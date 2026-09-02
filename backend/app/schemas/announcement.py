@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 class AnnouncementListItem(BaseModel):
     id: int
+    notice_number: str | None = None
     title: str
     notice_type: str | None = None
     region: str | None = None

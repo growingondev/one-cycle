@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import traceback
 from pathlib import Path
 from typing import Any
 
@@ -35,42 +34,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from pipeline.chunking.chunker import StructureAwareChunker  # noqa: E402
 from pipeline.chunking.config import ChunkingConfig  # noqa: E402
-from backend.app.services.error_log_service import record_error  # noqa: E402
-
-
-def log_chunking_error(
-    *,
-    error: Exception,
-    input_path: Path | None = None,
-    announcement_id: str | None = None,
-) -> None:
-    """
-    청킹 단계 예외를 Backend 공통 ErrorLog에 1회 기록합니다.
-
-    현재 run_chunking.py 실행 시점에는 processing_run_id/document_id가
-    없을 수 있으므로 가능한 정보만 기록합니다.
-    ErrorLog 저장 자체가 실패하더라도 원래 청킹 예외 처리는 유지합니다.
-    """
-    try:
-        location = f" input={input_path}" if input_path is not None else ""
-        announcement = (
-            f" announcement_id={announcement_id}"
-            if announcement_id
-            else ""
-        )
-
-        record_error(
-            error_type="chunking",
-            stage="chunking",
-            message=f"{error}{announcement}{location}",
-            error_code=type(error).__name__,
-            stack_trace=traceback.format_exc(),
-        )
-    except Exception as log_error:
-        print(
-            f"[WARNING] ErrorLog 기록 실패: {log_error}",
-            file=sys.stderr,
-        )
 
 
 DEFAULT_INPUT_CANDIDATES = (
@@ -275,16 +238,20 @@ def chunk_pipeline_outputs(
                 announcement_id=announcement_id,
             )
             success_count += 1
+            
         except Exception as error:
-            log_chunking_error(
-                error=error,
-                input_path=input_path,
-                announcement_id=announcement_id,
-            )
             failures.append((input_path, str(error)))
+
             print()
-            print(f"[ERROR] 청킹 실패: {input_path}", file=sys.stderr)
-            print(str(error), file=sys.stderr)
+            print(
+                f"[ERROR] 청킹 실패: {input_path}",
+                file=sys.stderr,
+            )
+            print(
+                str(error),
+                file=sys.stderr,
+            )
+
             if fail_fast:
                 break
 
@@ -494,15 +461,18 @@ def chunk_directory(
             )
             success_count += 1
         except Exception as error:
-            log_chunking_error(
-                error=error,
-                input_path=input_file,
-                announcement_id=None,
-            )
             failures.append((input_file, str(error)))
+
             print()
-            print(f"[ERROR] 청킹 실패: {input_file}", file=sys.stderr)
-            print(str(error), file=sys.stderr)
+            print(
+                f"[ERROR] 청킹 실패: {input_file}",
+                file=sys.stderr,
+            )
+            print(
+                str(error),
+                file=sys.stderr,
+            )
+
             if fail_fast:
                 break
 
@@ -564,14 +534,15 @@ def main(argv: list[str] | None = None) -> int:
         print("\n[중단] 사용자 요청으로 청킹을 중단했습니다.", file=sys.stderr)
         return 130
     except Exception as error:
-        log_chunking_error(
-            error=error,
-            input_path=None,
-            announcement_id=getattr(args, "announcement_id", None),
-        )
         print()
-        print("[ERROR] 청킹 파이프라인 실행 실패", file=sys.stderr)
-        print(str(error), file=sys.stderr)
+        print(
+            "[ERROR] 청킹 파이프라인 실행 실패",
+            file=sys.stderr,
+        )
+        print(
+            str(error),
+            file=sys.stderr,
+        )
         return 1
 
 

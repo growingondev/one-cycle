@@ -46,9 +46,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterator
 
-from tkinter import Tk, messagebox
-from tkinter.filedialog import askopenfilename
-
 
 # ===========================================================================
 # 도메인 규칙 로딩
@@ -1655,7 +1652,20 @@ def process(
 # ===========================================================================
 
 def select_input_json() -> str | None:
-    """Step 1 최종 hierarchy JSON 선택."""
+    """Step 1 최종 hierarchy JSON 선택.
+
+    tkinter는 로컬 GUI 실행에서만 필요하므로 여기서 지연 로드한다.
+    Document Worker가 process()만 import/호출할 때는 tkinter를 로드하지 않는다.
+    """
+
+    try:
+        from tkinter import Tk
+        from tkinter.filedialog import askopenfilename
+    except ImportError as exc:
+        raise RuntimeError(
+            "GUI 파일 선택 기능을 사용할 수 없습니다. "
+            "서버/Worker 환경에서는 process() 또는 run_structure_pipeline()을 사용하세요."
+        ) from exc
 
     root = Tk()
 
@@ -1666,8 +1676,9 @@ def select_input_json() -> str | None:
         True,
     )
 
-    selected = (
-        askopenfilename(
+    try:
+        selected = (
+            askopenfilename(
             title=(
                 "1단계 최종 계층 "
                 "JSON 선택"
@@ -1686,9 +1697,9 @@ def select_input_json() -> str | None:
                 ),
             ],
         )
-    )
-
-    root.destroy()
+        )
+    finally:
+        root.destroy()
 
     return (
         selected
@@ -1878,6 +1889,14 @@ def print_repair_summary(
 # ===========================================================================
 
 def main() -> None:
+    try:
+        from tkinter import messagebox
+    except ImportError as exc:
+        raise RuntimeError(
+            "GUI 실행 기능을 사용할 수 없습니다. "
+            "서버/Worker 환경에서는 main()이 아니라 process()를 사용하세요."
+        ) from exc
+
     input_path = (
         select_input_json()
     )

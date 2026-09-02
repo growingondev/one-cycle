@@ -7,6 +7,7 @@ from backend.app.clients.document_worker_client import (
     DocumentWorkerResponse,
 )
 from backend.app.clients.http_json import (
+    InternalServiceHTTPError,
     InternalServiceResponseError,
 )
 from backend.app.services.key_information_service import (
@@ -23,6 +24,20 @@ from backend.app.services.pipeline_persistence import (
 SUPPORTED_DOCUMENT_FORMATS = {
     "hwp",
     "hwpx",
+}
+
+
+WORKER_ERROR_STAGES = {
+    "DOCUMENT_FORMAT_VALIDATION_FAILED": "format_detection",
+    "DOCUMENT_PARSE_FAILED": "parser",
+    "DOCUMENT_NORMALIZE_FAILED": "normalizer",
+    "DOCUMENT_STRUCTURE_FAILED": "structure",
+    "DOCUMENT_VERIFICATION_FAILED": "verification",
+    "DOCUMENT_CHUNKING_FAILED": "chunking",
+    "DOCUMENT_EMBEDDING_INPUT_FAILED": "embedding",
+    "DOCUMENT_EMBEDDING_SERVICE_FAILED": "embedding",
+    "DOCUMENT_EMBEDDING_ARTIFACT_FAILED": "embedding",
+    "DOCUMENT_KEY_INFORMATION_FAILED": "key_information_extraction",
 }
 
 
@@ -450,9 +465,21 @@ def process_document_with_worker(
     function until the actual Worker endpoint is ready.
     """
 
-    response = process_document_via_worker(
-        document_id
-    )
+    try:
+        response = process_document_via_worker(
+            document_id
+        )
+    except InternalServiceHTTPError as error:
+        return {
+            "success": False,
+            "document_id": document_id,
+            "stage": WORKER_ERROR_STAGES.get(
+                error.error_code,
+                "integration",
+            ),
+            "error_code": error.error_code,
+            "message": error.message,
+        }
 
     return finalize_document_worker_result(
         document_id=document_id,
