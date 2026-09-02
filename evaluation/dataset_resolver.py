@@ -195,11 +195,13 @@ def read_evaluation_document_ids(
         seen: set[str] = set()
         column = headers["document_id"]
 
-        for row in range(2, ws.max_row + 1):
-            raw = ws.cell(
-                row=row,
-                column=column,
-            ).value
+        for row in ws.iter_rows(
+            min_row=2,
+            min_col=column,
+            max_col=column,
+            values_only=True,
+        ):
+            raw = row[0]
 
             if raw is None:
                 continue
