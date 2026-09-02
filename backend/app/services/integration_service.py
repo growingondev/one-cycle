@@ -22,6 +22,7 @@ STAGE_ERROR_TYPES = {
     "parser": "parsing",
     "normalizer": "normalizing",
     "structure": "structuring",
+    "key_information_extraction": "structuring",
     "verification": "verification",
     "chunking": "chunking",
     "embedding": "embedding",

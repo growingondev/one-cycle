@@ -623,5 +623,81 @@ class DocumentWorkerFinalizationTest(
         )
 
 
+class DocumentWorkerErrorMappingTest(
+    unittest.TestCase
+):
+    def test_worker_http_errors_map_to_backend_stages(
+        self,
+    ):
+        from backend.app.clients.http_json import (
+            InternalServiceHTTPError,
+        )
+        from backend.app.services.document_processing_service import (
+            process_document_with_worker,
+        )
+
+        cases = {
+            "DOCUMENT_FORMAT_VALIDATION_FAILED": (
+                "format_detection"
+            ),
+            "DOCUMENT_PARSE_FAILED": "parser",
+            "DOCUMENT_NORMALIZE_FAILED": "normalizer",
+            "DOCUMENT_STRUCTURE_FAILED": "structure",
+            "DOCUMENT_VERIFICATION_FAILED": (
+                "verification"
+            ),
+            "DOCUMENT_CHUNKING_FAILED": "chunking",
+            "DOCUMENT_EMBEDDING_INPUT_FAILED": (
+                "embedding"
+            ),
+            "DOCUMENT_EMBEDDING_SERVICE_FAILED": (
+                "embedding"
+            ),
+            "DOCUMENT_EMBEDDING_ARTIFACT_FAILED": (
+                "embedding"
+            ),
+            "DOCUMENT_KEY_INFORMATION_FAILED": (
+                "key_information_extraction"
+            ),
+            "INTERNAL_SERVICE_HTTP_ERROR": "integration",
+        }
+
+        for error_code, expected_stage in cases.items():
+            with self.subTest(error_code=error_code):
+                error = InternalServiceHTTPError(
+                    status_code=500,
+                    error_code=error_code,
+                    message="worker failed",
+                )
+
+                with (
+                    patch(
+                        "backend.app.services."
+                        "document_processing_service."
+                        "process_document_via_worker",
+                        side_effect=error,
+                    ),
+                    patch(
+                        "backend.app.services."
+                        "document_processing_service."
+                        "finalize_document_worker_result",
+                    ) as finalize,
+                ):
+                    result = process_document_with_worker(
+                        30
+                    )
+
+                self.assertEqual(
+                    result,
+                    {
+                        "success": False,
+                        "document_id": 30,
+                        "stage": expected_stage,
+                        "error_code": error_code,
+                        "message": "worker failed",
+                    },
+                )
+                finalize.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

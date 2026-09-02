@@ -49,6 +49,7 @@ services:
 
     volumes:
       - "${DOCUMENT_STORAGE_HOST_PATH:-../runtime/documents}:/data/documents"
+      - "${PIPELINE_OUTPUT_HOST_PATH:-../runtime/outputs}:/app/outputs"
 
     ports:
       - "127.0.0.1:18000:18000"
@@ -74,6 +75,7 @@ services:
 
     volumes:
       - "${DOCUMENT_STORAGE_HOST_PATH:-../runtime/documents}:/data/documents"
+      - "${PIPELINE_OUTPUT_HOST_PATH:-../runtime/outputs}:/app/outputs"
 
     ports:
       - "127.0.0.1:18003:18003"
