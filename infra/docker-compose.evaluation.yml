@@ -1,0 +1,8 @@
+services:
+  backend:
+    environment:
+      POSTGRES_DB: one_cycle_evaluation_tmp
+
+  rag:
+    environment:
+      POSTGRES_DB: one_cycle_evaluation_tmp
