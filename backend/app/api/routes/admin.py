@@ -6,6 +6,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import get_current_admin
+from backend.app.clients.crawler_client import (
+    CrawlerJobFailedError,
+)
+from backend.app.clients.http_json import (
+    InternalServiceConfigurationError,
+    InternalServiceHTTPError,
+    InternalServiceResponseError,
+    InternalServiceUnavailableError,
+)
 from backend.app.db.session import get_db
 from backend.app.schemas.admin import (
     AdminAnnouncementDetail,
@@ -42,6 +51,45 @@ router = APIRouter(
     tags=["Admin"],
     dependencies=[Depends(get_current_admin)],
 )
+
+
+def _raise_crawler_api_error(error: Exception) -> None:
+    if isinstance(error, InternalServiceHTTPError):
+        status_code = (
+            status.HTTP_409_CONFLICT
+            if error.status_code == 409
+            else status.HTTP_502_BAD_GATEWAY
+        )
+        error_code = error.error_code
+        message = error.message
+    elif isinstance(error, CrawlerJobFailedError):
+        status_code = status.HTTP_502_BAD_GATEWAY
+        error_code = error.error_code
+        message = error.message
+    elif isinstance(
+        error,
+        (
+            InternalServiceConfigurationError,
+            InternalServiceUnavailableError,
+        ),
+    ):
+        status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        error_code = "CRAWLER_SERVICE_UNAVAILABLE"
+        message = str(error)
+    elif isinstance(error, InternalServiceResponseError):
+        status_code = status.HTTP_502_BAD_GATEWAY
+        error_code = "CRAWLER_RESPONSE_INVALID"
+        message = str(error)
+    else:
+        raise error
+
+    raise HTTPException(
+        status_code=status_code,
+        detail={
+            "error_code": error_code,
+            "message": message,
+        },
+    ) from error
 
 
 @router.get(
@@ -109,6 +157,14 @@ def run_collection():
         result = collect_announcements()
     except PipelineUnavailableError as exc:
         raise HTTPException(503, str(exc)) from exc
+    except (
+        CrawlerJobFailedError,
+        InternalServiceConfigurationError,
+        InternalServiceHTTPError,
+        InternalServiceResponseError,
+        InternalServiceUnavailableError,
+    ) as exc:
+        _raise_crawler_api_error(exc)
 
     if result.get("status") == "failed":
         raise HTTPException(
@@ -133,6 +189,14 @@ def run_recollection(announcement_id: int):
         result = recollect_announcement(announcement_id)
     except PipelineUnavailableError as exc:
         raise HTTPException(503, str(exc)) from exc
+    except (
+        CrawlerJobFailedError,
+        InternalServiceConfigurationError,
+        InternalServiceHTTPError,
+        InternalServiceResponseError,
+        InternalServiceUnavailableError,
+    ) as exc:
+        _raise_crawler_api_error(exc)
     return ActionAcceptedResponse(
         accepted=True,
         message="공고 재수집 요청을 전달했습니다.",

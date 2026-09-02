@@ -22,7 +22,8 @@ class IntegrationServiceTest(unittest.TestCase):
         "_validate_recollection_result"
     )
     @patch(
-        "crawler.crawler.recollect_lh_notice"
+        "backend.app.services.collection_service."
+        "crawler_client.recollect_announcement"
     )
     @patch(
         "backend.app.services.collection_service.SessionLocal"

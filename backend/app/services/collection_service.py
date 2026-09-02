@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from backend.app.clients import crawler_client
 from backend.app.db.session import SessionLocal
 from backend.app.models.announcement import Announcement
 from backend.app.models.collection_run import CollectionRun
@@ -386,9 +387,7 @@ def collect_and_persist() -> dict[str, Any]:
     실제 Crawler 실행 후 결과를 DB에 저장한다.
     """
 
-    from crawler.crawler import crawl_lh_notices
-
-    result = crawl_lh_notices()
+    result = crawler_client.crawl_announcements()
 
     return persist_collection_result(result)
 
@@ -450,10 +449,8 @@ def recollect_and_persist(
             "공고의 detail_url이 없습니다."
         )
 
-    # 2. Crawler 개별 재수집 callable 실행
-    from crawler.crawler import recollect_lh_notice
-
-    crawler_result = recollect_lh_notice(
+    # 2. Crawler API를 통한 개별 재수집 실행
+    crawler_result = crawler_client.recollect_announcement(
         source_announcement_id=source_announcement_id,
         detail_url=detail_url,
     )

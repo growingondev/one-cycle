@@ -1322,7 +1322,7 @@ activate_processing_run(processing_run_id)
 
 | 연결 대상 | 현재 방식 | 전달 데이터 | 관련 코드 |
 |---|---|---|---|
-| Crawler → Backend DB | Python/DB | 공고 + 원본 Document 정보 | `collection_service.py` |
+| Crawler → Backend | HTTP job API | 공고 + 원본 Document 정보 | `crawler_client.py`, `collection_service.py` |
 | Backend → Pipeline | Python import | `document_id` | `pipeline_gateway.py` |
 | Pipeline → 원본 파일 | 파일 | `storage_path` | `document_processor.py` |
 | Pipeline Stage 간 | 파일 + subprocess | JSON / NPY | `document_processor.py` |
