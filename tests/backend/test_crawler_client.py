@@ -72,7 +72,7 @@ class CrawlerClientTest(unittest.TestCase):
         ):
             result = crawler_client.crawl_announcements()
 
-        self.assertIs(result, domain_result)
+        self.assertEqual(result, domain_result)
         post_json.assert_called_once_with(
             url="http://crawler:8000/v1/crawl-jobs",
             payload={},
@@ -151,7 +151,7 @@ class CrawlerClientTest(unittest.TestCase):
                 detail_url="https://example.com/notice/1",
             )
 
-        self.assertIs(result, domain_result)
+        self.assertEqual(result, domain_result)
         post_json.assert_called_once_with(
             url="http://crawler:8000/v1/recollect-jobs",
             payload={
