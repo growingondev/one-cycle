@@ -269,9 +269,9 @@ def create_driver(temp_download_dir: str | Path):
 
     chrome_options.add_experimental_option("prefs", prefs)
 
-    service = Service(ChromeDriverManager().install())
+    # service = Service(ChromeDriverManager().install())
 
-    return webdriver.Chrome(service=service, options=chrome_options)
+    return webdriver.Chrome(options=chrome_options)
 
 def cleanup_temp_directory(
     temp_download_dir: str | Path,
