@@ -264,5 +264,23 @@ class CollectionDocumentRolePersistenceTest(
         )
 
 
+class ApplicationFormRoleTest(
+    unittest.TestCase
+):
+    def test_application_form_is_supporting(
+        self,
+    ):
+        from backend.app.services.document_role_service import (
+            classify_document_role,
+        )
+
+        self.assertEqual(
+            classify_document_role(
+                "\uad6d\ubbfc\uc784\ub300_"
+                "\uc2e0\uccad\uc591\uc2dd.hwpx"
+            ),
+            "supporting",
+        )
+
 if __name__ == "__main__":
     unittest.main()
