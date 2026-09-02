@@ -1,72 +1,114 @@
 from fastapi import FastAPI, BackgroundTasks, HTTPException
+from pydantic import BaseModel
 from datetime import datetime
 import uuid
-import asyncio
 
-# 기존에 잘 만들어둔 크롤러 함수를 불러옵니다.
-from crawler import crawl_lh_notices
+from crawler import crawl_lh_notices, recollect_lh_notice
 
 app = FastAPI(title="LH Crawler API")
 
-# 크롤링 작업의 상태와 결과를 저장할 메모리 공간 (DB 대신 사용)
+# MVP 제약사항: Job 상태는 메모리에 저장되므로 컨테이너 재시작 시 초기화됩니다.
+# (완료된 Job 자동 삭제 및 영구 저장은 후속 개선 사항으로 진행)
 jobs = {}
 
-def run_crawler_task(job_id: str):
-    """백그라운드에서 실제 크롤러를 돌리는 함수"""
+# 개별 공고 재수집 API 요청 데이터 모델
+class RecollectRequest(BaseModel):
+    source_announcement_id: str
+    detail_url: str
+
+def is_crawler_busy() -> bool:
+    """동시 크롤링 실행 방지: 이미 실행 중이거나 대기 중인 작업이 있는지 확인"""
+    for job in jobs.values():
+        if job["status"] in ["queued", "running"]:
+            return True
+    return False
+
+def run_crawl_task(job_id: str):
+    """전체 공고 수집 백그라운드 작업"""
+    jobs[job_id]["status"] = "running"
     try:
-        # 기존 crawler.py의 함수 실행 (20분 소요)
         result = crawl_lh_notices()
-        
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["result"] = result
     except Exception as e:
         jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["error_code"] = "CRAWLER_EXECUTION_FAILED"
+        jobs[job_id]["message"] = f"크롤링 전체 수집 실패: {str(e)}"
+
+def run_recollect_task(job_id: str, source_announcement_id: str, detail_url: str):
+    """개별 공고 재수집 백그라운드 작업"""
+    jobs[job_id]["status"] = "running"
+    try:
+        result = recollect_lh_notice(source_announcement_id, detail_url)
+        jobs[job_id]["status"] = "completed"
+        jobs[job_id]["result"] = result
+    except Exception as e:
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error_code"] = "RECOLLECT_EXECUTION_FAILED"
+        jobs[job_id]["message"] = f"개별 공고 재수집 실패: {str(e)}"
 
 @app.post("/v1/crawl-jobs")
 async def create_crawl_job(background_tasks: BackgroundTasks):
-    """1. 수집 요청 API (전화 끊고 백그라운드 작업 시작)"""
+    """전체 수집 요청 API"""
+    if is_crawler_busy():
+        raise HTTPException(
+            status_code=409, 
+            detail={"error_code": "CRAWLER_JOB_ALREADY_RUNNING", "message": "이미 실행 중이거나 대기 중인 크롤링 작업이 있습니다."}
+        )
+    
     job_id = f"execution_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    jobs[job_id] = {"job_id": job_id, "status": "queued"}
     
-    jobs[job_id] = {
-        "job_id": job_id,
-        "status": "running",
-        "result": None
-    }
+    background_tasks.add_task(run_crawl_task, job_id)
+    return {"job_id": job_id, "status": "queued"}
+
+@app.post("/v1/recollect-jobs")
+async def create_recollect_job(req: RecollectRequest, background_tasks: BackgroundTasks):
+    """개별 공고 재수집 요청 API"""
+    if is_crawler_busy():
+        raise HTTPException(
+            status_code=409, 
+            detail={"error_code": "CRAWLER_JOB_ALREADY_RUNNING", "message": "이미 실행 중이거나 대기 중인 크롤링 작업이 있습니다."}
+        )
     
-    # 백그라운드에서 크롤링 시작
-    background_tasks.add_task(run_crawler_task, job_id)
+    job_id = f"recollect_{req.source_announcement_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    jobs[job_id] = {"job_id": job_id, "status": "queued"}
     
-    return {"job_id": job_id, "status": "running"}
+    background_tasks.add_task(run_recollect_task, job_id, req.source_announcement_id, req.detail_url)
+    return {"job_id": job_id, "status": "queued"}
 
 @app.get("/v1/crawl-jobs/{job_id}")
 async def get_crawl_job_status(job_id: str):
-    """2. 작업 상태 조회 API"""
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    return {
-        "job_id": job_id,
-        "status": jobs[job_id]["status"]
-    }
-
-@app.get("/v1/crawl-jobs/{job_id}/result")
-async def get_crawl_job_result(job_id: str):
-    """3. 완료 및 수집 결과 반환 API"""
+    """작업 상태 조회 API (전체/개별 공통)"""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     
     job = jobs[job_id]
-    if job["status"] != "completed":
-        return {"message": "Job is still running or failed", "status": job["status"]}
+    response = {"job_id": job_id, "status": job["status"]}
+    
+    if job["status"] == "failed":
+        response["error_code"] = job.get("error_code")
+        response["message"] = job.get("message")
         
-    return {
-        "job_id": job_id,
-        "status": "completed",
-        "result": job["result"]
-    }
+    return response
+
+@app.get("/v1/crawl-jobs/{job_id}/result")
+async def get_crawl_job_result(job_id: str):
+    """작업 결과 반환 API (전체/개별 공통)"""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = jobs[job_id]
+    response = {"job_id": job_id, "status": job["status"]}
+    
+    if job["status"] == "completed":
+        response["result"] = job.get("result")
+    elif job["status"] == "failed":
+        response["error_code"] = job.get("error_code")
+        response["message"] = job.get("message")
+        
+    return response
 
 @app.get("/health")
 async def health_check():
-    """4. 서버 상태 확인 API"""
     return {"status": "ok"}
