@@ -9,6 +9,7 @@ import numpy as np
 from sqlalchemy import select
 
 from config.paths import OUTPUT_ROOT
+from backend.app.core.config import settings
 from backend.app.db.session import SessionLocal
 from backend.app.models import (
     Announcement,
@@ -19,6 +20,9 @@ from backend.app.models import (
     Embedding,
     ProcessingRun,
 )
+
+
+WORKER_OUTPUT_ROOT = PurePosixPath("/app/outputs")
 
 
 def load_json(path: Path):
@@ -66,6 +70,74 @@ def _validate_bundle_root_identity(
         )
 
 
+def _resolve_worker_output_mapping(
+    logical_path: PurePosixPath,
+) -> Path | None:
+    """
+    Map a Worker container output path to a path visible
+    to a host-side persistence process.
+
+    Docker-to-Docker execution keeps using the original
+    path when it is directly accessible.
+    """
+
+    if os.name != "nt":
+        direct_path = Path(
+            str(logical_path)
+        ).resolve()
+
+        if direct_path.exists():
+            return None
+
+    access_root_value = (
+        settings.pipeline_output_host_path
+        .strip()
+    )
+
+    if not access_root_value:
+        return None
+
+    try:
+        relative_path = (
+            logical_path.relative_to(
+                WORKER_OUTPUT_ROOT
+            )
+        )
+    except ValueError:
+        return None
+
+    if ".." in relative_path.parts:
+        raise RuntimeError(
+            "Worker output_path contains an unsafe "
+            f"parent traversal: {logical_path}"
+        )
+
+    access_root = Path(
+        access_root_value
+    ).expanduser()
+
+    if not access_root.is_absolute():
+        raise RuntimeError(
+            "PIPELINE_OUTPUT_HOST_PATH must be "
+            f"an absolute path: {access_root}"
+        )
+
+    access_root = access_root.resolve()
+    mapped_path = access_root.joinpath(
+        *relative_path.parts
+    ).resolve()
+
+    try:
+        mapped_path.relative_to(access_root)
+    except ValueError as error:
+        raise RuntimeError(
+            "Mapped Worker output_path escapes "
+            "PIPELINE_OUTPUT_HOST_PATH."
+        ) from error
+
+    return mapped_path
+
+
 def _resolve_bundle_root(
     *,
     announcement_key: str,
@@ -103,6 +175,15 @@ def _resolve_bundle_root(
             announcement_key=announcement_key,
             document_id=document_id,
         )
+
+        mapped_root = (
+            _resolve_worker_output_mapping(
+                logical_path
+            )
+        )
+
+        if mapped_root is not None:
+            return mapped_root
 
         # Windows host에서 /data/...를 Path.resolve()하면
         # C:\data\...로 잘못 해석되므로 암묵적으로 변환하지 않는다.

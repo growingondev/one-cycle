@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from backend.app.core.config import settings
 from backend.app.services.pipeline_persistence import (
     _resolve_bundle_root,
 )
@@ -51,6 +52,102 @@ class PipelinePersistencePathTest(
             result,
             root.resolve(),
         )
+
+    def test_worker_output_path_is_mapped_to_host_path(
+        self,
+    ):
+        with TemporaryDirectory() as temp_dir:
+            expected = (
+                Path(temp_dir)
+                / "LH-TEST-001"
+                / "document_30"
+            )
+
+            with (
+                patch.object(
+                    settings,
+                    "pipeline_output_host_path",
+                    temp_dir,
+                ),
+                patch(
+                    "backend.app.services."
+                    "pipeline_persistence.Path.exists",
+                    return_value=False,
+                ),
+            ):
+                result = _resolve_bundle_root(
+                    announcement_key="LH-TEST-001",
+                    document_id=30,
+                    output_root_path=(
+                        "/app/outputs/"
+                        "LH-TEST-001/"
+                        "document_30"
+                    ),
+                )
+
+        self.assertEqual(
+            result,
+            expected.resolve(),
+        )
+
+    def test_relative_host_output_path_is_rejected(
+        self,
+    ):
+        with (
+            patch.object(
+                settings,
+                "pipeline_output_host_path",
+                "relative/outputs",
+            ),
+            patch(
+                "backend.app.services."
+                "pipeline_persistence.Path.exists",
+                return_value=False,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "must be an absolute path",
+            ):
+                _resolve_bundle_root(
+                    announcement_key="LH-TEST-001",
+                    document_id=30,
+                    output_root_path=(
+                        "/app/outputs/"
+                        "LH-TEST-001/"
+                        "document_30"
+                    ),
+                )
+
+    def test_worker_output_parent_traversal_is_rejected(
+        self,
+    ):
+        with TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(
+                    settings,
+                    "pipeline_output_host_path",
+                    temp_dir,
+                ),
+                patch(
+                    "backend.app.services."
+                    "pipeline_persistence.Path.exists",
+                    return_value=False,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "unsafe parent traversal",
+                ):
+                    _resolve_bundle_root(
+                        announcement_key="LH-TEST-001",
+                        document_id=30,
+                        output_root_path=(
+                            "/app/outputs/../"
+                            "LH-TEST-001/"
+                            "document_30"
+                        ),
+                    )
 
     def test_document_id_mismatch_is_rejected(
         self,
