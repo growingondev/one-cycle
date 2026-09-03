@@ -106,7 +106,7 @@ Docker Service 간 HTTP 통신으로 분리되어 있지 않다.
 | Backend | Integration | Python import/importlib | `COLLECTION_RUNNER`, `ANNOUNCEMENT_RECOLLECTOR` |
 | Backend | Document Processor | Python import/importlib | `DOCUMENT_REPROCESSOR` |
 | Backend | Error Retry | Python import/importlib 예정 | `ERROR_RETRY_RUNNER` 미연결 |
-| Collection Service | Crawler | Python import | `crawler.crawler` |
+| Collection Service | Crawler | HTTP job API | `crawler_client.py` → `crawler:8000` |
 | Document Processor | 원본 문서 | File | `Document.storage_path` |
 | Document Processor | Parser 등 | subprocess | Python child process |
 | Document Processor | BGE-M3 | subprocess + 직접 Model Load | `pipeline/embedding` |
@@ -213,7 +213,7 @@ integration_service.collect_persist_and_process()
 ↓
 collection_service.collect_and_persist()
 ↓
-crawler.crawler.crawl_lh_notices()
+crawler_client.crawl_announcements()
 ↓
 persist_collection_result()
 ↓
@@ -371,7 +371,7 @@ integration_service.recollect_persist_and_process()
 ↓
 collection_service.recollect_and_persist()
 ↓
-crawler.crawler.recollect_lh_notice()
+crawler_client.recollect_announcement()
 ↓
 신규 Document 저장
 ↓

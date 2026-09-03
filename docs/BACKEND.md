@@ -311,8 +311,8 @@ COLLECTION_RUNNER
 integration_service.collect_persist_and_process()
 ↓
 collection_service.collect_and_persist()
-↓ Python import
-crawler.crawler.crawl_lh_notices()
+↓ HTTP job API
+crawler_client.crawl_announcements()
 ↓
 Crawler Result
 ↓
@@ -418,7 +418,7 @@ Docker 분리 준비에서 가장 중요한 부분이다.
 | Backend | RAG | **Python import / importlib** | `rag.service:answer_question` | Backend → RAG HTTP 계약 필요 |
 | Backend | Integration Service | **Python import / importlib** | `COLLECTION_RUNNER` | Worker 분리 경계 재설계 |
 | Backend | Document Processor | **Python import / importlib** | `pipeline.document_processor:reprocess_document` | Backend → Document Worker 통신 필요 |
-| Collection Service | Crawler | **Python import** | `crawler.crawler.crawl_lh_notices()` | Worker 내부/별도 경계 결정 |
+| Collection Service | Crawler | **HTTP job API** | `crawler_client.py` → `crawler:8000` | `/data/documents` 공유 Volume 유지 |
 | Backend | PostgreSQL | **DB** | SQLAlchemy + psycopg | `postgres` service name으로 변경 |
 | RAG | PostgreSQL/pgvector | **DB** | SQLAlchemy 직접 조회 | RAG Container → postgres |
 | RAG | Embedding | **Python import + GPU** | BGE-M3 직접 로드 | Embedding Service 호출로 변경 |
@@ -662,7 +662,7 @@ collect_persist_and_process()
 ↓
 collect_and_persist()
 ↓
-crawl_lh_notices()
+crawler_client.crawl_announcements()
 ↓
 persist_collection_result()
 ↓

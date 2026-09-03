@@ -1,0 +1,115 @@
+services:
+  # ============================================================
+  # Evaluation Backend
+  # ============================================================
+
+  eval-backend:
+    build:
+      context: ..
+      dockerfile: infra/backend/Dockerfile
+
+    image: one-cycle-backend:dev
+    container_name: one-cycle-eval-backend
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
+    environment:
+      APP_ENVIRONMENT: docker
+
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: one_cycle_evaluation_tmp
+
+      RAG_SERVICE_BASE_URL: http://eval-rag:18002
+      DOCUMENT_WORKER_BASE_URL: http://eval-document-worker:18003
+
+    volumes:
+      - "../runtime/outputs:/app/outputs"
+
+    ports:
+      - "127.0.0.1:19000:18000"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+      eval-rag:
+        condition: service_started
+
+      eval-document-worker:
+        condition: service_started
+
+
+  # ============================================================
+  # Evaluation RAG
+  # ============================================================
+
+  eval-rag:
+    build:
+      context: ..
+      dockerfile: docker/rag/Dockerfile
+
+    image: one-cycle-rag:dev
+    container_name: one-cycle-eval-rag
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: one_cycle_evaluation_tmp
+
+      EMBEDDING_SERVICE_URL: http://embedding:18001
+      LLAMA_BASE_URL: http://llm:8080
+      LLAMA_MODEL: ${LLAMA_MODEL:-gemma}
+
+    ports:
+      - "127.0.0.1:19002:18002"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+      embedding:
+        condition: service_healthy
+
+      llm:
+        condition: service_healthy
+
+
+  # ============================================================
+  # Evaluation Document Worker
+  # ============================================================
+
+  eval-document-worker:
+    build:
+      context: ..
+      dockerfile: infra/document-worker/Dockerfile
+
+    image: one-cycle-document-worker:dev
+    container_name: one-cycle-eval-document-worker
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
+    environment:
+      EMBEDDING_SERVICE_URL: http://embedding:18001
+
+    volumes:
+      # 평가 원본문서
+      - "../evaluation/source_documents:/app/evaluation/source_documents:ro"
+
+      # 평가 Pipeline 결과물
+      - "../runtime/outputs:/app/outputs"
+
+    ports:
+      - "127.0.0.1:19003:18003"
+
+    depends_on:
+      embedding:
+        condition: service_healthy

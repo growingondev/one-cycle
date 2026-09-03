@@ -22,7 +22,7 @@ RUN git clone --filter=blob:none --no-checkout \
         -DBUILD_SHARED_LIBS=OFF \
         -DCMAKE_BUILD_TYPE=Release \
     && cmake --build llama.cpp/build --config Release \
-        --target llama-server --parallel
+        --target llama-server --parallel 2
 
 FROM nvidia/cuda:13.0.2-runtime-ubuntu24.04
 

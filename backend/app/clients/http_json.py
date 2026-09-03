@@ -91,59 +91,56 @@ def _parse_error_body(
 
     error_payload = payload.get("error")
 
-    if not isinstance(error_payload, dict):
-        return fallback_code, fallback_message
+    if isinstance(error_payload, dict):
+        code = str(
+            error_payload.get("code")
+            or fallback_code
+        ).strip()
 
-    code = str(
-        error_payload.get("code")
-        or fallback_code
-    ).strip()
+        message = str(
+            error_payload.get("message")
+            or fallback_message
+        ).strip()
 
-    message = str(
-        error_payload.get("message")
-        or fallback_message
-    ).strip()
+        return (
+            code or fallback_code,
+            message or fallback_message,
+        )
 
-    return (
-        code or fallback_code,
-        message or fallback_message,
-    )
+    detail = payload.get("detail")
+
+    if isinstance(detail, dict):
+        code = str(
+            detail.get("error_code")
+            or detail.get("code")
+            or fallback_code
+        ).strip()
+
+        message = str(
+            detail.get("message")
+            or fallback_message
+        ).strip()
+
+        return (
+            code or fallback_code,
+            message or fallback_message,
+        )
+
+    if isinstance(detail, str) and detail.strip():
+        return fallback_code, detail.strip()
+
+    return fallback_code, fallback_message
 
 
-def post_json(
+def _open_json(
     *,
-    url: str,
-    payload: Mapping[str, Any],
+    http_request: request.Request,
     timeout_seconds: float,
 ) -> dict[str, Any]:
-    """POST JSON to an internal service and return a JSON object."""
-
-    normalized_url = _validate_url(url)
-
     if timeout_seconds <= 0:
         raise InternalServiceConfigurationError(
             "timeout_seconds must be greater than zero."
         )
-
-    try:
-        encoded_body = json.dumps(
-            dict(payload),
-            ensure_ascii=False,
-        ).encode("utf-8")
-    except (TypeError, ValueError) as exc:
-        raise InternalServiceClientError(
-            "Failed to encode HTTP payload as JSON."
-        ) from exc
-
-    http_request = request.Request(
-        normalized_url,
-        data=encoded_body,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST",
-    )
 
     try:
         with request.urlopen(
@@ -205,3 +202,60 @@ def post_json(
         )
 
     return response_payload
+
+
+def get_json(
+    *,
+    url: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """GET JSON from an internal service and return an object."""
+
+    normalized_url = _validate_url(url)
+
+    http_request = request.Request(
+        normalized_url,
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+
+    return _open_json(
+        http_request=http_request,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def post_json(
+    *,
+    url: str,
+    payload: Mapping[str, Any],
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """POST JSON to an internal service and return a JSON object."""
+
+    normalized_url = _validate_url(url)
+
+    try:
+        encoded_body = json.dumps(
+            dict(payload),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise InternalServiceClientError(
+            "Failed to encode HTTP payload as JSON."
+        ) from exc
+
+    http_request = request.Request(
+        normalized_url,
+        data=encoded_body,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+
+    return _open_json(
+        http_request=http_request,
+        timeout_seconds=timeout_seconds,
+    )

@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     document_worker_base_url: str = ""
     document_worker_timeout_seconds: float = 600.0
 
+    crawler_service_base_url: str = ""
+    crawler_service_timeout_seconds: float = 30.0
+    crawler_job_timeout_seconds: float = 3600.0
+    crawler_job_poll_interval_seconds: float = 5.0
+
+    # Host-accessible mirror of the Document Worker output root.
+    pipeline_output_host_path: str = ""
+
     # Admin authentication
     admin_id: str = ""
     admin_password: str = ""
