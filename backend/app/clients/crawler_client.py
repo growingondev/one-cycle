@@ -16,7 +16,6 @@ from backend.app.clients.http_json import (
 )
 from backend.app.core.config import settings
 
-
 CrawlerJobState = Literal[
     "queued",
     "running",
@@ -226,6 +225,13 @@ def _create_and_wait(
 def crawl_announcements() -> dict[str, Any]:
     return _create_and_wait(
         path="/v1/crawl-jobs",
+        payload={},
+    )
+
+
+def scan_announcements() -> dict[str, Any]:
+    return _create_and_wait(
+        path="/v1/scan-jobs",
         payload={},
     )
 

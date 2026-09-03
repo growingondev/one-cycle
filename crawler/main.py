@@ -1,9 +1,21 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException
-from pydantic import BaseModel
-from datetime import datetime
 import uuid
+from datetime import datetime, timezone
 
-from crawler import crawl_lh_notices, recollect_lh_notice
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from pydantic import BaseModel
+
+if __package__:
+    from .crawler import (
+        crawl_lh_notices,
+        recollect_lh_notice,
+        scan_lh_notice_list,
+    )
+else:
+    from crawler import (
+        crawl_lh_notices,
+        recollect_lh_notice,
+        scan_lh_notice_list,
+    )
 
 app = FastAPI(title="LH Crawler API")
 
@@ -34,6 +46,19 @@ def run_crawl_task(job_id: str):
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error_code"] = "CRAWLER_EXECUTION_FAILED"
         jobs[job_id]["message"] = f"크롤링 전체 수집 실패: {str(e)}"
+
+
+def run_scan_task(job_id: str) -> None:
+    """공고 목록 메타데이터 스캔 백그라운드 작업"""
+    jobs[job_id]["status"] = "running"
+    try:
+        result = scan_lh_notice_list()
+        jobs[job_id]["status"] = "completed"
+        jobs[job_id]["result"] = result
+    except Exception as exc:  # noqa: BLE001 - 백그라운드 작업 실패를 상태로 보존한다.
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error_code"] = "SCAN_EXECUTION_FAILED"
+        jobs[job_id]["message"] = f"공고 목록 스캔 실패: {exc!s}"
 
 def run_recollect_task(job_id: str, source_announcement_id: str, detail_url: str):
     """개별 공고 재수집 백그라운드 작업"""
@@ -75,6 +100,28 @@ async def create_recollect_job(req: RecollectRequest, background_tasks: Backgrou
     jobs[job_id] = {"job_id": job_id, "status": "queued"}
     
     background_tasks.add_task(run_recollect_task, job_id, req.source_announcement_id, req.detail_url)
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.post("/v1/scan-jobs")
+async def create_scan_job(background_tasks: BackgroundTasks):
+    """파일 다운로드 없는 공고 목록 스캔 요청 API"""
+    if is_crawler_busy():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "CRAWLER_JOB_ALREADY_RUNNING",
+                "message": "이미 실행 중이거나 대기 중인 크롤링 작업이 있습니다.",
+            },
+        )
+
+    job_id = (
+        f"scan_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        f"_{uuid.uuid4().hex[:6]}"
+    )
+    jobs[job_id] = {"job_id": job_id, "status": "queued"}
+
+    background_tasks.add_task(run_scan_task, job_id)
     return {"job_id": job_id, "status": "queued"}
 
 @app.get("/v1/crawl-jobs/{job_id}")
