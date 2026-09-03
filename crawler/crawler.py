@@ -4,6 +4,7 @@ import os
 import shutil
 import sys
 import time
+import traceback
 
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 # 프로젝트 루트를 import 경로에 추가
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+NOTICE_LINK_SELECTOR = (
+    ".mVw.bbs_tit "
+    "a.wrtancInfoBtn"
+)
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
@@ -66,6 +72,37 @@ def get_crawler_staging_dir() -> Path:
 # ==========================================
 # 유틸리티
 # ==========================================
+
+def wait_for_notice_element(
+    driver,
+    *,
+    index: int,
+    expected_total: int,
+    timeout: int = 30,
+):
+    """
+    상세 페이지에서 목록으로 돌아온 뒤 전체 공고 DOM이
+    복원될 때까지 기다리고 지정한 공고 요소를 반환한다.
+    """
+
+    def find_notice(current_driver):
+        try:
+            notices = current_driver.find_elements(
+                By.CSS_SELECTOR,
+                NOTICE_LINK_SELECTOR,
+            )
+        except Exception:
+            return False
+
+        if len(notices) < expected_total:
+            return False
+
+        return notices[index]
+
+    return WebDriverWait(
+        driver,
+        timeout,
+    ).until(find_notice)
 
 def calculate_sha256(file_path: str | Path) -> str:
     """파일의 SHA-256 체크섬을 계산한다."""
@@ -798,20 +835,11 @@ def crawl_lh_notices() -> dict:
         )
 
         for index in range(total_count):
-            notices = WebDriverWait(
+            notice_elem = wait_for_notice_element(
                 driver,
-                10,
-            ).until(
-                EC.visibility_of_all_elements_located(
-                    (
-                        By.CSS_SELECTOR,
-                        ".mVw.bbs_tit "
-                        "a.wrtancInfoBtn",
-                    )
-                )
+                index=index,
+                expected_total=total_count,
             )
-
-            notice_elem = notices[index]
 
             title = (
                 notice_elem.text.strip()
@@ -956,6 +984,8 @@ def crawl_lh_notices() -> dict:
 
 
     except Exception as exc:
+        traceback.print_exc()
+
         fatal_error = (
             "크롤링 중 치명적 오류 발생: "
             f"{exc}"
