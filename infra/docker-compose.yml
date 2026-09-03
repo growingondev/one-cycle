@@ -27,6 +27,42 @@ services:
       retries: 10
       start_period: 10s
 
+  crawler:
+    build:
+      context: ../crawler
+      dockerfile: Dockerfile
+
+    image: one-cycle-crawler:dev
+    container_name: one-cycle-crawler
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
+    environment:
+      CRAWLER_STAGING_DIR: /data/documents
+
+    volumes:
+      - "${DOCUMENT_STORAGE_HOST_PATH:-../runtime/documents}:/data/documents"
+
+    ports:
+      - "127.0.0.1:18004:8000"
+
+    shm_size: "2gb"
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
   backend:
     build:
       context: ..
@@ -45,7 +81,10 @@ services:
       POSTGRES_PORT: "5432"
       RAG_SERVICE_BASE_URL: http://rag:18002
       DOCUMENT_WORKER_BASE_URL: http://document-worker:18003
-      CRAWLER_STAGING_DIR: /data/documents
+      CRAWLER_SERVICE_BASE_URL: http://crawler:8000
+      CRAWLER_SERVICE_TIMEOUT_SECONDS: "30"
+      CRAWLER_JOB_TIMEOUT_SECONDS: "3600"
+      CRAWLER_JOB_POLL_INTERVAL_SECONDS: "5"
 
     volumes:
       - "${DOCUMENT_STORAGE_HOST_PATH:-../runtime/documents}:/data/documents"
