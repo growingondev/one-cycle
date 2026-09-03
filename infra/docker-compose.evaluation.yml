@@ -1,4 +1,8 @@
 services:
+  # ============================================================
+  # Evaluation Backend
+  # ============================================================
+
   eval-backend:
     build:
       context: ..
@@ -13,16 +17,16 @@ services:
 
     environment:
       APP_ENVIRONMENT: docker
+
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_DB: one_cycle_evaluation_tmp
 
       RAG_SERVICE_BASE_URL: http://eval-rag:18002
-      DOCUMENT_WORKER_BASE_URL: http://document-worker:18003
+      DOCUMENT_WORKER_BASE_URL: http://eval-document-worker:18003
 
     volumes:
-      - "${DOCUMENT_STORAGE_HOST_PATH:-../runtime/documents}:/data/documents"
-      - "${PIPELINE_OUTPUT_HOST_PATH:-../runtime/outputs}:/app/outputs"
+      - "../runtime/outputs:/app/outputs"
 
     ports:
       - "127.0.0.1:19000:18000"
@@ -30,8 +34,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
       eval-rag:
         condition: service_started
+
+      eval-document-worker:
+        condition: service_started
+
+
+  # ============================================================
+  # Evaluation RAG
+  # ============================================================
 
   eval-rag:
     build:
@@ -60,11 +73,43 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
       embedding:
         condition: service_healthy
+
       llm:
         condition: service_healthy
 
-  document-worker:
+
+  # ============================================================
+  # Evaluation Document Worker
+  # ============================================================
+
+  eval-document-worker:
+    build:
+      context: ..
+      dockerfile: infra/document-worker/Dockerfile
+
+    image: one-cycle-document-worker:dev
+    container_name: one-cycle-eval-document-worker
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
+    environment:
+      EMBEDDING_SERVICE_URL: http://embedding:18001
+
     volumes:
+      # 평가 원본문서
       - "../evaluation/source_documents:/app/evaluation/source_documents:ro"
+
+      # 평가 Pipeline 결과물
+      - "../runtime/outputs:/app/outputs"
+
+    ports:
+      - "127.0.0.1:19003:18003"
+
+    depends_on:
+      embedding:
+        condition: service_healthy
