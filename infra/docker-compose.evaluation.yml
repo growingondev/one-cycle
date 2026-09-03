@@ -1,11 +1,69 @@
 services:
-  backend:
+  eval-backend:
+    build:
+      context: ..
+      dockerfile: infra/backend/Dockerfile
+
+    image: one-cycle-backend:dev
+    container_name: one-cycle-eval-backend
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
     environment:
+      APP_ENVIRONMENT: docker
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
       POSTGRES_DB: one_cycle_evaluation_tmp
 
-  rag:
+      RAG_SERVICE_BASE_URL: http://eval-rag:18002
+      DOCUMENT_WORKER_BASE_URL: http://document-worker:18003
+
+    volumes:
+      - "${DOCUMENT_STORAGE_HOST_PATH:-../runtime/documents}:/data/documents"
+      - "${PIPELINE_OUTPUT_HOST_PATH:-../runtime/outputs}:/app/outputs"
+
+    ports:
+      - "127.0.0.1:19000:18000"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      eval-rag:
+        condition: service_started
+
+  eval-rag:
+    build:
+      context: ..
+      dockerfile: docker/rag/Dockerfile
+
+    image: one-cycle-rag:dev
+    container_name: one-cycle-eval-rag
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
     environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
       POSTGRES_DB: one_cycle_evaluation_tmp
+
+      EMBEDDING_SERVICE_URL: http://embedding:18001
+      LLAMA_BASE_URL: http://llm:8080
+      LLAMA_MODEL: ${LLAMA_MODEL:-gemma}
+
+    ports:
+      - "127.0.0.1:19002:18002"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
+      llm:
+        condition: service_healthy
 
   document-worker:
     volumes:

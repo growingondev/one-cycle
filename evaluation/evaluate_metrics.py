@@ -60,6 +60,28 @@ DEFAULT_RAGAS_REQUEST_TIMEOUT_SECONDS = float(
     )
 )
 
+# Faithfulness는 retrieved_contexts가 길어질수록
+# Judge 모델의 context window를 초과할 수 있으므로
+# Faithfulness에 전달하는 Context만 별도로 제한한다.
+#
+# - Recall@K: 전체 retrieved_contexts 그대로 사용
+# - Response Relevancy: 기존 방식 그대로
+# - Factual Correctness: 기존 방식 그대로
+# - Faithfulness: 상위 3개 Context, Context당 최대 2000자
+FAITHFULNESS_MAX_CONTEXTS = int(
+    os.getenv(
+        "RAGAS_FAITHFULNESS_MAX_CONTEXTS",
+        "3",
+    )
+)
+
+FAITHFULNESS_MAX_CHARS_PER_CONTEXT = int(
+    os.getenv(
+        "RAGAS_FAITHFULNESS_MAX_CHARS_PER_CONTEXT",
+        "2000",
+    )
+)
+
 
 # ============================================================
 # Recall 판정 기준
@@ -881,6 +903,43 @@ def parse_question_ids(
 # ============================================================
 
 
+def build_faithfulness_contexts(
+    contexts: list[str],
+) -> list[str]:
+    """
+    Faithfulness 평가에만 사용할 Context를 제한한다.
+
+    기본값:
+    - 검색 순위 상위 3개 Context만 사용
+    - Context 1개당 최대 2000자
+
+    Recall@K 계산에 사용하는 contexts 원본은 수정하지 않는다.
+    Response Relevancy와 Factual Correctness 입력도 변경하지 않는다.
+    """
+    if not contexts:
+        return []
+
+    limited_contexts: list[str] = []
+
+    for context in contexts[
+        :FAITHFULNESS_MAX_CONTEXTS
+    ]:
+        context_text = str(
+            context
+        ).strip()
+
+        if not context_text:
+            continue
+
+        limited_contexts.append(
+            context_text[
+                :FAITHFULNESS_MAX_CHARS_PER_CONTEXT
+            ]
+        )
+
+    return limited_contexts
+
+
 def check_ragas_packages() -> None:
     missing: list[str] = []
 
@@ -1141,13 +1200,31 @@ async def score_one_with_ragas(
             )
 
     if not factual_only:
+        # Faithfulness에만 길이 제한된 Context를 사용한다.
+        # 원본 contexts는 Recall 계산 등 다른 로직에 그대로 유지된다.
+        faithfulness_contexts = (
+            build_faithfulness_contexts(
+                contexts
+            )
+        )
+
+        print(
+            "  [Faithfulness Context] "
+            f"{len(contexts)}개 -> "
+            f"{len(faithfulness_contexts)}개, "
+            f"Context당 최대 "
+            f"{FAITHFULNESS_MAX_CHARS_PER_CONTEXT}자"
+        )
+
         scores[
             "faithfulness"
         ] = await safe_score(
             "faithfulness",
             user_input=user_input,
             response=response,
-            retrieved_contexts=contexts,
+            retrieved_contexts=(
+                faithfulness_contexts
+            ),
         )
 
         scores[
