@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -9,6 +10,7 @@ from backend.app.schemas.announcement import (
 )
 from backend.app.services.announcement_service import (
     get_active_announcement,
+    get_active_announcement_download_info,
     list_active_announcements,
 )
 
@@ -74,3 +76,34 @@ def get_announcement(
             detail="공고를 찾을 수 없습니다.",
         )
     return result
+
+
+@router.get("/{announcement_id}/download")
+def download_announcement_document(
+    announcement_id: int,
+    db: Session = Depends(get_db),
+):
+    try:
+        info = get_active_announcement_download_info(db, announcement_id)
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="공고문 다운로드 정보를 조회하지 못했습니다.",
+        ) from exc
+
+    if info is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="다운로드 가능한 공고문을 찾을 수 없습니다.",
+        )
+    if not info["storage_path"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="공고문 파일이 저장소에 존재하지 않습니다.",
+        )
+
+    return FileResponse(
+        path=info["storage_path"],
+        filename=info["filename"],
+        media_type="application/octet-stream",
+    )
