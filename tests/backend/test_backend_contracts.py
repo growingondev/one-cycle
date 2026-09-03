@@ -5,6 +5,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from backend.app.services.chat_service import answer_question_via_rag
+from backend.app.main import app as backend_app
 from backend.app.services.collection_service import (
     VALID_DOCUMENT_FORMATS,
     _validate_collection_result,
@@ -128,6 +129,22 @@ class CollectionContractTest(unittest.TestCase):
 
         self.assertEqual(len(announcements), 1)
         self.assertEqual(announcements[0].notice_type, "공공임대")
+
+
+class PublicAnnouncementApiContractTest(unittest.TestCase):
+    def test_public_announcement_download_route_exists(self):
+        openapi_paths = backend_app.openapi().get("paths", {})
+
+        self.assertIn(
+            "/api/announcements/{announcement_id}/download",
+            openapi_paths,
+        )
+        self.assertIn(
+            "get",
+            openapi_paths[
+                "/api/announcements/{announcement_id}/download"
+            ],
+        )
 
 
 class PipelineGatewayContractTest(unittest.TestCase):

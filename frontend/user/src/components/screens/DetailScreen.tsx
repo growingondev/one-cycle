@@ -295,6 +295,7 @@ export function DetailScreen({
   const [isSummaryOpen, setIsSummaryOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [currentNotice, setCurrentNotice] = useState<any>(notice || null);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   // 💡 제출서류 근거 확인 토글을 위한 상태
 const [showDocsEvidence, setShowDocsEvidence] = useState(false);
@@ -437,14 +438,47 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
     }
   };
 
-  const handleDownload = () => {
-    // 💡 백엔드에서 넘겨주는 파일 URL 변수명에 맞게 수정하세요 (예: currentNotice.pdfUrl, file_url 등)
-    const downloadUrl = currentNotice.file_url || currentNotice.pdfUrl; 
-    
-    if (downloadUrl) {
-      window.open(downloadUrl, "_blank"); // 새 창에서 파일 열기/다운로드
-    } else {
-      showToast("현재 이 공고는 다운로드할 수 있는 원본 파일이 없습니다.");
+  const handleDownload = async () => {
+    if (!currentNotice?.id || isDownloading) return;
+
+    setIsDownloading(true);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/announcements/${currentNotice.id}/download`
+      );
+
+      if (response.status === 404 || response.status === 409) {
+        showToast("현재 이 공고는 다운로드할 수 있는 원본 파일이 없습니다.");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(`공고문 다운로드 오류: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const documentInfo = currentNotice.documents?.find(
+        (item: any) => item.downloadStatus === "completed"
+      );
+      const contentDisposition = response.headers.get("Content-Disposition") || "";
+      const encodedFilename = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      const responseFilename = encodedFilename
+        ? decodeURIComponent(encodedFilename)
+        : undefined;
+      const link = document.createElement("a");
+
+      link.href = objectUrl;
+      link.download = responseFilename || documentInfo?.originalFilename || "공고문";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      console.error("공고문 다운로드 실패:", error);
+      showToast("공고문을 다운로드하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -613,36 +647,36 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
       </button>
 
       {/* 공고 제목 */}
-      <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-[26px] lg:text-[30px] font-extrabold text-slate-900 leading-tight tracking-tight mb-3 lg:mb-4">공고 상세 및 AI 질의응답</h1>
+      <div className="mb-6">
+        <div className="flex items-start justify-between gap-3 mb-3 lg:mb-4">
+          <h1 className="text-[26px] lg:text-[30px] font-extrabold text-slate-900 leading-tight tracking-tight">공고 상세 및 AI 질의응답</h1>
 
-          <div className="flex flex-col lg:flex-row lg:items-center gap-3">
-            <div className="flex-shrink-0 flex items-center gap-2">
-              <StatusPill>{toDisplayText(displayPublicationStatus, "상태 미확인")}</StatusPill>
-              {currentNotice.notice_type && (
-                <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded text-[13px] font-bold">{currentNotice.notice_type}</span>
-              )}
-            </div>
-            <strong className="text-[17px] lg:text-[20px] text-slate-900 leading-snug">{toDisplayText(currentNotice.title, "공고명 없음")}</strong>
-          </div>
-          <div className="flex-shrink-0 pt-1 lg:pt-0">
           <button
             onClick={handleDownload}
-            className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2.5 rounded-lg text-[14px] lg:text-[15px] font-bold hover:bg-slate-900 transition-colors shadow-sm"
+            disabled={isDownloading}
+            className="flex-shrink-0 flex items-center gap-2 bg-slate-800 text-white px-3 lg:px-4 py-2.5 rounded-lg text-[13px] lg:text-[15px] font-bold hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60 transition-colors shadow-sm"
           >
             <Download size={18} />
-            공고문 다운로드
+            {isDownloading ? "다운로드 중" : "공고문 다운로드"}
           </button>
         </div>
 
-          <div className="text-[13px] lg:text-[15px] text-slate-500 mt-3">
-            <span className="mr-2">게시일</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayAnnouncementDate, "-")}</span>
-            <span className="mr-2">공고 상태</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayPublicationStatus, "상태 미확인")}</span>
-            {displayLocation !== "-" && (
-              <><span className="mr-2">공급 위치</span><span className="text-slate-800 font-medium">{displayLocation}</span></>
+        <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+          <div className="flex-shrink-0 flex items-center gap-2">
+            <StatusPill>{toDisplayText(displayPublicationStatus, "상태 미확인")}</StatusPill>
+            {currentNotice.notice_type && (
+              <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded text-[13px] font-bold">{currentNotice.notice_type}</span>
             )}
           </div>
+          <strong className="text-[17px] lg:text-[20px] text-slate-900 leading-snug">{toDisplayText(currentNotice.title, "공고명 없음")}</strong>
+        </div>
+
+        <div className="text-[13px] lg:text-[15px] text-slate-500 mt-3">
+          <span className="mr-2">게시일</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayAnnouncementDate, "-")}</span>
+          <span className="mr-2">공고 상태</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayPublicationStatus, "상태 미확인")}</span>
+          {displayLocation !== "-" && (
+            <><span className="mr-2">공급 위치</span><span className="text-slate-800 font-medium">{displayLocation}</span></>
+          )}
         </div>
       </div>
 

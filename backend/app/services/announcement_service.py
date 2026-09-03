@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -225,3 +226,47 @@ def get_active_announcement(
         ],
         keyInformation=key_info,
     )
+
+
+def get_active_announcement_download_info(
+    db: Session,
+    announcement_id: int,
+) -> dict[str, str | None] | None:
+    """Return the primary downloadable document for a public announcement."""
+    row = db.execute(
+        text(
+            """
+            SELECT d.original_filename, d.storage_path
+            FROM system_state ss
+            JOIN announcements a
+              ON a.collection_run_id = ss.active_collection_run_id
+            JOIN documents d
+              ON d.announcement_id = a.id
+            WHERE a.id = :announcement_id
+              AND a.is_visible IS TRUE
+              AND d.download_status = 'completed'
+            ORDER BY
+              CASE d.document_role
+                WHEN 'primary' THEN 0
+                WHEN 'supporting' THEN 1
+                ELSE 2
+              END,
+              d.created_at DESC,
+              d.id DESC
+            LIMIT 1
+            """
+        ),
+        {"announcement_id": announcement_id},
+    ).mappings().first()
+
+    if row is None:
+        return None
+
+    storage_path = row["storage_path"]
+    if storage_path and not Path(storage_path).is_file():
+        storage_path = None
+
+    return {
+        "filename": row["original_filename"],
+        "storage_path": storage_path,
+    }

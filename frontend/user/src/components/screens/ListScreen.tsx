@@ -38,6 +38,15 @@ function formatAnnouncementTitle(title: string | null | undefined) {
     .trim();
 }
 
+function formatRegionParts(region: string | null | undefined) {
+  const value = region?.trim() || "-";
+  const match =
+    value.match(/^(강원|전북|제주)(특별자치도)$/) ??
+    value.match(/^(세종)(특별자치시)$/);
+
+  return match ? [match[1], match[2]] : [value];
+}
+
 function formatPublicationStatus(
   status: string | null | undefined
 ) {
@@ -296,7 +305,7 @@ export function ListScreen({
 
       <div className="hidden lg:block bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
         {/* 💡 헤더: 7칸으로 맞추고 폰트 크기 20px로 상향 */}
-        <div className="grid grid-cols-[60px_100px_minmax(300px,1fr)_100px_110px_110px_100px] items-center h-[52px] bg-slate-50 border-b border-slate-200 text-[20px] font-bold text-slate-700 px-2 text-center">
+        <div className="grid grid-cols-[60px_100px_minmax(280px,1fr)_120px_110px_110px_100px] items-center h-[52px] bg-slate-50 border-b border-slate-200 text-[20px] font-bold text-slate-700 px-2 text-center">
           <div>번호</div>
           <div>유형</div>
           <div className="text-left px-4">공고명</div>
@@ -311,7 +320,7 @@ export function ListScreen({
           <button
             key={a.id}
             onClick={() => goToDetail(a)}
-            className="w-full grid grid-cols-[60px_100px_minmax(300px,1fr)_100px_110px_110px_100px] items-center min-h-[68px] border-b border-slate-100 bg-white hover:bg-blue-50/50 text-[17px] text-slate-700 transition-colors px-2 text-center"
+            className="w-full grid grid-cols-[60px_100px_minmax(280px,1fr)_120px_110px_110px_100px] items-center min-h-[68px] border-b border-slate-100 bg-white hover:bg-blue-50/50 text-[17px] text-slate-700 transition-colors px-2 text-center"
           >
             <div className="font-bold text-[16px] text-slate-500">
               {a.notice_number || a.id}
@@ -325,8 +334,12 @@ export function ListScreen({
               {formatAnnouncementTitle(a.title)}
             </div>
 
-            <div>
-              {a.region ?? "-"}
+            <div className="flex flex-wrap justify-center gap-x-1 px-1 text-[16px] leading-snug">
+              {formatRegionParts(a.region).map((part, index) => (
+                <span key={`${a.id}-region-${index}`} className="whitespace-nowrap">
+                  {part}
+                </span>
+              ))}
             </div>
             
             <div className="text-[17px]">
