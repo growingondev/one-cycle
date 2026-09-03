@@ -586,6 +586,86 @@ def assert_evaluation_database() -> None:
             f"{EVALUATION_DB_NAME}"
         )
 
+def activate_evaluation_collection(
+    *,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    현재 평가하려는 dataset의 CollectionRun을
+    Evaluation DB의 active collection으로 전환한다.
+
+    evaluate_rag.py는 manifest에 저장된
+    collection_run_id를 기준으로 자동 전환한다.
+
+    예:
+        BD manifest -> collection_run_id=6
+        GC manifest -> collection_run_id=7
+
+    따라서 BD/GC/DH 등 평가셋을 변경할 때
+    system_state.active_collection_run_id를
+    수동으로 변경할 필요가 없다.
+    """
+
+    assert_evaluation_database()
+
+    collection_run_id_raw = (
+        manifest.get(
+            "collection_run_id"
+        )
+    )
+
+    if collection_run_id_raw is None:
+        raise RuntimeError(
+            "manifest에 collection_run_id가 없습니다."
+        )
+
+    try:
+        collection_run_id = int(
+            collection_run_id_raw
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise RuntimeError(
+            "manifest의 collection_run_id가 "
+            "올바른 정수가 아닙니다: "
+            f"{collection_run_id_raw}"
+        ) from exc
+
+    if collection_run_id <= 0:
+        raise RuntimeError(
+            "manifest의 collection_run_id는 "
+            "1 이상이어야 합니다: "
+            f"{collection_run_id}"
+        )
+
+    from backend.app.services.collection_publish_service import (
+        publish_collection_run,
+    )
+
+    result = publish_collection_run(
+        collection_run_id
+    )
+
+    active_collection_run_id = int(
+        result[
+            "active_collection_run_id"
+        ]
+    )
+
+    if (
+        active_collection_run_id
+        != collection_run_id
+    ):
+        raise RuntimeError(
+            "평가 Collection 활성화에 실패했습니다. "
+            f"expected={collection_run_id}, "
+            f"actual={active_collection_run_id}"
+        )
+
+    return result
 
 # ============================================================
 # 실제 문서 Pipeline 준비
@@ -971,6 +1051,31 @@ def evaluate(
     """
 
     assert_evaluation_database()
+
+    activation_result = (
+        activate_evaluation_collection(
+            manifest=manifest,
+        )
+    )
+
+    print(
+        "\n[Evaluation Collection 활성화]"
+    )
+
+    print(
+        "previous : "
+        f"{activation_result.get('previous_collection_run_id')}"
+    )
+
+    print(
+        "active   : "
+        f"{activation_result.get('active_collection_run_id')}"
+    )
+
+    print(
+        "status   : "
+        f"{activation_result.get('status')}"
+    )
 
     if output_xlsx.is_file():
 
