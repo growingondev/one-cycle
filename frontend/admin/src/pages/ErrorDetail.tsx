@@ -68,9 +68,24 @@ export default function ErrorDetail({ id, onBack }: ErrorDetailProps) {
       setIsUpdating(true);
       const res = await fetch(`/api/admin/errors/${id}/retry`, { method: 'POST', credentials: 'include' });
       if (res.status === 401) { navigate('/'); return; }
-      if (res.status === 409) { alert('현재 재시도 할 수 없는 상태입니다.'); return; }
-      if (!res.ok) { alert('서버 오류로 인해 재시도 요청에 실패했습니다.'); return; }
-      alert('오류 재시도 작업이 요청되었습니다.');
+      const responseBody = await res.json().catch(() => null);
+      const detailMessage = typeof responseBody?.detail === 'string'
+        ? responseBody.detail
+        : responseBody?.detail?.message;
+
+      if (!res.ok) {
+        alert(detailMessage || '오류가 발생한 단계의 재시도에 실패했습니다.');
+        return;
+      }
+
+      const refreshed = await fetch(`/api/admin/errors/${id}`, { credentials: 'include' });
+      if (refreshed.ok) {
+        const updated = await refreshed.json();
+        setDetail(updated);
+        setStatus(updated.status);
+      }
+
+      alert(responseBody?.message || '오류가 발생한 단계의 재시도를 완료했습니다.');
     } catch {
       alert('네트워크 오류가 발생했습니다.');
     } finally {
@@ -88,7 +103,13 @@ export default function ErrorDetail({ id, onBack }: ErrorDetailProps) {
           <p style={{ margin: 0, color: 'var(--muted)', fontSize: '14px' }}>오류 정보 및 상태를 관리합니다.</p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="btn btn-outline" onClick={handleRetry} disabled={isUpdating}>↻ 재시도</button>
+          <button
+            className="btn btn-outline"
+            onClick={handleRetry}
+            disabled={isUpdating || status !== 'unresolved'}
+          >
+            {isUpdating ? '재시도 중...' : '↻ 재시도'}
+          </button>
           <button className="btn btn-outline" onClick={onBack}>← 목록으로</button>
         </div>
       </div>
@@ -128,7 +149,7 @@ export default function ErrorDetail({ id, onBack }: ErrorDetailProps) {
             { label: '해결 시각', value: detail.resolved_at },
             { label: '발생 단계', value: detail.stage },
             { label: '대상 공고', value: detail.announcement_title },
-            { label: '대상 문서', value: detail.document_name },
+            { label: '대상 문서', value: detail.document_name || detail.target_filename },
             { label: '입력된 해결 내용', value: detail.resolution },
           ].map((row, idx) => (
             <div key={idx} style={{ display: 'grid', gridTemplateColumns: '120px 1fr', padding: '12px 24px', fontSize: '14px' }}>

@@ -439,6 +439,7 @@ def _process_single_notice(
         str | None = None,
     detail_url_override:
         str | None = None,
+    target_file_name: str | None = None,
 ) -> dict:
     """
     현재 상세 페이지의 첨부파일을 처리한다.
@@ -491,6 +492,12 @@ def _process_single_notice(
     errors: list[dict] = []
 
     notice_success = True
+    normalized_target_file_name = (
+        _safe_download_filename(target_file_name)
+        if target_file_name
+        else None
+    )
+    target_file_found = False
 
     try:
         attachments = WebDriverWait(
@@ -522,6 +529,14 @@ def _process_single_notice(
             file_name = _safe_download_filename(
                 file_link.text
             )
+
+            if (
+                normalized_target_file_name is not None
+                and file_name != normalized_target_file_name
+            ):
+                continue
+
+            target_file_found = True
 
             file_ext = (
                 Path(file_name)
@@ -754,6 +769,26 @@ def _process_single_notice(
                         None,
                 }
             )
+
+        if (
+            normalized_target_file_name is not None
+            and not target_file_found
+        ):
+            err_msg = (
+                "재시도 대상 첨부파일을 찾을 수 없습니다: "
+                f"{normalized_target_file_name}"
+            )
+            errors.append(
+                build_error(
+                    error_type="download",
+                    stage="download",
+                    error_code="TARGET_ATTACHMENT_NOT_FOUND",
+                    message=err_msg,
+                    source_announcement_id=source_announcement_id,
+                    file_name=normalized_target_file_name,
+                )
+            )
+            notice_success = False
 
     except Exception as exc:
         err_msg = (
@@ -1226,6 +1261,8 @@ def crawl_lh_notices() -> dict:
 def recollect_lh_notice(
     source_announcement_id: str,
     detail_url: str,
+    *,
+    target_file_name: str | None = None,
 ) -> dict:
     """
     개별 공고 재수집 공식 callable.
@@ -1312,6 +1349,7 @@ def recollect_lh_notice(
                 detail_url_override=(
                     detail_url
                 ),
+                target_file_name=target_file_name,
             )
         )
 
@@ -1350,6 +1388,8 @@ def recollect_lh_notice(
                 source_announcement_id,
             "detail_url":
                 detail_url,
+            "target_file_name":
+                target_file_name,
             "data":
                 data,
             "errors":

@@ -78,35 +78,48 @@ def _get_document_processing_runtime() -> str:
     return runtime
 
 
-def reprocess_document(document_id: int):
+def reprocess_document(
+    document_id: int,
+    start_stage: str | None = None,
+):
     runtime = _get_document_processing_runtime()
 
     if runtime == "legacy":
-        return _load_callable(
-            "DOCUMENT_REPROCESSOR"
-        )(
-            document_id=document_id
-        )
+        if start_stage:
+            raise PipelineUnavailableError(
+                "실패 단계부터 문서 재시도하려면 "
+                "DOCUMENT_PROCESSING_RUNTIME=worker_http 설정이 필요합니다."
+            )
+        runner = _load_callable("DOCUMENT_REPROCESSOR")
+        return runner(document_id=document_id)
 
     from backend.app.services import (
         document_processing_service,
     )
 
-    return (
-        document_processing_service
-        .process_document_with_worker(
-            document_id
+    if start_stage:
+        return document_processing_service.process_document_with_worker(
+            document_id,
+            start_stage=start_stage,
         )
+
+    return document_processing_service.process_document_with_worker(
+        document_id
     )
 
 
 def retry_error(
     error_id: int,
-    document_id: int,
-    stage: str | None,
 ):
-    return _load_callable("ERROR_RETRY_RUNNER")(
-        error_id=error_id,
-        document_id=document_id,
-        start_stage=stage,
+    target = os.getenv("ERROR_RETRY_RUNNER", "").strip()
+
+    if target:
+        return _load_callable("ERROR_RETRY_RUNNER")(
+            error_id=error_id,
+        )
+
+    from backend.app.services.error_retry_service import (
+        retry_error_from_stage,
     )
+
+    return retry_error_from_stage(error_id=error_id)

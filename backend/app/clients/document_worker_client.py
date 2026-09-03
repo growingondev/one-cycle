@@ -68,6 +68,7 @@ def process_document(
     filename: str,
     document_format: Literal["hwp", "hwpx"],
     storage_path: str,
+    start_stage: str | None = None,
     base_url: str | None = None,
     timeout_seconds: float | None = None,
 ) -> DocumentWorkerResponse:
@@ -123,15 +124,18 @@ def process_document(
         f"/v1/documents/{document_id}/process"
     )
 
+    request_payload = {
+        "announcement_id": announcement_id,
+        "announcement_key": normalized_announcement_key,
+        "source": source.model_dump(),
+    }
+    normalized_start_stage = str(start_stage or "").strip()
+    if normalized_start_stage:
+        request_payload["start_stage"] = normalized_start_stage
+
     payload = post_json(
         url=endpoint,
-        payload={
-            "announcement_id": announcement_id,
-            "announcement_key": (
-                normalized_announcement_key
-            ),
-            "source": source.model_dump(),
-        },
+        payload=request_payload,
         timeout_seconds=service_timeout,
     )
 

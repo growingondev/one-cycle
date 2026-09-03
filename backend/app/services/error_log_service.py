@@ -151,6 +151,7 @@ def record_error(
     processing_run_id: int | None = None,
     error_code: str | None = None,
     stack_trace: str | None = None,
+    target_filename: str | None = None,
 ) -> dict[str, Any]:
     """
     Crawler / 문서 처리 / AI 기능에서 발생한 오류를
@@ -196,6 +197,12 @@ def record_error(
             stage=stage,
             message=message,
             stack_trace=stack_trace,
+            target_filename=(
+                target_filename.strip()
+                if isinstance(target_filename, str)
+                and target_filename.strip()
+                else None
+            ),
             status="unresolved",
         )
 

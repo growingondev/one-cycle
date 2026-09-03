@@ -395,6 +395,7 @@ def recollect_and_persist(
     announcement_id: int,
     source_announcement_id_override: str | None = None,
     detail_url_override: str | None = None,
+    target_file_name: str | None = None,
 ) -> dict[str, Any]:
     """
     기존 Announcement 한 건을 다시 수집하고
@@ -454,9 +455,15 @@ def recollect_and_persist(
         )
 
     # 2. Crawler API를 통한 개별 재수집 실행
+    crawler_kwargs: dict[str, Any] = {
+        "source_announcement_id": source_announcement_id,
+        "detail_url": detail_url,
+    }
+    if target_file_name is not None:
+        crawler_kwargs["target_file_name"] = target_file_name
+
     crawler_result = crawler_client.recollect_announcement(
-        source_announcement_id=source_announcement_id,
-        detail_url=detail_url,
+        **crawler_kwargs
     )
 
     _validate_recollection_result(
@@ -635,6 +642,7 @@ def recollect_and_persist(
                 raw_error.get("message")
                 or "Crawler 재수집 오류"
             ),
+            target_filename=file_name or None,
             collection_run_id=collection_run_id,
             announcement_id=announcement_id,
             document_id=(

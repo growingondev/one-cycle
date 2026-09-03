@@ -309,6 +309,7 @@ def recollect_persist_and_process(
     announcement_id: int,
     source_announcement_id_override: str | None = None,
     detail_url_override: str | None = None,
+    target_file_name: str | None = None,
 ) -> dict[str, Any]:
     """
     개별 공고 재수집 → DB 저장 →
@@ -324,6 +325,8 @@ def recollect_persist_and_process(
         )
     if detail_url_override is not None:
         recollect_kwargs["detail_url_override"] = detail_url_override
+    if target_file_name is not None:
+        recollect_kwargs["target_file_name"] = target_file_name
 
     persistence = recollect_and_persist(**recollect_kwargs)
 

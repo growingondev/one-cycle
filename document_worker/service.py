@@ -1188,6 +1188,76 @@ def _run_key_information_extraction(
 # Document Worker 진입점
 # ============================================================
 
+WORKER_STAGE_ORDER = {
+    "parser": 0,
+    "normalizer": 1,
+    "structure": 2,
+    "chunking": 3,
+    "embedding": 4,
+    "key_information": 5,
+}
+
+WORKER_STAGE_ALIASES = {
+    "prepare": "parser",
+    "format_detection": "parser",
+    "parsing": "parser",
+    "normalizing": "normalizer",
+    "structuring": "structure",
+    "verification": "structure",
+    "key_information_extraction": "key_information",
+    "persistence": "key_information",
+    "activation": "key_information",
+}
+
+
+def _normalize_start_stage(stage: str | None) -> str:
+    normalized = str(stage or "parser").strip().lower()
+    normalized = WORKER_STAGE_ALIASES.get(normalized, normalized)
+    if normalized not in WORKER_STAGE_ORDER:
+        raise DocumentWorkerServiceError(
+            status_code=422,
+            error_code="DOCUMENT_RETRY_STAGE_INVALID",
+            message=f"지원하지 않는 문서 재시도 단계입니다: {stage}",
+        )
+    return normalized
+
+
+def _require_retry_artifacts(*paths: Path) -> None:
+    missing = [str(path) for path in paths if not path.is_file()]
+    if missing:
+        raise DocumentWorkerServiceError(
+            status_code=409,
+            error_code="DOCUMENT_RETRY_ARTIFACT_MISSING",
+            message=(
+                "실패 단계부터 재시도하는 데 필요한 이전 단계 "
+                f"결과가 없습니다: {missing}"
+            ),
+        )
+
+
+def _load_embedding_summary(paths: dict[str, Path]):
+    _require_retry_artifacts(
+        paths["chunks"],
+        paths["embeddings"],
+    )
+    try:
+        document = load_chunk_document(paths["chunks"])
+        vectors = np.load(paths["embeddings"], allow_pickle=False)
+    except (ChunkLoadError, OSError, ValueError) as error:
+        raise DocumentWorkerServiceError(
+            status_code=409,
+            error_code="DOCUMENT_RETRY_ARTIFACT_INVALID",
+            message=f"기존 문서 처리 결과를 읽을 수 없습니다: {error}",
+        ) from error
+
+    if vectors.ndim != 2 or vectors.shape[0] != document.chunk_count:
+        raise DocumentWorkerServiceError(
+            status_code=409,
+            error_code="DOCUMENT_RETRY_ARTIFACT_INVALID",
+            message="기존 Chunk와 Embedding 개수가 일치하지 않습니다.",
+        )
+    return document, vectors
+
 def process_document(
     *,
     document_id: int,
@@ -1240,111 +1310,134 @@ def process_document(
         document_id=document_id,
         document_format=document_format,
     )
+    start_stage = _normalize_start_stage(request.start_stage)
+    start_index = WORKER_STAGE_ORDER[start_stage]
 
     # --------------------------------------------------------
     # 4. Parser
     # --------------------------------------------------------
 
-    _run_parser(
-        document_id=document_id,
-        source_path=source_path,
-        original_filename=(
-            request.source.filename
-        ),
-        document_format=document_format,
-        parsed_output=paths["parsed"],
-    )
+    if start_index <= WORKER_STAGE_ORDER["parser"]:
+        _run_parser(
+            document_id=document_id,
+            source_path=source_path,
+            original_filename=(
+                request.source.filename
+            ),
+            document_format=document_format,
+            parsed_output=paths["parsed"],
+        )
+    else:
+        _require_retry_artifacts(paths["parsed"])
 
     # --------------------------------------------------------
     # 5. Normalizer
     # --------------------------------------------------------
 
-    _run_normalizer(
-        document_id=document_id,
-        parsed_input=paths["parsed"],
-        normalized_output=(
-            paths["normalized"]
-        ),
-    )
+    if start_index <= WORKER_STAGE_ORDER["normalizer"]:
+        _run_normalizer(
+            document_id=document_id,
+            parsed_input=paths["parsed"],
+            normalized_output=(
+                paths["normalized"]
+            ),
+        )
+    else:
+        _require_retry_artifacts(paths["normalized"])
     
     # --------------------------------------------------------
     # 6. Structure / Verification
     # --------------------------------------------------------
 
-    _run_structure(
-        document_id=document_id,
-        normalized_input=(
-            paths["normalized"]
-        ),
-        structured_dir=(
-            paths["structured_dir"]
-        ),
-        structure_output=(
-            paths["structure"]
-        ),
-        verification_output=(
-            paths["verification"]
-        ),
-    )
+    if start_index <= WORKER_STAGE_ORDER["structure"]:
+        _run_structure(
+            document_id=document_id,
+            normalized_input=(
+                paths["normalized"]
+            ),
+            structured_dir=(
+                paths["structured_dir"]
+            ),
+            structure_output=(
+                paths["structure"]
+            ),
+            verification_output=(
+                paths["verification"]
+            ),
+        )
+    else:
+        _require_retry_artifacts(
+            paths["structure"],
+            paths["verification"],
+        )
     
     
     # --------------------------------------------------------
     # 7. Chunking
     # --------------------------------------------------------
 
-    _run_chunking(
-        document_id=document_id,
-        announcement_id=(
-            request.announcement_id
-        ),
-        structure_input=(
-            paths["structure"]
-        ),
-        chunks_output=(
-            paths["chunks"]
-        ),
-    )
+    if start_index <= WORKER_STAGE_ORDER["chunking"]:
+        _run_chunking(
+            document_id=document_id,
+            announcement_id=(
+                request.announcement_id
+            ),
+            structure_input=(
+                paths["structure"]
+            ),
+            chunks_output=(
+                paths["chunks"]
+            ),
+        )
+    else:
+        _require_retry_artifacts(paths["chunks"])
 
 
     # --------------------------------------------------------
     # 8. Embedding Service HTTP 연동
     # --------------------------------------------------------
 
-    (
-        embedding_document,
-        embedding_vectors,
-    ) = _run_embedding_service(
-        document_id=document_id,
-        chunks_input=(
-            paths["chunks"]
-        ),
-    )
+    if start_index <= WORKER_STAGE_ORDER["embedding"]:
+        (
+            embedding_document,
+            embedding_vectors,
+        ) = _run_embedding_service(
+            document_id=document_id,
+            chunks_input=(
+                paths["chunks"]
+            ),
+        )
+    else:
+        embedding_document, embedding_vectors = (
+            _load_embedding_summary(paths)
+        )
 
     # --------------------------------------------------------
     # 9. Embedding Artifact 저장
     # --------------------------------------------------------
 
-    _write_embedding_artifacts(
-        document=(
-            embedding_document
-        ),
-        vectors=(
-            embedding_vectors
-        ),
-        embeddings_path=(
-            paths["embeddings"]
-        ),
-        metadata_path=(
-            paths[
-                "embedding_metadata"
-            ]
-        ),
-        report_path=(
-            paths[
-                "embedding_report"
-            ]
-        ),
-    )
+    if start_index <= WORKER_STAGE_ORDER["embedding"]:
+        _write_embedding_artifacts(
+            document=(
+                embedding_document
+            ),
+            vectors=(
+                embedding_vectors
+            ),
+            embeddings_path=(
+                paths["embeddings"]
+            ),
+            metadata_path=(
+                paths[
+                    "embedding_metadata"
+                ]
+            ),
+            report_path=(
+                paths[
+                    "embedding_report"
+                ]
+            ),
+        )
 
     # --------------------------------------------------------
     # 10. Key Information Extraction

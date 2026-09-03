@@ -176,6 +176,7 @@ def _validate_worker_response_context(
 
 def process_document_via_worker(
     document_id: int,
+    start_stage: str | None = None,
 ) -> DocumentWorkerResponse:
     """
     Request document processing from Document Worker.
@@ -204,15 +205,19 @@ def process_document_via_worker(
             "the registered Document context."
         )
 
+    worker_kwargs: dict[str, Any] = {
+        "document_id": context["document_id"],
+        "announcement_id": context["announcement_id"],
+        "announcement_key": context["announcement_key"],
+        "filename": context["filename"],
+        "document_format": context["document_format"],
+        "storage_path": context["storage_path"],
+    }
+    if start_stage:
+        worker_kwargs["start_stage"] = start_stage
+
     response = document_worker_client.process_document(
-        document_id=context["document_id"],
-        announcement_id=context["announcement_id"],
-        announcement_key=context["announcement_key"],
-        filename=context["filename"],
-        document_format=(
-            context["document_format"]
-        ),
-        storage_path=context["storage_path"],
+        **worker_kwargs,
     )
 
     _validate_worker_response_context(
@@ -457,6 +462,7 @@ def finalize_document_worker_result(
 
 def process_document_with_worker(
     document_id: int,
+    start_stage: str | None = None,
 ) -> dict[str, Any]:
     """
     Complete Backend orchestration for Document Worker.
@@ -466,9 +472,13 @@ def process_document_with_worker(
     """
 
     try:
-        response = process_document_via_worker(
-            document_id
-        )
+        if start_stage:
+            response = process_document_via_worker(
+                document_id,
+                start_stage=start_stage,
+            )
+        else:
+            response = process_document_via_worker(document_id)
     except InternalServiceHTTPError as error:
         return {
             "success": False,

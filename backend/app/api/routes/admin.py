@@ -46,6 +46,11 @@ from backend.app.services.pipeline_gateway import (
     retry_error,
     sync_announcements,
 )
+from backend.app.services.error_retry_service import (
+    ErrorRetryConflictError,
+    ErrorRetryExecutionError,
+    ErrorRetryNotSupportedError,
+)
 
 router = APIRouter(
     prefix="/admin",
@@ -430,16 +435,35 @@ def run_error_retry(
         raise HTTPException(404, "오류를 찾을 수 없습니다.")
 
     try:
-        result = retry_error(
-            error_id=error_id,
-            document_id=error.document_id,
-            stage=error.stage,
-        )
+        result = retry_error(error_id=error_id)
+    except ErrorRetryConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ErrorRetryNotSupportedError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ErrorRetryExecutionError as exc:
+        raise HTTPException(
+            502,
+            {
+                "message": str(exc),
+                "result": exc.result,
+            },
+        ) from exc
     except PipelineUnavailableError as exc:
         raise HTTPException(503, str(exc)) from exc
+    except (
+        CrawlerJobFailedError,
+        InternalServiceConfigurationError,
+        InternalServiceHTTPError,
+        InternalServiceResponseError,
+        InternalServiceUnavailableError,
+    ) as exc:
+        _raise_crawler_api_error(exc)
 
     return ActionAcceptedResponse(
         accepted=True,
-        message=f"{error.stage or '처음'} 단계부터 재처리 요청을 전달했습니다.",
+        message=(
+            f"해당 공고의 {error.stage or '처음'} 단계 "
+            "재시도를 완료했습니다."
+        ),
         reference=result,
     )

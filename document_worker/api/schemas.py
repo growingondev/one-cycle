@@ -19,6 +19,7 @@ class DocumentProcessRequest(BaseModel):
     announcement_id: int = Field(gt=0)
     announcement_key: str = Field(min_length=1)
     source: DocumentSource
+    start_stage: str | None = None
 
 
 class DocumentWorkerSummary(BaseModel):
