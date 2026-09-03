@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import importlib
 import os
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 class PipelineUnavailableError(RuntimeError):
@@ -42,6 +43,14 @@ def _load_callable(env_name: str) -> Callable[..., Any]:
 
 def collect_announcements():
     return _load_callable("COLLECTION_RUNNER")()
+
+
+def sync_announcements():
+    from backend.app.services.collection_sync_service import (
+        run_incremental_sync,
+    )
+
+    return run_incremental_sync()
 
 
 def recollect_announcement(announcement_id: int):

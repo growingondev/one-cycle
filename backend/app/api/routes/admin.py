@@ -17,6 +17,7 @@ from backend.app.clients.http_json import (
 )
 from backend.app.db.session import get_db
 from backend.app.schemas.admin import (
+    ActionAcceptedResponse,
     AdminAnnouncementDetail,
     AdminAnnouncementListResponse,
     AdminDocumentDetail,
@@ -24,7 +25,6 @@ from backend.app.schemas.admin import (
     AdminErrorDetail,
     AdminErrorListResponse,
     AdminProcessingRunListResponse,
-    ActionAcceptedResponse,
     ErrorStatusUpdateRequest,
 )
 from backend.app.services.admin_service import (
@@ -44,6 +44,7 @@ from backend.app.services.pipeline_gateway import (
     recollect_announcement,
     reprocess_document,
     retry_error,
+    sync_announcements,
 )
 
 router = APIRouter(
@@ -175,6 +176,31 @@ def run_collection():
     return ActionAcceptedResponse(
         accepted=True,
         message="공고 수집 실행 요청을 전달했습니다.",
+        reference=result,
+    )
+
+
+@router.post(
+    "/announcements/sync",
+    response_model=ActionAcceptedResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def run_incremental_collection_sync():
+    """목록 비교 후 신규·정정·변경 공고만 선택 수집한다."""
+    try:
+        result = sync_announcements()
+    except (
+        CrawlerJobFailedError,
+        InternalServiceConfigurationError,
+        InternalServiceHTTPError,
+        InternalServiceResponseError,
+        InternalServiceUnavailableError,
+    ) as exc:
+        _raise_crawler_api_error(exc)
+
+    return ActionAcceptedResponse(
+        accepted=result.get("status") != "failed",
+        message="공고 변경 감지 및 선택 수집을 실행했습니다.",
         reference=result,
     )
 

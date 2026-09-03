@@ -2,19 +2,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.app.services.collection_publish_service import (
+    publish_collection_run,
+)
 from backend.app.services.collection_service import (
     collect_and_persist,
     recollect_and_persist,
-)
-from backend.app.services.collection_publish_service import (
-    publish_collection_run,
 )
 from backend.app.services.error_log_service import record_error
 from backend.app.services.pipeline_gateway import (
     PipelineUnavailableError,
     reprocess_document,
 )
-
 
 STAGE_ERROR_TYPES = {
     "prepare": "parsing",
@@ -308,15 +307,25 @@ def collect_persist_and_process() -> dict[str, Any]:
 def recollect_persist_and_process(
     *,
     announcement_id: int,
+    source_announcement_id_override: str | None = None,
+    detail_url_override: str | None = None,
 ) -> dict[str, Any]:
     """
     개별 공고 재수집 → DB 저장 →
     새로 수집된 분석 대상 Document만 처리.
     """
 
-    persistence = recollect_and_persist(
-        announcement_id=announcement_id
-    )
+    recollect_kwargs: dict[str, Any] = {
+        "announcement_id": announcement_id,
+    }
+    if source_announcement_id_override is not None:
+        recollect_kwargs["source_announcement_id_override"] = (
+            source_announcement_id_override
+        )
+    if detail_url_override is not None:
+        recollect_kwargs["detail_url_override"] = detail_url_override
+
+    persistence = recollect_and_persist(**recollect_kwargs)
 
     processing = process_document_ids(
         persistence.get(

@@ -25,6 +25,7 @@ def list_active_announcements(
 ) -> AnnouncementListResponse:
     conditions = [
         "a.collection_run_id = ss.active_collection_run_id",
+        "a.is_visible IS TRUE",
     ]
     params: dict[str, object] = {
         "offset": (page - 1) * size,
@@ -165,6 +166,7 @@ def get_active_announcement(
             LEFT JOIN key_information ki
               ON ki.announcement_id = a.id
             WHERE a.id = :announcement_id
+              AND a.is_visible IS TRUE
             LIMIT 1
             """
         ),

@@ -10,13 +10,11 @@ from backend.app.db.session import SessionLocal
 from backend.app.models.announcement import Announcement
 from backend.app.models.collection_run import CollectionRun
 from backend.app.models.document import Document
-from backend.app.services.error_log_service import record_error
-
 from backend.app.services.document_role_service import (
     DOCUMENT_ROLE_PRIMARY,
     classify_document_role,
 )
-
+from backend.app.services.error_log_service import record_error
 
 VALID_RUN_STATUSES = {
     "running",
@@ -395,6 +393,8 @@ def collect_and_persist() -> dict[str, Any]:
 def recollect_and_persist(
     *,
     announcement_id: int,
+    source_announcement_id_override: str | None = None,
+    detail_url_override: str | None = None,
 ) -> dict[str, Any]:
     """
     기존 Announcement 한 건을 다시 수집하고
@@ -428,11 +428,15 @@ def recollect_and_persist(
             )
 
         source_announcement_id = str(
-            announcement.source_announcement_id
+            source_announcement_id_override
+            if source_announcement_id_override is not None
+            else announcement.source_announcement_id
         ).strip()
 
         detail_url = str(
-            announcement.detail_url
+            detail_url_override
+            if detail_url_override is not None
+            else announcement.detail_url
         ).strip()
 
         collection_run_id = (

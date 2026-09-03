@@ -6,5 +6,6 @@ sqlalchemy==2.0.51
 psycopg[binary]==3.3.4
 alembic==1.19.0
 pgvector==0.5.0
+APScheduler==3.11.3
 
 numpy==2.5.1
