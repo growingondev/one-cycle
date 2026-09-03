@@ -27,6 +27,7 @@ jobs = {}
 class RecollectRequest(BaseModel):
     source_announcement_id: str
     detail_url: str
+    target_file_name: str | None = None
 
 def is_crawler_busy() -> bool:
     """동시 크롤링 실행 방지: 이미 실행 중이거나 대기 중인 작업이 있는지 확인"""
@@ -60,11 +61,20 @@ def run_scan_task(job_id: str) -> None:
         jobs[job_id]["error_code"] = "SCAN_EXECUTION_FAILED"
         jobs[job_id]["message"] = f"공고 목록 스캔 실패: {exc!s}"
 
-def run_recollect_task(job_id: str, source_announcement_id: str, detail_url: str):
+def run_recollect_task(
+    job_id: str,
+    source_announcement_id: str,
+    detail_url: str,
+    target_file_name: str | None = None,
+):
     """개별 공고 재수집 백그라운드 작업"""
     jobs[job_id]["status"] = "running"
     try:
-        result = recollect_lh_notice(source_announcement_id, detail_url)
+        result = recollect_lh_notice(
+            source_announcement_id,
+            detail_url,
+            target_file_name=target_file_name,
+        )
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["result"] = result
     except Exception as e:
@@ -99,7 +109,13 @@ async def create_recollect_job(req: RecollectRequest, background_tasks: Backgrou
     job_id = f"recollect_{req.source_announcement_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     jobs[job_id] = {"job_id": job_id, "status": "queued"}
     
-    background_tasks.add_task(run_recollect_task, job_id, req.source_announcement_id, req.detail_url)
+    background_tasks.add_task(
+        run_recollect_task,
+        job_id,
+        req.source_announcement_id,
+        req.detail_url,
+        req.target_file_name,
+    )
     return {"job_id": job_id, "status": "queued"}
 
 

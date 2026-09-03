@@ -108,6 +108,11 @@ class ErrorLog(Base):
         nullable=False,
     )
 
+    target_filename: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
     stack_trace: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,

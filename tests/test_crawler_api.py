@@ -39,6 +39,35 @@ class CrawlerScanApiTest(unittest.TestCase):
         )
         self.assertEqual(result.json()["result"], domain_result)
 
+    def test_recollect_job_forwards_only_target_filename(self):
+        domain_result = {
+            "execution_id": "retry-document-1",
+            "status": "success",
+            "data": {"documents": []},
+            "errors": [],
+        }
+
+        with patch.object(
+            crawler_api,
+            "recollect_lh_notice",
+            return_value=domain_result,
+        ) as recollect:
+            accepted = self.client.post(
+                "/v1/recollect-jobs",
+                json={
+                    "source_announcement_id": "NOTICE-1",
+                    "detail_url": "https://example.com/notice/1",
+                    "target_file_name": "failed-document.hwpx",
+                },
+            )
+
+        self.assertEqual(accepted.status_code, 200)
+        recollect.assert_called_once_with(
+            "NOTICE-1",
+            "https://example.com/notice/1",
+            target_file_name="failed-document.hwpx",
+        )
+
     def test_scan_job_is_rejected_while_another_job_runs(self):
         crawler_api.jobs["running-job"] = {
             "job_id": "running-job",

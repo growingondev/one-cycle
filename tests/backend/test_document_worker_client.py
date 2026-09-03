@@ -59,6 +59,28 @@ class DocumentWorkerClientTest(unittest.TestCase):
         "backend.app.clients."
         "document_worker_client.post_json"
     )
+    def test_retry_sends_start_stage(self, post_json):
+        post_json.return_value = _worker_response()
+
+        process_document(
+            document_id=10,
+            announcement_id=1,
+            announcement_key="announcement_001",
+            filename="announcement.hwpx",
+            document_format="hwpx",
+            storage_path="/data/documents/announcement.hwpx",
+            start_stage="embedding",
+            base_url="http://document-worker:8000/",
+            timeout_seconds=600,
+        )
+
+        payload = post_json.call_args.kwargs["payload"]
+        self.assertEqual(payload["start_stage"], "embedding")
+
+    @patch(
+        "backend.app.clients."
+        "document_worker_client.post_json"
+    )
     def test_process_document_sends_expected_request(
         self,
         post_json,

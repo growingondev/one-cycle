@@ -125,6 +125,7 @@ class AdminErrorDetail(BaseModel):
     announcement_title: str | None = None
     document_id: int | None = None
     document_name: str | None = None
+    target_filename: str | None = None
     error_type: str
     error_code: str | None = None
     stage: str

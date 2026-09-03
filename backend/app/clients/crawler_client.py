@@ -240,6 +240,7 @@ def recollect_announcement(
     *,
     source_announcement_id: str,
     detail_url: str,
+    target_file_name: str | None = None,
 ) -> dict[str, Any]:
     normalized_source_id = str(
         source_announcement_id or ""
@@ -254,10 +255,17 @@ def recollect_announcement(
     if not normalized_detail_url:
         raise ValueError("detail_url must not be empty.")
 
+    payload = {
+        "source_announcement_id": normalized_source_id,
+        "detail_url": normalized_detail_url,
+    }
+    normalized_target_file_name = str(
+        target_file_name or ""
+    ).strip()
+    if normalized_target_file_name:
+        payload["target_file_name"] = normalized_target_file_name
+
     return _create_and_wait(
         path="/v1/recollect-jobs",
-        payload={
-            "source_announcement_id": normalized_source_id,
-            "detail_url": normalized_detail_url,
-        },
+        payload=payload,
     )

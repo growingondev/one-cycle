@@ -152,6 +152,21 @@ class PipelineGatewayRuntimeTest(unittest.TestCase):
                     30
                 )
 
+    def test_legacy_runtime_rejects_stage_resume(self):
+        with patch.dict(
+            os.environ,
+            {"DOCUMENT_PROCESSING_RUNTIME": "legacy"},
+            clear=False,
+        ):
+            with self.assertRaisesRegex(
+                PipelineUnavailableError,
+                "worker_http",
+            ):
+                pipeline_gateway.reprocess_document(
+                    30,
+                    start_stage="embedding",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

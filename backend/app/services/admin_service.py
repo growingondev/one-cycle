@@ -593,6 +593,7 @@ def _error_base_sql() -> str:
         a.title AS announcement_title,
         el.document_id,
         d.original_filename AS document_name,
+        el.target_filename,
         el.error_type,
         el.error_code,
         el.stage,
