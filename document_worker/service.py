@@ -1113,9 +1113,9 @@ def _run_key_information_extraction(
     document_id: int,
     announcement_id: int,
     announcement_key: str,
-    announcement_date: date | None,
     structure_path: Path,
     verification_path: Path,
+    announcement_date: date | None = None,
 ) -> dict[str, Any]:
     """
     Structure / Verification 결과에서
