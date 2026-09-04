@@ -21,7 +21,6 @@ from backend.app.services.pipeline_persistence import (
     persist_document_outputs,
 )
 
-
 SUPPORTED_DOCUMENT_FORMATS = {
     "hwp",
     "hwpx",
