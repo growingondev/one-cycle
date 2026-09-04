@@ -39,6 +39,17 @@ def retained_dataset(tmp_path, monkeypatch):
         "collection_retention_output_root",
         str(output_root),
     )
+    for setting_name in (
+        "collection_retention_legacy_document_stored_root",
+        "collection_retention_legacy_document_access_root",
+        "collection_retention_legacy_output_stored_root",
+        "collection_retention_legacy_output_access_root",
+    ):
+        monkeypatch.setattr(
+            retention.settings,
+            setting_name,
+            "",
+        )
 
     run_ids = []
     document_paths = {}
@@ -175,3 +186,102 @@ def test_path_outside_allowed_root_blocks_db_deletion(retained_dataset, tmp_path
     assert outside.exists()
     with sessions() as db:
         assert db.get(CollectionRun, run_ids[0]) is not None
+
+def test_delete_maps_legacy_stored_paths_to_access_roots(
+    retained_dataset,
+    tmp_path,
+    monkeypatch,
+):
+    sessions, run_ids, document_paths, output_paths = retained_dataset
+    candidate_run_id = run_ids[0]
+
+    stored_document_root = tmp_path / "legacy-stored-documents"
+    access_document_root = tmp_path / "legacy-access-documents"
+    stored_output_root = tmp_path / "legacy-stored-outputs"
+    access_output_root = tmp_path / "legacy-access-outputs"
+    access_document_root.mkdir()
+    access_output_root.mkdir()
+
+    original_document_path = document_paths[candidate_run_id]
+    relative_document_path = original_document_path.relative_to(
+        original_document_path.parents[1]
+    )
+    accessible_document_path = (
+        access_document_root / relative_document_path
+    )
+    accessible_document_path.parent.mkdir(parents=True)
+    original_document_path.replace(accessible_document_path)
+
+    original_output_path = output_paths[candidate_run_id]
+    relative_output_path = original_output_path.relative_to(
+        original_output_path.parents[1]
+    )
+    accessible_output_path = access_output_root / relative_output_path
+    accessible_output_path.parent.mkdir(parents=True)
+    original_output_path.replace(accessible_output_path)
+
+    with sessions.begin() as db:
+        document = db.scalar(
+            select(Document)
+            .join(Announcement)
+            .where(Announcement.collection_run_id == candidate_run_id)
+        )
+        processing_run = db.scalar(
+            select(ProcessingRun)
+            .join(Document)
+            .join(Announcement)
+            .where(Announcement.collection_run_id == candidate_run_id)
+        )
+        document.storage_path = str(
+            stored_document_root / relative_document_path
+        )
+        processing_run.output_root_path = str(
+            stored_output_root / relative_output_path
+        )
+
+    monkeypatch.setattr(
+        retention.settings,
+        "collection_retention_legacy_document_stored_root",
+        str(stored_document_root),
+    )
+    monkeypatch.setattr(
+        retention.settings,
+        "collection_retention_legacy_document_access_root",
+        str(access_document_root),
+    )
+    monkeypatch.setattr(
+        retention.settings,
+        "collection_retention_legacy_output_stored_root",
+        str(stored_output_root),
+    )
+    monkeypatch.setattr(
+        retention.settings,
+        "collection_retention_legacy_output_access_root",
+        str(access_output_root),
+    )
+
+    result = retention.apply_collection_run_retention(dry_run=False)
+
+    assert result["status"] == "completed"
+    assert result["unsafe_paths"] == []
+    assert result["deleted_run_count"] == 1
+    assert not accessible_document_path.exists()
+    assert not accessible_output_path.exists()
+    with sessions() as db:
+        assert db.get(CollectionRun, candidate_run_id) is None
+
+
+def test_incomplete_legacy_mapping_blocks_plan(
+    retained_dataset,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        retention.settings,
+        "collection_retention_legacy_document_stored_root",
+        str(tmp_path / "legacy-stored-documents"),
+    )
+
+    with pytest.raises(RuntimeError, match="configured together"):
+        retention.plan_collection_run_retention()
+
