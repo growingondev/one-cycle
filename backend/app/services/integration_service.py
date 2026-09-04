@@ -8,6 +8,9 @@ from backend.app.core.config import settings
 from backend.app.services.collection_publish_service import (
     publish_collection_run,
 )
+from backend.app.services.collection_retention_service import (
+    apply_collection_run_retention,
+)
 from backend.app.services.collection_service import (
     collect_and_persist,
     recollect_and_persist,
@@ -240,6 +243,65 @@ def process_document_ids(
     }
 
 
+def _apply_retention_after_publish(
+    collection_run_id: int,
+) -> dict[str, Any]:
+    mode = settings.collection_retention_mode
+    if mode == "disabled":
+        return {
+            "status": "disabled",
+            "reason": "collection_retention_mode_disabled",
+        }
+
+    try:
+        retention_result = apply_collection_run_retention(
+            dry_run=mode == "dry_run",
+        )
+        if retention_result.get("status") == "file_cleanup_incomplete":
+            message = (
+                "Collection retention file cleanup was incomplete: "
+                f"{retention_result}"
+            )
+            LOGGER.error(message)
+            error_result = record_error(
+                error_type="database",
+                stage="retention",
+                error_code="COLLECTION_RETENTION_FILE_CLEANUP_INCOMPLETE",
+                message=message,
+                collection_run_id=collection_run_id,
+            )
+            retention_result["error_id"] = error_result.get("error_id")
+        return retention_result
+    except Exception as exc:
+        message = str(exc)
+        LOGGER.exception(
+            "Collection retention failed after publish. "
+            "collection_run_id=%s",
+            collection_run_id,
+        )
+
+        error_id = None
+        try:
+            error_result = record_error(
+                error_type="database",
+                stage="retention",
+                error_code="COLLECTION_RETENTION_FAILED",
+                message=message,
+                collection_run_id=collection_run_id,
+            )
+            error_id = error_result.get("error_id")
+        except Exception:
+            LOGGER.exception(
+                "Failed to record Collection retention error."
+            )
+
+        return {
+            "status": "failed",
+            "message": message,
+            "error_id": error_id,
+        }
+
+
 def collect_persist_and_process() -> dict[str, Any]:
     """
     전체 수집 → DB 저장 → 분석 대상 Document 처리.
@@ -352,6 +414,9 @@ def collect_persist_and_process() -> dict[str, Any]:
         **base_result,
         "status": "success",
         "publish": publish_result,
+        "retention": _apply_retention_after_publish(
+            collection_run_id
+        ),
     }
 
 

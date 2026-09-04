@@ -400,6 +400,9 @@ def publish_collection_run(
         system_state.active_collection_run_id = (
             collection_run_id
         )
+        system_state.previous_collection_run_id = (
+            previous_collection_run_id
+        )
         system_state.updated_at = now
 
         db.flush()

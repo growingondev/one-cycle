@@ -21,6 +21,7 @@ from backend.app.models.document import Document
 from backend.app.models.system_state import SystemState
 from backend.app.services import collection_publish_service as publisher
 from backend.app.services import (
+    collection_retention_service,
     collection_service,
     integration_service,
     pipeline_gateway,
@@ -180,6 +181,7 @@ def dataset(monkeypatch):
     sessions = sessionmaker(bind=engine, expire_on_commit=False)
     monkeypatch.setattr(collection_service, "SessionLocal", sessions)
     monkeypatch.setattr(publisher, "SessionLocal", sessions)
+    monkeypatch.setattr(collection_retention_service, "SessionLocal", sessions)
     monkeypatch.setattr(
         integration_service, "record_error", Mock(return_value={"error_id": 1})
     )
@@ -255,6 +257,8 @@ def test_full_collection_reprocesses_unchanged_documents_then_replaces_dataset(
         assert (
             db.scalar(select(func.count(Document.id))) == 4
         )  # physical cleanup deferred
+        state = db.get(SystemState, 1)
+        assert state.previous_collection_run_id == old["collection_run_id"]
 
 
 @pytest.mark.parametrize(
