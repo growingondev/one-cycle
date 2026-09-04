@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from datetime import date
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -202,6 +203,7 @@ class PipelinePersistenceContractTest(unittest.TestCase):
         announcement = SimpleNamespace(
             id=20,
             source_announcement_id="LH-TEST-001",
+            announcement_date=date(2026, 9, 3),
         )
         document = SimpleNamespace(
             id=30,
@@ -231,6 +233,10 @@ class PipelinePersistenceContractTest(unittest.TestCase):
         self.assertEqual(
             result["announcement_db_id"],
             20,
+        )
+        self.assertEqual(
+            result["announcement_date"],
+            date(2026, 9, 3),
         )
         self.assertEqual(
             result["document_db_id"],
