@@ -1,4 +1,5 @@
 import unittest
+from datetime import date
 from unittest.mock import patch
 
 from backend.app.clients.document_worker_client import (
@@ -76,6 +77,7 @@ class DocumentWorkerClientTest(unittest.TestCase):
 
         payload = post_json.call_args.kwargs["payload"]
         self.assertEqual(payload["start_stage"], "embedding")
+        self.assertIsNone(payload["announcement_date"])
 
     @patch(
         "backend.app.clients."
@@ -96,6 +98,7 @@ class DocumentWorkerClientTest(unittest.TestCase):
             storage_path=(
                 "/data/documents/announcement.hwpx"
             ),
+            announcement_date=date(2026, 9, 3),
             base_url="http://document-worker:8000/",
             timeout_seconds=600,
         )
@@ -110,6 +113,7 @@ class DocumentWorkerClientTest(unittest.TestCase):
                 "announcement_key": (
                     "announcement_001"
                 ),
+                "announcement_date": "2026-09-03",
                 "source": {
                     "filename": "announcement.hwpx",
                     "format": "hwpx",
