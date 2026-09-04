@@ -197,10 +197,9 @@ refactor: restore full collection structure and preserve retry safeguards
 아직 남은 범위:
 
 - 실제 예약 시각의 Scheduler 전체수집 확인
-- 활성 Run과 직전 정상 Run 1개를 제외한 오래된 DB·파일 자동 정리
 - 관리자 공고 목록의 조회 범위 결정
 - 기존 핵심정보 추출 테스트 실패 4건 수정
 
-현재 확정된 후속 정책은 **활성 Run과 직전 정상 Run 1개 보관, 그보다 오래된 데이터 정리**다.
+활성 Run과 직전 정상 Run 1개를 보관하고 오래된 DB·파일을 정리하는 기능은
+`COLLECTION_RUN_RETENTION.md`에 구현·운영 절차를 기록했다.
 관리자 롤백 버튼/API는 구현하기로 확정하지 않았으며 이번 필수 범위에 포함하지 않는다.
-현재 전체교체는 active CollectionRun 전환이고 과거 데이터의 물리 삭제는 아직 수행하지 않는다.
