@@ -92,6 +92,56 @@ PY
 실제 삭제는 `.env`를 `COLLECTION_RETENTION_MODE=delete`로 변경하고 Backend와
 Scheduler를 재생성한 뒤, 다음 정상 Publish 직후 자동으로 실행한다.
 
+## 이전 배포 경로 일회성 정리
+
+DB에 과거 호스트 절대경로가 저장되어 있고 현재 컨테이너의 허용 루트와
+다른 경우, 해당 경로는 기본적으로 `unsafe_paths`에 포함되어 삭제가
+차단된다. DB 경로를 직접 수정하지 않고 다음 네 설정으로 과거 저장 경로를
+일회성 컨테이너 마운트 경로에 연결할 수 있다.
+
+- `COLLECTION_RETENTION_LEGACY_DOCUMENT_STORED_ROOT`
+- `COLLECTION_RETENTION_LEGACY_DOCUMENT_ACCESS_ROOT`
+- `COLLECTION_RETENTION_LEGACY_OUTPUT_STORED_ROOT`
+- `COLLECTION_RETENTION_LEGACY_OUTPUT_ACCESS_ROOT`
+
+각 문서·출력 경로의 `STORED_ROOT`와 `ACCESS_ROOT`는 반드시 함께
+설정한다. 평소에는 모두 비워 둔다.
+
+아래는 AWS의 과거 저장 경로를 일회성 마운트한 dry-run 예시다.
+
+```bash
+docker compose \
+  --env-file .env \
+  -f infra/docker-compose.yml \
+  run --rm --no-deps -T \
+  -e COLLECTION_RETENTION_LEGACY_DOCUMENT_STORED_ROOT=/home/ubuntu/ddokbot/one-cycle_development/test_documents/lh_downloads \
+  -e COLLECTION_RETENTION_LEGACY_DOCUMENT_ACCESS_ROOT=/legacy/documents \
+  -e COLLECTION_RETENTION_LEGACY_OUTPUT_STORED_ROOT=/home/ubuntu/ddokbot/one-cycle_development/outputs \
+  -e COLLECTION_RETENTION_LEGACY_OUTPUT_ACCESS_ROOT=/legacy/outputs \
+  -v /home/ubuntu/ddokbot/one-cycle_development/test_documents/lh_downloads:/legacy/documents \
+  -v /home/ubuntu/ddokbot/one-cycle_development/outputs:/legacy/outputs \
+  backend \
+  python - <<'PY'
+import json
+
+from backend.app.services.collection_retention_service import (
+    apply_collection_run_retention,
+)
+
+print(json.dumps(
+    apply_collection_run_retention(dry_run=True),
+    ensure_ascii=False,
+    indent=2,
+))
+PY
+```
+
+`active_collection_run_id`와 `previous_collection_run_id`가 의도한 값이고
+`unsafe_paths`가 빈 배열일 때만 같은 명령에서
+`dry_run=False`로 바꿔 일회성 실제 정리를 실행한다. 정리 후에는 별도
+legacy 마운트와 네 설정을 사용하지 않는다. 이후 새 Run은 기본
+`/data/documents`, `/app/outputs` 경로만으로 자동 정리된다.
+
 ## 결과 판정
 
 - `completed`: 파일과 DB 정리 완료
