@@ -39,12 +39,12 @@ from backend.app.services.admin_service import (
     update_error_status,
 )
 from backend.app.services.pipeline_gateway import (
+    CollectionAlreadyRunningError,
     PipelineUnavailableError,
     collect_announcements,
     recollect_announcement,
     reprocess_document,
     retry_error,
-    sync_announcements,
 )
 from backend.app.services.error_retry_service import (
     ErrorRetryConflictError,
@@ -161,6 +161,8 @@ def admin_announcement_detail(
 def run_collection():
     try:
         result = collect_announcements()
+    except CollectionAlreadyRunningError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except PipelineUnavailableError as exc:
         raise HTTPException(503, str(exc)) from exc
     except (
@@ -181,31 +183,6 @@ def run_collection():
     return ActionAcceptedResponse(
         accepted=True,
         message="공고 수집 실행 요청을 전달했습니다.",
-        reference=result,
-    )
-
-
-@router.post(
-    "/announcements/sync",
-    response_model=ActionAcceptedResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-def run_incremental_collection_sync():
-    """목록 비교 후 신규·정정·변경 공고만 선택 수집한다."""
-    try:
-        result = sync_announcements()
-    except (
-        CrawlerJobFailedError,
-        InternalServiceConfigurationError,
-        InternalServiceHTTPError,
-        InternalServiceResponseError,
-        InternalServiceUnavailableError,
-    ) as exc:
-        _raise_crawler_api_error(exc)
-
-    return ActionAcceptedResponse(
-        accepted=result.get("status") != "failed",
-        message="공고 변경 감지 및 선택 수집을 실행했습니다.",
         reference=result,
     )
 

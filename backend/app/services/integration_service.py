@@ -358,8 +358,6 @@ def collect_persist_and_process() -> dict[str, Any]:
 def recollect_persist_and_process(
     *,
     announcement_id: int,
-    source_announcement_id_override: str | None = None,
-    detail_url_override: str | None = None,
     target_file_name: str | None = None,
 ) -> dict[str, Any]:
     """
@@ -370,22 +368,16 @@ def recollect_persist_and_process(
     recollect_kwargs: dict[str, Any] = {
         "announcement_id": announcement_id,
     }
-    if source_announcement_id_override is not None:
-        recollect_kwargs["source_announcement_id_override"] = (
-            source_announcement_id_override
-        )
-    if detail_url_override is not None:
-        recollect_kwargs["detail_url_override"] = detail_url_override
     if target_file_name is not None:
         recollect_kwargs["target_file_name"] = target_file_name
 
     persistence = recollect_and_persist(**recollect_kwargs)
 
     processing = process_document_ids(
-        persistence.get(
-            "new_analysis_document_ids",
-            [],
-        )
+        list(dict.fromkeys(
+            persistence.get("new_analysis_document_ids", [])
+            + persistence.get("recovered_analysis_document_ids", [])
+        ))
     )
 
     return {

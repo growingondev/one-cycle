@@ -229,13 +229,6 @@ def crawl_announcements() -> dict[str, Any]:
     )
 
 
-def scan_announcements() -> dict[str, Any]:
-    return _create_and_wait(
-        path="/v1/scan-jobs",
-        payload={},
-    )
-
-
 def recollect_announcement(
     *,
     source_announcement_id: str,

@@ -5,8 +5,9 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from backend.app.services.collection_sync_service import (
-    run_incremental_sync,
+from backend.app.services.pipeline_gateway import (
+    CollectionAlreadyRunningError,
+    collect_announcements,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -14,14 +15,20 @@ KST = ZoneInfo("Asia/Seoul")
 
 
 def run_scheduled_sync() -> None:
+    """기존 함수명은 유지하되 전체 수집·문서 처리·검증·전환을 실행한다."""
     try:
-        result = run_incremental_sync()
+        result = collect_announcements()
+        if result.get("status") != "success":
+            LOGGER.error("Full announcement collection did not succeed: %s", result)
+            return
         LOGGER.info(
-            "Incremental announcement sync finished: %s",
+            "Full announcement collection finished: %s",
             result,
         )
+    except CollectionAlreadyRunningError:
+        LOGGER.info("Full announcement collection skipped: collection already running")
     except Exception:
-        LOGGER.exception("Incremental announcement sync failed")
+        LOGGER.exception("Full announcement collection failed")
 
 
 def create_scheduler() -> BlockingScheduler:
@@ -31,7 +38,7 @@ def create_scheduler() -> BlockingScheduler:
         trigger="cron",
         hour="12,15,18",
         minute=0,
-        id="lh_incremental_announcement_sync",
+        id="lh_full_announcement_collection",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

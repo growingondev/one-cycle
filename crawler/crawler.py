@@ -7,9 +7,10 @@ import sys
 import time
 import traceback
 import uuid
+
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlparse
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -17,17 +18,14 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+
+
 # 프로젝트 루트를 import 경로에 추가
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 NOTICE_LINK_SELECTOR = (
     ".mVw.bbs_tit "
     "a.wrtancInfoBtn"
-)
-
-LH_HOME_URL = "https://apply.lh.or.kr/"
-LH_NOTICE_DETAIL_PATH = (
-    "lhapply/apply/wt/wrtanc/selectWrtancInfo.do"
 )
 
 if str(PROJECT_ROOT) not in sys.path:
@@ -313,6 +311,15 @@ def cleanup_temp_directory(
 ) -> None:
     """임시 다운로드 디렉터리를 정리한다."""
     path = Path(temp_download_dir)
+    root = get_crawler_staging_dir().resolve()
+    resolved = path.resolve()
+    if (
+        path.name != "_temp_download"
+        or path.is_symlink()
+        or not resolved.is_relative_to(root)
+        or resolved == root
+    ):
+        raise ValueError("수집 실행 내부의 _temp_download만 정리할 수 있습니다.")
 
     if path.exists():
         shutil.rmtree(
@@ -321,76 +328,29 @@ def cleanup_temp_directory(
         )
 
 
-def _safe_download_filename(file_name: str) -> str:
-    """원격 파일명에서 경로 요소를 제거한다."""
-    normalized = re.split(
-        r"[\\/]",
-        str(file_name or ""),
-    )[-1].strip()
+# ==========================================
+def _new_execution_id(prefix: str) -> str:
+    return (
+        f"{prefix}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_"
+        f"{uuid.uuid4().hex[:12]}"
+    )
 
+
+def _safe_download_filename(file_name: str) -> str:
+    normalized = re.split(r"[\\/]", str(file_name or ""))[-1].strip()
     if not normalized or normalized in {".", ".."}:
         raise ValueError("유효하지 않은 첨부파일 이름입니다.")
-
     return normalized
 
 
 def _safe_storage_component(value: str) -> str:
-    normalized = re.sub(
-        r"[^0-9A-Za-z._-]+",
-        "_",
-        str(value or "").strip(),
-    ).strip("._")
-
-    if normalized:
+    value = str(value or "").strip()
+    normalized = re.sub(r"[^0-9A-Za-z._-]+", "_", value).strip("._")
+    if normalized and normalized == value:
         return normalized
-
-    return hashlib.sha256(
-        str(value or "").encode("utf-8")
-    ).hexdigest()[:16]
+    return "notice_" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _update_current_manifest(
-    *,
-    source_announcement_id: str,
-    file_name: str,
-    checksum: str,
-    storage_path: Path,
-) -> None:
-    notice_root = (
-        get_crawler_staging_dir()
-        / "notices"
-        / _safe_storage_component(source_announcement_id)
-    )
-    manifest_path = notice_root / "current.json"
-    manifest = {
-        "source_announcement_id": source_announcement_id,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "documents": {},
-    }
-
-    if manifest_path.exists():
-        try:
-            existing = json.loads(
-                manifest_path.read_text(encoding="utf-8")
-            )
-            if isinstance(existing.get("documents"), dict):
-                manifest["documents"] = existing["documents"]
-        except (OSError, ValueError, TypeError) as exc:
-            print(f"  -> 기존 current.json 읽기 실패: {exc}")
-
-    manifest["documents"][file_name] = {
-        "checksum_sha256": checksum,
-        "storage_path": str(storage_path),
-    }
-    temporary_path = manifest_path.with_suffix(".json.tmp")
-    temporary_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    os.replace(temporary_path, manifest_path)
-
-
-# ==========================================
 # Error 구조
 # ==========================================
 
@@ -455,6 +415,10 @@ def _process_single_notice(
         temp_download_dir
     )
 
+    execution_staging_dir = Path(
+        execution_staging_dir
+    )
+
     current_detail_url = driver.current_url
 
     detail_url = (
@@ -488,14 +452,22 @@ def _process_single_notice(
         )
     )
 
+    notice_storage_dir = (
+        execution_staging_dir
+        / _safe_storage_component(source_announcement_id)
+    )
+
+    notice_storage_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     documents: list[dict] = []
     errors: list[dict] = []
 
     notice_success = True
     normalized_target_file_name = (
-        _safe_download_filename(target_file_name)
-        if target_file_name
-        else None
+        _safe_download_filename(target_file_name) if target_file_name else None
     )
     target_file_found = False
 
@@ -526,16 +498,9 @@ def _process_single_notice(
                 index
             ]
 
-            file_name = _safe_download_filename(
-                file_link.text
-            )
-
-            if (
-                normalized_target_file_name is not None
-                and file_name != normalized_target_file_name
-            ):
+            file_name = _safe_download_filename(file_link.text)
+            if normalized_target_file_name is not None and file_name != normalized_target_file_name:
                 continue
-
             target_file_found = True
 
             file_ext = (
@@ -666,6 +631,11 @@ def _process_single_notice(
                 / downloaded_name
             )
 
+            target_file_path = (
+                notice_storage_dir
+                / file_name
+            )
+
             if not temp_file_path.exists():
                 err_msg = (
                     "임시 파일을 찾을 수 "
@@ -696,55 +666,18 @@ def _process_single_notice(
             # Chrome 파일 핸들 해제 대기
             time.sleep(0.5)
 
-            checksum = calculate_sha256(
-                temp_file_path
+            os.replace(
+                temp_file_path,
+                target_file_path,
             )
-
-            version_storage_dir = (
-                get_crawler_staging_dir()
-                / "notices"
-                / _safe_storage_component(
-                    source_announcement_id
-                )
-                / "versions"
-                / checksum
-            )
-            version_storage_dir.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
-
-            target_file_path = (
-                version_storage_dir
-                / file_name
-            )
-
-            if target_file_path.exists():
-                temp_file_path.unlink()
-            else:
-                os.replace(
-                    temp_file_path,
-                    target_file_path,
-                )
 
             file_size = (
                 target_file_path.stat().st_size
             )
 
-            try:
-                _update_current_manifest(
-                    source_announcement_id=(
-                        source_announcement_id
-                    ),
-                    file_name=file_name,
-                    checksum=checksum,
-                    storage_path=target_file_path,
-                )
-            except OSError as exc:
-                print(
-                    "  -> current.json 갱신 실패: "
-                    f"{exc}"
-                )
+            checksum = calculate_sha256(
+                target_file_path
+            )
 
             actual_format = (
                 detect_actual_document_format(
@@ -770,24 +703,15 @@ def _process_single_notice(
                 }
             )
 
-        if (
-            normalized_target_file_name is not None
-            and not target_file_found
-        ):
-            err_msg = (
-                "재시도 대상 첨부파일을 찾을 수 없습니다: "
-                f"{normalized_target_file_name}"
-            )
-            errors.append(
-                build_error(
-                    error_type="download",
-                    stage="download",
-                    error_code="TARGET_ATTACHMENT_NOT_FOUND",
-                    message=err_msg,
-                    source_announcement_id=source_announcement_id,
-                    file_name=normalized_target_file_name,
-                )
-            )
+        if normalized_target_file_name is not None and not target_file_found:
+            errors.append(build_error(
+                error_type="download",
+                stage="download",
+                error_code="TARGET_ATTACHMENT_NOT_FOUND",
+                message=f"재시도 대상 첨부파일을 찾을 수 없습니다: {normalized_target_file_name}",
+                source_announcement_id=source_announcement_id,
+                file_name=normalized_target_file_name,
+            ))
             notice_success = False
 
     except Exception as exc:
@@ -838,218 +762,6 @@ def _process_single_notice(
 
 
 # ==========================================
-# 공고 목록 조회
-# ==========================================
-
-def _new_execution_id(prefix: str) -> str:
-    return (
-        f"{prefix}_"
-        + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        + f"_{uuid.uuid4().hex[:6]}"
-    )
-
-
-def _open_lh_notice_list(driver) -> None:
-    """LH 임대주택 모집공고 목록 화면으로 이동한다."""
-    driver.get(LH_HOME_URL)
-    close_main_popup(driver)
-    click_allow_popup(driver, timeout=0.5)
-
-    WebDriverWait(driver, 10).until(
-        EC.element_to_be_clickable(
-            (By.CSS_SELECTOR, ".apply a")
-        )
-    ).click()
-
-    WebDriverWait(driver, 10).until(
-        EC.element_to_be_clickable(
-            (
-                By.CSS_SELECTOR,
-                "a[data-target='#sbrlink1']",
-            )
-        )
-    ).click()
-
-    WebDriverWait(driver, 10).until(
-        EC.element_to_be_clickable(
-            (By.CSS_SELECTOR, ".btn .col1")
-        )
-    ).click()
-
-
-def _wait_for_stable_notice_list(
-    driver,
-    *,
-    timeout: int = 30,
-    stable_seconds: float = 2.0,
-):
-    """동적 목록의 공고 개수가 안정될 때까지 기다린다."""
-    deadline = time.monotonic() + timeout
-    last_count = -1
-    stable_since = time.monotonic()
-    latest_notices = []
-
-    while time.monotonic() < deadline:
-        notices = driver.find_elements(
-            By.CSS_SELECTOR,
-            NOTICE_LINK_SELECTOR,
-        )
-        count = len(notices)
-
-        if count != last_count:
-            last_count = count
-            stable_since = time.monotonic()
-            latest_notices = notices
-        elif count > 0:
-            latest_notices = notices
-
-            if (
-                time.monotonic() - stable_since
-                >= stable_seconds
-            ):
-                return latest_notices
-
-        time.sleep(0.2)
-
-    if latest_notices:
-        return latest_notices
-
-    raise TimeoutError(
-        "LH 공고 목록을 제한 시간 안에 찾지 못했습니다."
-    )
-
-
-def _build_notice_detail_url(notice_elem) -> str:
-    params = {
-        "aisTpCd": (
-            notice_elem.get_attribute("data-id4") or ""
-        ).strip(),
-        "ccrCnntSysDsCd": (
-            notice_elem.get_attribute("data-id2") or ""
-        ).strip(),
-        "panId": (
-            notice_elem.get_attribute("data-id1") or ""
-        ).strip(),
-        "uppAisTpCd": (
-            notice_elem.get_attribute("data-id3") or ""
-        ).strip(),
-    }
-    return f"{LH_HOME_URL}{LH_NOTICE_DETAIL_PATH}?{urlencode(params)}"
-
-
-def _extract_notice_summary(notice_elem) -> dict:
-    """공고 목록의 한 행을 직렬화 가능한 dict로 변환한다."""
-    title = notice_elem.text.strip()
-    source_announcement_id = (
-        notice_elem.get_attribute("data-id1") or ""
-    ).strip()
-
-    if not source_announcement_id:
-        raise ValueError(
-            "목록 공고에 source_announcement_id가 없습니다."
-        )
-
-    meta = {
-        "source_announcement_id": source_announcement_id,
-        "notice_number": "",
-        "notice_type": "",
-        "title": title,
-        "region": "미상",
-        "post_date": "",
-        "deadline_date": "",
-        "publication_status": "상태없음",
-        "detail_url": _build_notice_detail_url(notice_elem),
-    }
-
-    parent_tr = notice_elem.find_element(
-        By.XPATH,
-        "./ancestor::tr",
-    )
-    cols = parent_tr.find_elements(By.TAG_NAME, "td")
-
-    if len(cols) >= 8:
-        meta["notice_number"] = cols[0].text.strip()
-        meta["notice_type"] = cols[1].text.strip()
-        meta["region"] = cols[3].text.strip()
-        meta["post_date"] = cols[5].text.strip()
-        meta["deadline_date"] = cols[6].text.strip()
-        meta["publication_status"] = cols[7].text.strip()
-
-    return meta
-
-
-def scan_lh_notice_list() -> dict:
-    """상세 진입이나 파일 다운로드 없이 목록 메타데이터만 수집한다."""
-    execution_id = _new_execution_id("scan")
-    execution_staging_dir = (
-        get_crawler_staging_dir()
-        / "staging"
-        / execution_id
-    )
-    temp_download_dir = execution_staging_dir / "_temp_download"
-    temp_download_dir.mkdir(parents=True, exist_ok=True)
-
-    driver = None
-    notices_data: list[dict] = []
-    errors: list[dict] = []
-    fatal_error = None
-
-    try:
-        driver = create_driver(temp_download_dir)
-        _open_lh_notice_list(driver)
-        notice_elements = _wait_for_stable_notice_list(driver)
-
-        for notice_elem in notice_elements:
-            try:
-                notices_data.append(
-                    _extract_notice_summary(notice_elem)
-                )
-            except Exception as exc:  # noqa: BLE001 - 공고별 실패를 격리한다.
-                errors.append(
-                    build_error(
-                        error_type="collection",
-                        stage="scan",
-                        error_code="NOTICE_SUMMARY_FAILED",
-                        message=str(exc),
-                    )
-                )
-
-    except Exception as exc:  # noqa: BLE001 - 스캔 작업 경계에서 결과로 변환한다.
-        traceback.print_exc()
-        fatal_error = f"공고 목록 스캔 중 오류 발생: {exc}"
-        errors.append(
-            build_error(
-                error_type="collection",
-                stage="scan",
-                error_code="SCAN_FATAL_ERROR",
-                message=fatal_error,
-            )
-        )
-    finally:
-        if driver is not None:
-            driver.quit()
-        cleanup_temp_directory(execution_staging_dir)
-
-    if fatal_error is not None or not notices_data:
-        status = "failed"
-    elif errors:
-        status = "partial"
-    else:
-        status = "success"
-
-    return {
-        "execution_id": execution_id,
-        "execution_status": status,
-        "total_count": len(notices_data) + len(errors),
-        "success_count": len(notices_data),
-        "failed_count": len(errors),
-        "fatal_error": fatal_error,
-        "notices": notices_data,
-        "errors": errors,
-    }
-
-
-# ==========================================
 # 전체 공고 수집
 # ==========================================
 
@@ -1063,7 +775,6 @@ def crawl_lh_notices() -> dict:
 
     execution_staging_dir = (
         base_staging_dir
-        / "staging"
         / execution_id
     )
 
@@ -1098,8 +809,66 @@ def crawl_lh_notices() -> dict:
             "LH 청약플러스 접속 중..."
         )
 
-        _open_lh_notice_list(driver)
-        notices = _wait_for_stable_notice_list(driver)
+        driver.get(
+            "https://apply.lh.or.kr/"
+        )
+
+        close_main_popup(driver)
+
+        click_allow_popup(
+            driver,
+            timeout=0.5,
+        )
+
+        # 청약 → 임대주택 → 모집공고
+        WebDriverWait(
+            driver,
+            10,
+        ).until(
+            EC.element_to_be_clickable(
+                (
+                    By.CSS_SELECTOR,
+                    ".apply a",
+                )
+            )
+        ).click()
+
+        WebDriverWait(
+            driver,
+            10,
+        ).until(
+            EC.element_to_be_clickable(
+                (
+                    By.CSS_SELECTOR,
+                    "a[data-target='#sbrlink1']",
+                )
+            )
+        ).click()
+
+        WebDriverWait(
+            driver,
+            10,
+        ).until(
+            EC.element_to_be_clickable(
+                (
+                    By.CSS_SELECTOR,
+                    ".btn .col1",
+                )
+            )
+        ).click()
+
+        notices = WebDriverWait(
+            driver,
+            10,
+        ).until(
+            EC.presence_of_all_elements_located(
+                (
+                    By.CSS_SELECTOR,
+                    ".mVw.bbs_tit "
+                    "a.wrtancInfoBtn",
+                )
+            )
+        )
 
         total_count = len(
             notices
@@ -1117,25 +886,91 @@ def crawl_lh_notices() -> dict:
                 expected_total=total_count,
             )
 
+            title = (
+                notice_elem.text.strip()
+            )
+
+            source_announcement_id = (
+                notice_elem.get_attribute("data-id1") or ""
+            ).strip()
+
+            ccr_cnnt_sys_ds_cd = (
+                notice_elem.get_attribute("data-id2") or ""
+            ).strip()
+
+            upp_ais_tp_cd = (
+                notice_elem.get_attribute("data-id3") or ""
+            ).strip()
+
+            ais_tp_cd = (
+                notice_elem.get_attribute("data-id4") or ""
+            ).strip()
+
+            detail_url = (
+                "https://apply.lh.or.kr/"
+                "lhapply/apply/wt/wrtanc/selectWrtancInfo.do"
+                f"?aisTpCd={ais_tp_cd}"
+                f"&ccrCnntSysDsCd={ccr_cnnt_sys_ds_cd}"
+                f"&panId={source_announcement_id}"
+                f"&uppAisTpCd={upp_ais_tp_cd}"
+            )
+
+            meta = {
+                "notice_number": "",
+                "notice_type": "",
+                "title": title,
+                "region": "미상",
+                "post_date": "",
+                "deadline_date": "",
+                "publication_status":
+                    "상태없음",
+            }
+
             try:
-                meta = _extract_notice_summary(notice_elem)
-            except Exception as exc:  # noqa: BLE001 - 공고별 실패를 격리한다.
-                failed_count += 1
-                all_errors.append(
-                    build_error(
-                        error_type="collection",
-                        stage="scan",
-                        error_code="NOTICE_SUMMARY_FAILED",
-                        message=str(exc),
+                parent_tr = (
+                    notice_elem.find_element(
+                        By.XPATH,
+                        "./ancestor::tr",
                     )
                 )
-                continue
 
-            title = meta["title"]
-            source_announcement_id = meta[
-                "source_announcement_id"
-            ]
-            detail_url = meta["detail_url"]
+                cols = (
+                    parent_tr.find_elements(
+                        By.TAG_NAME,
+                        "td",
+                    )
+                )
+
+                if len(cols) >= 8:
+                    meta[
+                        "notice_number"
+                    ] = cols[0].text.strip()
+
+                    meta[
+                        "notice_type"
+                    ] = cols[1].text.strip()
+
+                    meta[
+                        "region"
+                    ] = cols[3].text.strip()
+
+                    meta[
+                        "post_date"
+                    ] = cols[5].text.strip()
+
+                    meta[
+                        "deadline_date"
+                    ] = cols[6].text.strip()
+
+                    meta[
+                        "publication_status"
+                    ] = cols[7].text.strip()
+
+            except Exception as exc:
+                print(
+                    "  -> 메타데이터 "
+                    f"추출 실패: {exc}"
+                )
 
             print(
                 f"\n[{index + 1}/"
@@ -1221,7 +1056,7 @@ def crawl_lh_notices() -> dict:
             driver.quit()
 
         cleanup_temp_directory(
-            execution_staging_dir
+            temp_download_dir
         )
 
     if success_count > 0:
@@ -1274,9 +1109,7 @@ def recollect_lh_notice(
 
     Crawler는 DB Announcement.id를 알 필요가 없다.
     """
-    execution_id = _new_execution_id(
-        f"recollect_{source_announcement_id}"
-    )
+    execution_id = _new_execution_id("recollect")
 
     base_staging_dir = (
         get_crawler_staging_dir()
@@ -1284,7 +1117,6 @@ def recollect_lh_notice(
 
     execution_staging_dir = (
         base_staging_dir
-        / "staging"
         / execution_id
     )
 
@@ -1388,8 +1220,7 @@ def recollect_lh_notice(
                 source_announcement_id,
             "detail_url":
                 detail_url,
-            "target_file_name":
-                target_file_name,
+            "target_file_name": target_file_name,
             "data":
                 data,
             "errors":
@@ -1439,7 +1270,7 @@ def recollect_lh_notice(
             driver.quit()
 
         cleanup_temp_directory(
-            execution_staging_dir
+            temp_download_dir
         )
 
 
