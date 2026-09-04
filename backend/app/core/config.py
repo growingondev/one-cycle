@@ -28,6 +28,8 @@ class Settings(BaseSettings):
 
     document_worker_base_url: str = ""
     document_worker_timeout_seconds: float = 600.0
+    document_processing_max_attempts: int = 3
+    document_processing_retry_delay_seconds: float = 5.0
 
     crawler_service_base_url: str = ""
     crawler_service_timeout_seconds: float = 30.0

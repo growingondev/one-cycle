@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from backend.app.services.collection_service import (
     recollect_and_persist,
@@ -135,6 +135,16 @@ class IntegrationServiceTest(unittest.TestCase):
         mock_record_error.assert_not_called()
 
     @patch(
+        "backend.app.services.integration_service."
+        "settings.document_processing_retry_delay_seconds",
+        0.0,
+    )
+    @patch(
+        "backend.app.services.integration_service."
+        "settings.document_processing_max_attempts",
+        3,
+    )
+    @patch(
         "backend.app.services.integration_service.record_error"
     )
     @patch(
@@ -173,6 +183,20 @@ class IntegrationServiceTest(unittest.TestCase):
             [100],
         )
 
+        self.assertEqual(
+            mock_reprocess_document.call_args_list,
+            [
+                call(11),
+                call(
+                    11,
+                    start_stage="embedding",
+                ),
+                call(
+                    11,
+                    start_stage="embedding",
+                ),
+            ],
+        )
         mock_record_error.assert_called_once_with(
             error_type="embedding",
             stage="embedding",
@@ -180,6 +204,110 @@ class IntegrationServiceTest(unittest.TestCase):
             message="embedding failed",
             document_id=11,
         )
+
+    @patch(
+        "backend.app.services.integration_service."
+        "settings.document_processing_retry_delay_seconds",
+        0.0,
+    )
+    @patch(
+        "backend.app.services.integration_service."
+        "settings.document_processing_max_attempts",
+        3,
+    )
+    @patch(
+        "backend.app.services.integration_service.record_error"
+    )
+    @patch(
+        "backend.app.services.integration_service."
+        "reprocess_document"
+    )
+    def test_process_document_retries_failed_stage(
+        self,
+        mock_reprocess_document,
+        mock_record_error,
+    ):
+        mock_reprocess_document.side_effect = [
+            {
+                "success": False,
+                "document_id": 12,
+                "stage": "embedding",
+                "error_code": "EMBEDDING_FAILED",
+                "message": "temporary failure",
+            },
+            {
+                "success": True,
+                "document_id": 12,
+                "stage": "completed",
+            },
+        ]
+
+        result = process_document_ids([12])
+
+        self.assertEqual(
+            result["success_count"],
+            1,
+        )
+        self.assertEqual(
+            result["failed_count"],
+            0,
+        )
+        self.assertEqual(
+            result["error_ids"],
+            [],
+        )
+        self.assertEqual(
+            mock_reprocess_document.call_args_list,
+            [
+                call(12),
+                call(
+                    12,
+                    start_stage="embedding",
+                ),
+            ],
+        )
+        mock_record_error.assert_not_called()
+
+    @patch(
+        "backend.app.services.integration_service."
+        "settings.document_processing_retry_delay_seconds",
+        0.0,
+    )
+    @patch(
+        "backend.app.services.integration_service."
+        "settings.document_processing_max_attempts",
+        3,
+    )
+    @patch(
+        "backend.app.services.integration_service.record_error"
+    )
+    @patch(
+        "backend.app.services.integration_service."
+        "reprocess_document"
+    )
+    def test_process_document_retries_unexpected_error_from_start(
+        self,
+        mock_reprocess_document,
+        mock_record_error,
+    ):
+        mock_reprocess_document.side_effect = [
+            RuntimeError("temporary connection failure"),
+            {
+                "success": True,
+                "document_id": 13,
+                "stage": "completed",
+            },
+        ]
+
+        result = process_document_ids([13])
+
+        self.assertEqual(result["success_count"], 1)
+        self.assertEqual(result["failed_count"], 0)
+        self.assertEqual(
+            mock_reprocess_document.call_args_list,
+            [call(13), call(13)],
+        )
+        mock_record_error.assert_not_called()
 
     @patch(
         "backend.app.services.integration_service."

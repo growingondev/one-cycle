@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
 
+from backend.app.core.config import settings
 from backend.app.services.collection_publish_service import (
     publish_collection_run,
 )
@@ -14,6 +17,8 @@ from backend.app.services.pipeline_gateway import (
     PipelineUnavailableError,
     reprocess_document,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 STAGE_ERROR_TYPES = {
     "prepare": "parsing",
@@ -38,13 +43,136 @@ def _error_type_for_stage(stage: str) -> str:
     )
 
 
+def _failure_result(
+    *,
+    document_id: int,
+    error_code: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "success": False,
+        "document_id": document_id,
+        "stage": "integration",
+        "error_code": error_code,
+        "message": message,
+    }
+
+
+def _normalize_processing_result(
+    *,
+    document_id: int,
+    result: Any,
+) -> dict[str, Any]:
+    if isinstance(result, dict):
+        return result
+
+    return _failure_result(
+        document_id=document_id,
+        error_code="INVALID_DOCUMENT_REPROCESS_RESULT",
+        message=(
+            "Document reprocessor 반환값은 "
+            "dict여야 합니다."
+        ),
+    )
+
+
+def _retry_start_stage(
+    result: dict[str, Any],
+) -> str | None:
+    stage = str(
+        result.get("stage") or ""
+    ).strip()
+
+    if stage in STAGE_ERROR_TYPES:
+        return stage
+
+    return None
+
+
+def _process_document_with_retry(
+    document_id: int,
+) -> dict[str, Any]:
+    max_attempts = max(
+        1,
+        settings.document_processing_max_attempts,
+    )
+    retry_delay_seconds = max(
+        0.0,
+        settings.document_processing_retry_delay_seconds,
+    )
+    start_stage: str | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if start_stage is None:
+                raw_result = reprocess_document(document_id)
+            else:
+                raw_result = reprocess_document(
+                    document_id,
+                    start_stage=start_stage,
+                )
+
+            result = _normalize_processing_result(
+                document_id=document_id,
+                result=raw_result,
+            )
+
+        except PipelineUnavailableError:
+            raise
+
+        except Exception as exc:  # noqa: BLE001
+            result = _failure_result(
+                document_id=document_id,
+                error_code=(
+                    "DOCUMENT_REPROCESS_UNEXPECTED_ERROR"
+                ),
+                message=str(exc),
+            )
+
+        if result.get("success") is True:
+            if attempt > 1:
+                LOGGER.info(
+                    "Document processing retry succeeded. "
+                    "document_id=%s attempt=%s/%s",
+                    document_id,
+                    attempt,
+                    max_attempts,
+                )
+            return result
+
+        if attempt == max_attempts:
+            return result
+
+        start_stage = _retry_start_stage(result)
+
+        LOGGER.warning(
+            "Document processing failed; retrying. "
+            "document_id=%s attempt=%s/%s "
+            "next_start_stage=%s error_code=%s message=%s",
+            document_id,
+            attempt,
+            max_attempts,
+            start_stage or "start",
+            result.get("error_code"),
+            result.get("message"),
+        )
+
+        if retry_delay_seconds > 0:
+            time.sleep(retry_delay_seconds)
+
+    raise RuntimeError(
+        "Document processing retry loop ended unexpectedly."
+    )
+
+
 def process_document_ids(
     document_ids: list[int],
 ) -> dict[str, Any]:
     """
     DB에 저장된 Document를 문서 처리 callable로 전달한다.
 
-    실패 결과는 Backend ErrorLog에 기록한다.
+    실패한 문서는 설정된 횟수만큼 자동 재시도하며,
+    마지막 실패만 Backend ErrorLog에 기록한다.
     """
 
     results: list[dict[str, Any]] = []
@@ -54,86 +182,9 @@ def process_document_ids(
     failed_count = 0
 
     for document_id in document_ids:
-        try:
-            result = reprocess_document(
-                document_id
-            )
-
-        except PipelineUnavailableError:
-            raise
-
-        except Exception as exc:
-            error_result = record_error(
-                error_type="database",
-                stage="integration",
-                error_code=(
-                    "DOCUMENT_REPROCESS_UNEXPECTED_ERROR"
-                ),
-                message=str(exc),
-                document_id=document_id,
-            )
-
-            error_id = error_result.get("error_id")
-
-            if error_id is not None:
-                error_ids.append(
-                    int(error_id)
-                )
-
-            failed_count += 1
-
-            results.append(
-                {
-                    "success": False,
-                    "document_id": document_id,
-                    "stage": "integration",
-                    "error_code": (
-                        "DOCUMENT_REPROCESS_UNEXPECTED_ERROR"
-                    ),
-                    "message": str(exc),
-                }
-            )
-
-            continue
-
-        if not isinstance(result, dict):
-            message = (
-                "Document reprocessor 반환값은 "
-                "dict여야 합니다."
-            )
-
-            error_result = record_error(
-                error_type="database",
-                stage="integration",
-                error_code=(
-                    "INVALID_DOCUMENT_REPROCESS_RESULT"
-                ),
-                message=message,
-                document_id=document_id,
-            )
-
-            error_id = error_result.get("error_id")
-
-            if error_id is not None:
-                error_ids.append(
-                    int(error_id)
-                )
-
-            failed_count += 1
-
-            results.append(
-                {
-                    "success": False,
-                    "document_id": document_id,
-                    "stage": "integration",
-                    "error_code": (
-                        "INVALID_DOCUMENT_REPROCESS_RESULT"
-                    ),
-                    "message": message,
-                }
-            )
-
-            continue
+        result = _process_document_with_retry(
+            document_id
+        )
 
         results.append(result)
 
@@ -273,7 +324,7 @@ def collect_persist_and_process() -> dict[str, Any]:
             collection_run_id
         )
 
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         message = str(exc)
 
         error_result = record_error(
