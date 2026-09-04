@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from backend.app.clients import document_worker_client
@@ -120,9 +121,21 @@ def _normalize_worker_context(
             "Document context is missing storage_path."
         )
 
+    announcement_date = context.get("announcement_date")
+
+    if (
+        announcement_date is not None
+        and not isinstance(announcement_date, date)
+    ):
+        raise RuntimeError(
+            "Document context has an invalid "
+            "announcement_date."
+        )
+
     return {
         "announcement_key": announcement_key,
         "announcement_id": announcement_id,
+        "announcement_date": announcement_date,
         "document_id": document_id,
         "filename": filename,
         "document_format": document_format,
@@ -209,6 +222,7 @@ def process_document_via_worker(
         "document_id": context["document_id"],
         "announcement_id": context["announcement_id"],
         "announcement_key": context["announcement_key"],
+        "announcement_date": context["announcement_date"],
         "filename": context["filename"],
         "document_format": context["document_format"],
         "storage_path": context["storage_path"],
