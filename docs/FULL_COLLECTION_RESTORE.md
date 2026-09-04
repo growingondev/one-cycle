@@ -173,3 +173,34 @@ AWS에서 실제 LH 다운로드부터 AI 처리까지 검증하는 운영 종�
 ```text
 refactor: restore full collection structure and preserve retry safeguards
 ```
+
+
+## AWS 실제 종단 검증 업데이트 (2026-09-04)
+
+이 절은 위의 “AWS 종단 검증 미실시” 상태를 갱신한다. 상세 명령·수치·제약은
+`docs/FULL_COLLECTION_HANDOFF_20260904.md` 12장을 참고한다.
+
+- 검증 브랜치/기준 커밋: `fix/restore-full-collection` / `92310f4`
+- Backend·Crawler 재빌드 및 Health 확인
+- 관리자 수동 전체수집: 실제 LH 목록 1페이지 50/50 성공
+- 새 CollectionRun 10 생성
+- primary 문서 46/46 처리 성공, 실패 0
+- 처리 완료 전 Run 9 유지, 완료 후 Run 10 Publish
+- 사용자 공고 API 총 50건
+- 실행별 공고 폴더 50개, 첨부파일 79개, `_temp_download` 정리 확인
+- 공고 379 개별 재수집: 기존 Document 635 재사용, 중복 미생성
+- Document 635 재처리: ProcessingRun 446 비활성, 492 활성
+- 자동 재시도 관련 테스트 10개 통과
+- 사용자 공고문 다운로드와 Run 10 기반 챗봇 연결 확인
+- Scheduler 기동 및 Asia/Seoul 12·15·18시 예약 등록 확인
+
+아직 남은 범위:
+
+- 실제 예약 시각의 Scheduler 전체수집 확인
+- 활성 Run과 직전 정상 Run 1개를 제외한 오래된 DB·파일 자동 정리
+- 관리자 공고 목록의 조회 범위 결정
+- 기존 핵심정보 추출 테스트 실패 4건 수정
+
+현재 확정된 후속 정책은 **활성 Run과 직전 정상 Run 1개 보관, 그보다 오래된 데이터 정리**다.
+관리자 롤백 버튼/API는 구현하기로 확정하지 않았으며 이번 필수 범위에 포함하지 않는다.
+현재 전체교체는 active CollectionRun 전환이고 과거 데이터의 물리 삭제는 아직 수행하지 않는다.
