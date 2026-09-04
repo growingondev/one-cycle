@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -40,6 +41,16 @@ class Settings(BaseSettings):
 
     # Host-accessible mirror of the Document Worker output root.
     pipeline_output_host_path: str = ""
+
+    # CollectionRun retention: disabled | dry_run | delete
+    collection_retention_mode: Literal[
+        "disabled",
+        "dry_run",
+        "delete",
+    ] = "disabled"
+    collection_retention_output_root: str = str(
+        PROJECT_ROOT / "outputs"
+    )
 
     # Admin authentication
     admin_id: str = ""

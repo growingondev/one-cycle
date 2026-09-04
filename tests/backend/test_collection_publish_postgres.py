@@ -58,7 +58,7 @@ def migrated_db(monkeypatch):
         transaction = connection.begin()
         assert (
             connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "8f4d1c2a7b90"
+            == "d91f7a63b2c4"
         )
         sessions = sessionmaker(
             bind=connection,
