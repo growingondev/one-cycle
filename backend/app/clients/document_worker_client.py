@@ -3,17 +3,16 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Literal
 
-from pydantic import (
-    BaseModel,
-    Field,
-    ValidationError,
-)
-
 from backend.app.clients.http_json import (
     InternalServiceResponseError,
     post_json,
 )
 from backend.app.core.config import settings
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+)
 
 
 class DocumentSource(BaseModel):
