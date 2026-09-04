@@ -5,8 +5,8 @@ from datetime import date
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from backend.app.services.chat_service import answer_question_via_rag
 from backend.app.main import app as backend_app
+from backend.app.services.chat_service import answer_question_via_rag
 from backend.app.services.collection_service import (
     VALID_DOCUMENT_FORMATS,
     _validate_collection_result,
