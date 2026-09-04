@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -51,6 +52,7 @@ class DocumentWorkerRetryTest(unittest.TestCase):
             request = DocumentProcessRequest(
                 announcement_id=3,
                 announcement_key="NOTICE-3",
+                announcement_date=date(2026, 9, 3),
                 source={
                     "filename": "notice.hwpx",
                     "format": "hwpx",
@@ -91,7 +93,7 @@ class DocumentWorkerRetryTest(unittest.TestCase):
                     service,
                     "_run_key_information_extraction",
                     return_value=_key_information(),
-                ),
+                ) as key_information,
             ):
                 response = service.process_document(
                     document_id=9,
@@ -103,6 +105,12 @@ class DocumentWorkerRetryTest(unittest.TestCase):
             structure.assert_not_called()
             chunking.assert_not_called()
             embedding.assert_called_once()
+            self.assertEqual(
+                key_information.call_args.kwargs[
+                    "announcement_date"
+                ],
+                date(2026, 9, 3),
+            )
             self.assertEqual(response.status, "completed")
             self.assertEqual(response.summary.embedding_count, 2)
 
