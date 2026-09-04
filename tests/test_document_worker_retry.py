@@ -8,11 +8,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
-
+from document_worker import service
 from document_worker.api.schemas import (
     DocumentProcessRequest,
 )
-from document_worker import service
 
 
 def _key_information() -> dict[str, dict[str, str]]:
