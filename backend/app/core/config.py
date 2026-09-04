@@ -52,6 +52,13 @@ class Settings(BaseSettings):
         PROJECT_ROOT / "outputs"
     )
 
+    # Optional one-time mapping for paths stored by an older deployment.
+    # Both stored/access values for a path type must be configured together.
+    collection_retention_legacy_document_stored_root: str = ""
+    collection_retention_legacy_document_access_root: str = ""
+    collection_retention_legacy_output_stored_root: str = ""
+    collection_retention_legacy_output_access_root: str = ""
+
     # Admin authentication
     admin_id: str = ""
     admin_password: str = ""
