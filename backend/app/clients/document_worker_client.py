@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal
 
 from pydantic import (
@@ -68,6 +69,7 @@ def process_document(
     filename: str,
     document_format: Literal["hwp", "hwpx"],
     storage_path: str,
+    announcement_date: date | None = None,
     start_stage: str | None = None,
     base_url: str | None = None,
     timeout_seconds: float | None = None,
@@ -124,9 +126,22 @@ def process_document(
         f"/v1/documents/{document_id}/process"
     )
 
+    if (
+        announcement_date is not None
+        and not isinstance(announcement_date, date)
+    ):
+        raise ValueError(
+            "announcement_date must be a date or None."
+        )
+
     request_payload = {
         "announcement_id": announcement_id,
         "announcement_key": normalized_announcement_key,
+        "announcement_date": (
+            announcement_date.isoformat()
+            if announcement_date is not None
+            else None
+        ),
         "source": source.model_dump(),
     }
     normalized_start_stage = str(start_stage or "").strip()
