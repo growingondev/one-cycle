@@ -4,7 +4,6 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
-    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -82,45 +81,6 @@ class Announcement(Base):
         String(50),
         nullable=True,
         index=True,
-    )
-
-    normalized_title: Mapped[str | None] = mapped_column(
-        Text,
-        nullable=True,
-    )
-    metadata_hash: Mapped[str | None] = mapped_column(
-        String(64),
-        nullable=True,
-        index=True,
-    )
-    change_type: Mapped[str] = mapped_column(
-        String(20),
-        nullable=False,
-        default="initial",
-        server_default="initial",
-    )
-    is_visible: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=True,
-        server_default="true",
-        index=True,
-    )
-    supersedes_announcement_id: Mapped[int | None] = mapped_column(
-        ForeignKey(
-            "announcements.id",
-            name=(
-                "fk_announcements_supersedes_announcement_id_"
-                "announcements"
-            ),
-            ondelete="SET NULL",
-        ),
-        nullable=True,
-        index=True,
-    )
-    last_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(

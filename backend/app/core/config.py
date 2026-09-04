@@ -35,11 +35,8 @@ class Settings(BaseSettings):
     crawler_service_timeout_seconds: float = 30.0
     crawler_job_timeout_seconds: float = 3600.0
     crawler_job_poll_interval_seconds: float = 5.0
-
-    # Crawler와 공유하는 원본 문서 및 동기화 실행 로그 루트
-    document_storage_root: str = str(
-        PROJECT_ROOT / "runtime" / "documents"
-    )
+    # Crawler와 동일한 다운로드 루트: 재수집 중복 파일만 안전하게 정리한다.
+    crawler_staging_dir: str = str(PROJECT_ROOT / "test_documents" / "lh_downloads")
 
     # Host-accessible mirror of the Document Worker output root.
     pipeline_output_host_path: str = ""

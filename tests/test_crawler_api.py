@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from crawler import main as crawler_api
 
 
-class CrawlerScanApiTest(unittest.TestCase):
+class CrawlerApiTest(unittest.TestCase):
     def setUp(self):
         crawler_api.jobs.clear()
         self.client = TestClient(crawler_api.app)
@@ -14,19 +14,19 @@ class CrawlerScanApiTest(unittest.TestCase):
     def tearDown(self):
         crawler_api.jobs.clear()
 
-    def test_scan_job_uses_common_job_status_contract(self):
+    def test_full_collection_uses_common_job_status_contract(self):
         domain_result = {
-            "execution_id": "scan-test-1",
+            "execution_id": "execution-test-1",
             "execution_status": "success",
-            "notices": [],
+            "data": [],
         }
 
         with patch.object(
             crawler_api,
-            "scan_lh_notice_list",
+            "crawl_lh_notices",
             return_value=domain_result,
         ):
-            accepted = self.client.post("/v1/scan-jobs")
+            accepted = self.client.post("/v1/crawl-jobs")
 
         self.assertEqual(accepted.status_code, 200)
         job_id = accepted.json()["job_id"]
@@ -67,20 +67,45 @@ class CrawlerScanApiTest(unittest.TestCase):
             "https://example.com/notice/1",
             target_file_name="failed-document.hwpx",
         )
+        job_id = accepted.json()["job_id"]
+        self.assertEqual(self.client.get(f"/v1/crawl-jobs/{job_id}").json()["status"], "completed")
+        self.assertEqual(
+            self.client.get(f"/v1/crawl-jobs/{job_id}/result").json()["result"], domain_result
+        )
 
-    def test_scan_job_is_rejected_while_another_job_runs(self):
+    def test_full_collection_is_rejected_while_another_job_runs(self):
         crawler_api.jobs["running-job"] = {
             "job_id": "running-job",
             "status": "running",
         }
 
-        response = self.client.post("/v1/scan-jobs")
+        response = self.client.post("/v1/crawl-jobs")
 
         self.assertEqual(response.status_code, 409)
         self.assertEqual(
             response.json()["detail"]["error_code"],
             "CRAWLER_JOB_ALREADY_RUNNING",
         )
+
+    def test_scan_route_is_absent(self):
+        self.assertEqual(self.client.post("/v1/scan-jobs").status_code, 404)
+        self.assertNotIn("/v1/scan-jobs", crawler_api.app.openapi()["paths"])
+
+    def test_recollect_conflicts_with_full_collection(self):
+        crawler_api.jobs["full"] = {"status": "running"}
+        result = self.client.post("/v1/recollect-jobs", json={
+            "source_announcement_id": "A", "detail_url": "https://example.test/A",
+        })
+        self.assertEqual(result.status_code, 409)
+
+    def test_failed_task_remains_queryable_and_releases_busy_state(self):
+        with patch.object(crawler_api, "crawl_lh_notices", side_effect=RuntimeError("failed")):
+            accepted = self.client.post("/v1/crawl-jobs")
+        job_id = accepted.json()["job_id"]
+        self.assertEqual(self.client.get(f"/v1/crawl-jobs/{job_id}").json()["status"], "failed")
+        self.assertEqual(self.client.get(f"/v1/crawl-jobs/{job_id}/result").json()["error_code"],
+                         "CRAWLER_EXECUTION_FAILED")
+        self.assertFalse(crawler_api.is_crawler_busy())
 
 
 if __name__ == "__main__":

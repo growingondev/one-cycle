@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import logging
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -15,6 +17,9 @@ from backend.app.services.document_role_service import (
     classify_document_role,
 )
 from backend.app.services.error_log_service import record_error
+from backend.app.services.recollection_storage import file_matches, validated_recollection_file
+
+LOGGER = logging.getLogger(__name__)
 
 VALID_RUN_STATUSES = {
     "running",
@@ -387,14 +392,50 @@ def collect_and_persist() -> dict[str, Any]:
 
     result = crawler_client.crawl_announcements()
 
-    return persist_collection_result(result)
+    persistence = persist_collection_result(result)
+    errors = result.get("errors") or []
+    if not errors:
+        return persistence
+
+    # Full collection must also expose download errors to the existing targeted
+    # admin retry flow. Persist first so ErrorLog can reference committed IDs.
+    with SessionLocal() as db:
+        announcements = {
+            row.source_announcement_id: row.id
+            for row in db.scalars(select(Announcement).where(
+                Announcement.collection_run_id == persistence["collection_run_id"]
+            ))
+        }
+        documents = {
+            (row.announcement_id, row.original_filename): row.id
+            for row in db.scalars(select(Document).join(Announcement).where(
+                Announcement.collection_run_id == persistence["collection_run_id"]
+            ).order_by(Document.id))
+        }
+
+    error_ids = []
+    for error in errors:
+        source_id = str(error.get("source_announcement_id") or "").strip()
+        file_name = str(error.get("file_name") or "").strip()
+        announcement_id = announcements.get(source_id)
+        recorded = record_error(
+            error_type=str(error.get("error_type") or "collection"),
+            stage=str(error.get("stage") or "collection"),
+            error_code=error.get("error_code"),
+            message=str(error.get("message") or "Crawler 전체 수집 오류"),
+            target_filename=file_name or None,
+            collection_run_id=persistence["collection_run_id"],
+            announcement_id=announcement_id,
+            document_id=documents.get((announcement_id, file_name)),
+        )
+        if recorded.get("error_id") is not None:
+            error_ids.append(int(recorded["error_id"]))
+    return {**persistence, "error_ids": error_ids, "error_count": len(error_ids)}
 
 
 def recollect_and_persist(
     *,
     announcement_id: int,
-    source_announcement_id_override: str | None = None,
-    detail_url_override: str | None = None,
     target_file_name: str | None = None,
 ) -> dict[str, Any]:
     """
@@ -429,15 +470,11 @@ def recollect_and_persist(
             )
 
         source_announcement_id = str(
-            source_announcement_id_override
-            if source_announcement_id_override is not None
-            else announcement.source_announcement_id
+            announcement.source_announcement_id
         ).strip()
 
         detail_url = str(
-            detail_url_override
-            if detail_url_override is not None
-            else announcement.detail_url
+            announcement.detail_url
         ).strip()
 
         collection_run_id = (
@@ -479,13 +516,15 @@ def recollect_and_persist(
     new_document_ids: list[int] = []
     new_analysis_document_ids: list[int] = []
     reused_document_ids: list[int] = []
+    recovered_analysis_document_ids: list[int] = []
+    duplicate_files: list[tuple[Path, Path, str]] = []
+    cleanup_errors: list[str] = []
     document_by_filename: dict[str, int] = {}
 
     # 3. 성공적으로 다운로드된 HWP/HWPX 저장
     with SessionLocal.begin() as db:
-        announcement_exists = db.get(
-            Announcement,
-            announcement_id,
+        announcement_exists = db.scalar(
+            select(Announcement).where(Announcement.id == announcement_id).with_for_update()
         )
 
         if announcement_exists is None:
@@ -552,6 +591,29 @@ def recollect_and_persist(
                 )
 
             if existing_document is not None:
+                if download_status == "completed":
+                    downloaded = validated_recollection_file(
+                        storage_path=str(raw_document.get("storage_path") or ""),
+                        execution_id=crawler_result["execution_id"],
+                        source_id=source_announcement_id,
+                        file_name=file_name,
+                        checksum=checksum,
+                    )
+                    old_path = (
+                        Path(existing_document.storage_path).resolve()
+                        if existing_document.storage_path else None
+                    )
+                    if old_path is not None and file_matches(old_path, checksum):
+                        if old_path != downloaded:
+                            duplicate_files.append((downloaded, old_path, checksum))
+                    else:
+                        # Keep existing processing references, but repair the missing original.
+                        existing_document.storage_path = str(downloaded)
+                        existing_document.file_size_bytes = downloaded.stat().st_size
+                        if document_role == DOCUMENT_ROLE_PRIMARY:
+                            recovered_analysis_document_ids.append(existing_document.id)
+                    existing_document.download_status = "completed"
+                    existing_document.error_message = None
                 reused_document_ids.append(
                     existing_document.id
                 )
@@ -607,6 +669,30 @@ def recollect_and_persist(
             document_by_filename[
                 file_name
             ] = document.id
+
+    # Delete only redundant NEW downloads, after the DB transaction committed.
+    # Recheck references and the retained file under the same announcement row lock.
+    for downloaded, retained, checksum in duplicate_files:
+        try:
+            with SessionLocal.begin() as db:
+                db.scalar(select(Announcement).where(
+                    Announcement.id == announcement_id
+                ).with_for_update())
+                referenced = db.scalar(select(Document.id).where(
+                    Document.storage_path == str(downloaded)
+                ).limit(1))
+                if referenced is None and file_matches(retained, checksum):
+                    checked = validated_recollection_file(
+                        storage_path=str(downloaded),
+                        execution_id=crawler_result["execution_id"],
+                        source_id=source_announcement_id,
+                        file_name=downloaded.name,
+                        checksum=checksum,
+                    )
+                    checked.unlink()
+        except (OSError, ValueError) as exc:
+            LOGGER.warning("Recollection duplicate cleanup failed: %s", exc)
+            cleanup_errors.append(str(exc))
 
     # 4. Crawler 오류를 Backend ErrorLog에 저장
     crawler_errors = (
@@ -689,6 +775,8 @@ def recollect_and_persist(
         "reused_document_ids": (
             reused_document_ids
         ),
+        "recovered_analysis_document_ids": recovered_analysis_document_ids,
+        "duplicate_cleanup_errors": cleanup_errors,
         "document_ids": all_document_ids,
         "error_count": len(
             recorded_error_ids

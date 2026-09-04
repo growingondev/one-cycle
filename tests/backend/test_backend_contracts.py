@@ -177,7 +177,13 @@ class PipelineGatewayContractTest(unittest.TestCase):
                 },
                 clear=False,
             ):
-                result = collect_announcements()
+                with patch("backend.app.services.pipeline_gateway.engine") as engine:
+                    connection = (
+                        engine.connect.return_value.execution_options.return_value
+                        .__enter__.return_value
+                    )
+                    connection.scalar.side_effect = [True, True]
+                    result = collect_announcements()
 
         self.assertEqual(
             result["status"],

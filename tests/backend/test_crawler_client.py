@@ -161,48 +161,6 @@ class CrawlerClientTest(unittest.TestCase):
             timeout_seconds=30.0,
         )
 
-    def test_scan_sends_expected_job_request(self):
-        domain_result = {
-            "execution_id": "scan-1",
-            "execution_status": "success",
-            "notices": [],
-        }
-
-        with (
-            self._settings(),
-            patch.object(
-                crawler_client,
-                "post_json",
-                return_value={
-                    "job_id": "job-scan-1",
-                    "status": "queued",
-                },
-            ) as post_json,
-            patch.object(
-                crawler_client,
-                "get_json",
-                side_effect=[
-                    {
-                        "job_id": "job-scan-1",
-                        "status": "completed",
-                    },
-                    {
-                        "job_id": "job-scan-1",
-                        "status": "completed",
-                        "result": domain_result,
-                    },
-                ],
-            ),
-        ):
-            result = crawler_client.scan_announcements()
-
-        self.assertEqual(result, domain_result)
-        post_json.assert_called_once_with(
-            url="http://crawler:8000/v1/scan-jobs",
-            payload={},
-            timeout_seconds=30.0,
-        )
-
     def test_failed_job_preserves_error_contract(self):
         with (
             self._settings(),
