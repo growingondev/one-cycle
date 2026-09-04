@@ -18,6 +18,12 @@ from backend.app.models.processing_run import ProcessingRun
 from backend.app.models.system_state import SystemState
 
 
+@dataclass(frozen=True)
+class _PathMapping:
+    stored_root: Path
+    access_root: Path
+
+
 @dataclass
 class _RetentionPlan:
     active_collection_run_id: int | None
@@ -43,34 +49,141 @@ class _RetentionPlan:
         }
 
 
-def _resolved_path(value: str, root: Path) -> Path | None:
+def _path_mappings(
+    *,
+    primary_root: str,
+    legacy_stored_root: str,
+    legacy_access_root: str,
+    label: str,
+) -> list[_PathMapping]:
+    primary = Path(primary_root).expanduser()
+    if not primary.is_absolute():
+        raise RuntimeError(
+            f"{label} root must be an absolute path: {primary_root}"
+        )
+    primary = primary.resolve(strict=False)
+    mappings = [
+        _PathMapping(
+            stored_root=primary,
+            access_root=primary,
+        )
+    ]
+
+    stored_value = legacy_stored_root.strip()
+    access_value = legacy_access_root.strip()
+    if bool(stored_value) != bool(access_value):
+        raise RuntimeError(
+            f"{label} legacy stored/access roots must be configured together."
+        )
+    if not stored_value:
+        return mappings
+
+    stored = Path(stored_value).expanduser()
+    access = Path(access_value).expanduser()
+    if not stored.is_absolute() or not access.is_absolute():
+        raise RuntimeError(
+            f"{label} legacy stored/access roots must be absolute paths."
+        )
+
+    mappings.append(
+        _PathMapping(
+            stored_root=stored.resolve(strict=False),
+            access_root=access.resolve(strict=False),
+        )
+    )
+    return mappings
+
+
+def _document_path_mappings() -> list[_PathMapping]:
+    return _path_mappings(
+        primary_root=settings.crawler_staging_dir,
+        legacy_stored_root=(
+            settings.collection_retention_legacy_document_stored_root
+        ),
+        legacy_access_root=(
+            settings.collection_retention_legacy_document_access_root
+        ),
+        label="document",
+    )
+
+
+def _output_path_mappings() -> list[_PathMapping]:
+    return _path_mappings(
+        primary_root=settings.collection_retention_output_root,
+        legacy_stored_root=(
+            settings.collection_retention_legacy_output_stored_root
+        ),
+        legacy_access_root=(
+            settings.collection_retention_legacy_output_access_root
+        ),
+        label="output",
+    )
+
+
+def _resolved_path(
+    value: str,
+    mappings: Iterable[_PathMapping],
+) -> Path | None:
     raw = Path(value).expanduser()
     if not raw.is_absolute():
         return None
 
-    resolved = raw.resolve(strict=False)
-    if resolved == root or not resolved.is_relative_to(root):
-        return None
+    stored_path = raw.resolve(strict=False)
+    for mapping in mappings:
+        if (
+            stored_path == mapping.stored_root
+            or not stored_path.is_relative_to(mapping.stored_root)
+        ):
+            continue
 
-    return resolved
+        relative_path = stored_path.relative_to(mapping.stored_root)
+        accessible_path = (
+            mapping.access_root / relative_path
+        ).resolve(strict=False)
+        if (
+            accessible_path == mapping.access_root
+            or not accessible_path.is_relative_to(mapping.access_root)
+        ):
+            return None
+        return accessible_path
+
+    return None
+
+
+def _access_root_for_path(
+    path: Path,
+    mappings: Iterable[_PathMapping],
+) -> Path:
+    matching_roots = [
+        mapping.access_root
+        for mapping in mappings
+        if path != mapping.access_root
+        and path.is_relative_to(mapping.access_root)
+    ]
+    if not matching_roots:
+        raise RuntimeError(
+            f"Retention target is outside configured access roots: {path}"
+        )
+    return max(matching_roots, key=lambda root: len(root.parts))
 
 
 def _safe_file_targets(
     values: Iterable[str],
     *,
     retained_values: Iterable[str],
-    root: Path,
+    mappings: Iterable[_PathMapping],
     unsafe_paths: list[str],
 ) -> list[Path]:
+    mappings = tuple(mappings)
     retained = {
         path
         for value in retained_values
-        if (path := _resolved_path(value, root)) is not None
+        if (path := _resolved_path(value, mappings)) is not None
     }
     targets: set[Path] = set()
 
     for value in values:
-        path = _resolved_path(value, root)
+        path = _resolved_path(value, mappings)
         if path is None:
             unsafe_paths.append(value)
             continue
@@ -85,18 +198,19 @@ def _safe_directory_targets(
     values: Iterable[str],
     *,
     retained_values: Iterable[str],
-    root: Path,
+    mappings: Iterable[_PathMapping],
     unsafe_paths: list[str],
 ) -> list[Path]:
+    mappings = tuple(mappings)
     retained = {
         path
         for value in retained_values
-        if (path := _resolved_path(value, root)) is not None
+        if (path := _resolved_path(value, mappings)) is not None
     }
     candidates: set[Path] = set()
 
     for value in values:
-        path = _resolved_path(value, root)
+        path = _resolved_path(value, mappings)
         if path is None:
             unsafe_paths.append(value)
             continue
@@ -216,21 +330,19 @@ def _build_plan(db: Session, *, lock_state: bool) -> _RetentionPlan:
         )
     )
 
-    document_root = Path(settings.crawler_staging_dir).expanduser().resolve()
-    output_root = Path(
-        settings.collection_retention_output_root
-    ).expanduser().resolve()
+    document_mappings = _document_path_mappings()
+    output_mappings = _output_path_mappings()
 
     plan.document_files = _safe_file_targets(
         candidate_document_paths,
         retained_values=retained_document_paths,
-        root=document_root,
+        mappings=document_mappings,
         unsafe_paths=plan.unsafe_paths,
     )
     plan.output_directories = _safe_directory_targets(
         candidate_output_paths,
         retained_values=retained_output_paths,
-        root=output_root,
+        mappings=output_mappings,
         unsafe_paths=plan.unsafe_paths,
     )
     return plan
@@ -258,10 +370,8 @@ def _prune_empty_parents(path: Path, root: Path) -> None:
 
 
 def _delete_files(plan: _RetentionPlan) -> dict[str, Any]:
-    document_root = Path(settings.crawler_staging_dir).expanduser().resolve()
-    output_root = Path(
-        settings.collection_retention_output_root
-    ).expanduser().resolve()
+    document_mappings = _document_path_mappings()
+    output_mappings = _output_path_mappings()
     deleted_document_files = 0
     deleted_output_directories = 0
     missing_paths = 0
@@ -277,7 +387,10 @@ def _delete_files(plan: _RetentionPlan) -> dict[str, Any]:
             else:
                 path.unlink()
             deleted_output_directories += 1
-            _prune_empty_parents(path, output_root)
+            _prune_empty_parents(
+                path,
+                _access_root_for_path(path, output_mappings),
+            )
         except OSError as exc:
             errors.append(f"{path}: {exc}")
 
@@ -291,7 +404,10 @@ def _delete_files(plan: _RetentionPlan) -> dict[str, Any]:
                 continue
             path.unlink()
             deleted_document_files += 1
-            _prune_empty_parents(path, document_root)
+            _prune_empty_parents(
+                path,
+                _access_root_for_path(path, document_mappings),
+            )
         except OSError as exc:
             errors.append(f"{path}: {exc}")
 
