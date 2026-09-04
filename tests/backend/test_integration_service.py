@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import call, patch
 
+from backend.app.services import integration_service
 from backend.app.services.collection_service import (
     recollect_and_persist,
 )
@@ -13,6 +14,50 @@ from backend.app.services.integration_service import (
 
 
 class IntegrationServiceTest(unittest.TestCase):
+
+    @patch(
+        "backend.app.services.integration_service."
+        "settings.collection_retention_mode",
+        "dry_run",
+    )
+    @patch(
+        "backend.app.services.integration_service."
+        "apply_collection_run_retention"
+    )
+    def test_retention_dry_run_mode_is_applied_after_publish(
+        self,
+        mock_apply_retention,
+    ):
+        mock_apply_retention.return_value = {
+            "status": "dry_run",
+        }
+
+        result = integration_service._apply_retention_after_publish(7)
+
+        self.assertEqual(result["status"], "dry_run")
+        mock_apply_retention.assert_called_once_with(dry_run=True)
+
+    @patch(
+        "backend.app.services.integration_service."
+        "settings.collection_retention_mode",
+        "delete",
+    )
+    @patch(
+        "backend.app.services.integration_service."
+        "apply_collection_run_retention"
+    )
+    def test_retention_delete_mode_is_applied_after_publish(
+        self,
+        mock_apply_retention,
+    ):
+        mock_apply_retention.return_value = {
+            "status": "completed",
+        }
+
+        result = integration_service._apply_retention_after_publish(8)
+
+        self.assertEqual(result["status"], "completed")
+        mock_apply_retention.assert_called_once_with(dry_run=False)
 
     @patch(
         "backend.app.services.collection_service.record_error"
