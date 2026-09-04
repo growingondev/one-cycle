@@ -474,6 +474,7 @@ def get_registered_document_context(document_id: int):
         return {
             "announcement_key": announcement.source_announcement_id,
             "announcement_db_id": announcement.id,
+            "announcement_date": announcement.announcement_date,
             "document_db_id": document.id,
             "filename": document.original_filename,
             "format": document.document_format,
