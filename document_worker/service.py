@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -1113,6 +1113,7 @@ def _run_key_information_extraction(
     document_id: int,
     announcement_id: int,
     announcement_key: str,
+    announcement_date: date | None,
     structure_path: Path,
     verification_path: Path,
 ) -> dict[str, Any]:
@@ -1128,6 +1129,7 @@ def _run_key_information_extraction(
         "document_id": document_id,
         "announcement_id": announcement_id,
         "announcement_key": announcement_key,
+        "announcement_date": announcement_date,
     }
 
     try:
@@ -1451,6 +1453,9 @@ def process_document(
             ),
             announcement_key=(
                 request.announcement_key
+            ),
+            announcement_date=(
+                request.announcement_date
             ),
             structure_path=(
                 paths["structure"]
