@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -18,6 +19,7 @@ class DocumentProcessRequest(BaseModel):
 
     announcement_id: int = Field(gt=0)
     announcement_key: str = Field(min_length=1)
+    announcement_date: date | None = None
     source: DocumentSource
     start_stage: str | None = None
 
