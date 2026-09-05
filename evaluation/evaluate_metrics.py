@@ -1132,30 +1132,11 @@ async def build_ragas_scorers(
     }
 
     if not factual_only:
-        faithfulness = Faithfulness(
-            llm=llm
-        )
-
-        # Faithfulness의 판정 기준과 출력 스키마는 유지하면서
-        # Judge가 불필요하게 긴 설명/추론을 생성하지 않도록 한다.
-        # RAGAS 스키마상 reason 필드는 필요하므로 제거하지 않고
-        # 한 문장으로 짧게 제한한다.
-        faithfulness.nli_statements_prompt.instruction = (
-            "주어진 context를 기준으로 각 statement의 "
-            "faithfulness를 판정하세요. "
-            "statement가 context에서 직접 확인되거나 "
-            "직접 추론 가능하면 verdict=1, 그렇지 않으면 verdict=0입니다. "
-            "판정 기준을 바꾸지 마세요. "
-            "반드시 요구된 JSON 스키마만 출력하고, "
-            "추가 설명, 분석 과정, reasoning, 서론/결론은 출력하지 마세요. "
-            "각 항목의 statement는 원문을 그대로 유지하고, "
-            "reason은 판정 근거만 한 문장으로 매우 짧게 작성하세요. "
-            "verdict는 반드시 0 또는 1만 사용하세요."
-        )
-
         scorers[
             "faithfulness"
-        ] = faithfulness
+        ] = Faithfulness(
+            llm=llm
+        )
 
     return scorers
 
@@ -1172,6 +1153,8 @@ async def score_one_with_ragas(
     response: str,
     contexts: list[str],
     factual_only: bool = False,
+    run_faithfulness: bool = True,
+    run_factual_correctness: bool = True,
 ) -> tuple[
     dict[str, float | None],
     dict[str, float],
@@ -1206,13 +1189,9 @@ async def score_one_with_ragas(
             if value is None:
                 return None
 
-            value = float(
-                value
-            )
+            value = float(value)
 
-            if math.isnan(
-                value
-            ):
+            if math.isnan(value):
                 return None
 
             return value
@@ -1222,7 +1201,6 @@ async def score_one_with_ragas(
                 "    [RAGAS 경고] "
                 f"{name} 실패: {exc}"
             )
-
             return None
 
         finally:
@@ -1231,9 +1209,7 @@ async def score_one_with_ragas(
                 - metric_start
             )
 
-            metric_times[
-                name
-            ] = elapsed
+            metric_times[name] = elapsed
 
             print(
                 "  [TIME] "
@@ -1241,28 +1217,27 @@ async def score_one_with_ragas(
                 f"{elapsed:8.2f}s"
             )
 
-    if not factual_only:
-        scores[
-            "faithfulness"
-        ] = await safe_score(
+    if (
+        not factual_only
+        and run_faithfulness
+    ):
+        scores["faithfulness"] = await safe_score(
             "faithfulness",
             user_input=user_input,
             response=response,
             retrieved_contexts=contexts,
         )
 
-    scores[
-        "factual_correctness"
-    ] = await safe_score(
-        "factual_correctness",
-        response=response,
-        reference=reference,
-    )
+    if run_factual_correctness:
+        scores[
+            "factual_correctness"
+        ] = await safe_score(
+            "factual_correctness",
+            response=response,
+            reference=reference,
+        )
 
-    return (
-        scores,
-        metric_times,
-    )
+    return scores, metric_times
 
 
 # ============================================================
@@ -1384,11 +1359,25 @@ async def evaluate_metrics(
     )
 
     # ========================================================
-    # Excel 읽기
+    # Excel 읽기 / 자동 Resume
     # ========================================================
 
+    resume_source = input_path
+
+    if (
+        output_path.exists()
+        and not args.rerun_success
+    ):
+        resume_source = output_path
+        print(
+            "[RESUME] 기존 출력 파일에서 이어서 평가합니다."
+        )
+        print(
+            f"[RESUME] 파일: {resume_source}"
+        )
+
     wb = load_workbook(
-        input_path
+        resume_source
     )
 
     if (
@@ -1559,6 +1548,15 @@ async def evaluate_metrics(
     print(
         f"출력 파일       : "
         f"{output_path}"
+    )
+
+    print(
+        "Resume           : "
+        + (
+            "기존 성공 metric 자동 SKIP"
+            if not args.rerun_success
+            else "성공 metric도 강제 재실행"
+        )
     )
 
     print(
@@ -1755,6 +1753,30 @@ async def evaluate_metrics(
             ).value
             or ""
         ).strip().lower()
+
+        existing_faithfulness = ws.cell(
+            row=row,
+            column=columns[
+                "faithfulness"
+            ],
+        ).value
+
+        existing_factual = ws.cell(
+            row=row,
+            column=columns[
+                "factual_correctness"
+            ],
+        ).value
+
+        has_faithfulness = (
+            existing_faithfulness is not None
+            and str(existing_faithfulness).strip() != ""
+        )
+
+        has_factual = (
+            existing_factual is not None
+            and str(existing_factual).strip() != ""
+        )
 
         # 최종 성능에서 제외된 Response Relevancy는
         # 기존 열만 유지하고 새 RUN에서는 빈칸으로 둔다.
@@ -2066,14 +2088,12 @@ async def evaluate_metrics(
             )
 
         elif args.skip_ragas:
-
             current_status = ws.cell(
                 row=row,
                 column=ragas_status_col,
             ).value
 
             if current_status is None:
-
                 ws.cell(
                     row=row,
                     column=ragas_status_col,
@@ -2081,114 +2101,201 @@ async def evaluate_metrics(
                 )
 
         elif not response:
-
             ws.cell(
                 row=row,
                 column=ragas_status_col,
-                value=(
-                    "SKIPPED - "
-                    "response 없음"
-                ),
+                value="SKIPPED - response 없음",
             )
 
         elif not contexts:
-
             ws.cell(
                 row=row,
                 column=ragas_status_col,
-                value=(
-                    "SKIPPED - "
-                    "retrieved_contexts 없음"
-                ),
+                value="SKIPPED - retrieved_contexts 없음",
             )
 
         else:
-
             assert scorers is not None
 
-            (
-                scores,
-                metric_times,
-            ) = (
-                await score_one_with_ragas(
+            run_faithfulness = (
+                not args.factual_only
+                and (
+                    args.rerun_success
+                    or not has_faithfulness
+                )
+            )
+
+            run_factual = (
+                args.rerun_success
+                or not has_factual
+            )
+
+            if (
+                not run_faithfulness
+                and not run_factual
+            ):
+                print(
+                    "  [RESUME] Faithfulness/Factual Correctness "
+                    "이미 존재 → RAGAS SKIP"
+                )
+
+                ws.cell(
+                    row=row,
+                    column=ragas_status_col,
+                    value="OK - RESUMED/SKIPPED",
+                )
+
+                if (
+                    not args.factual_only
+                    and has_faithfulness
+                ):
+                    try:
+                        ragas_values[
+                            "faithfulness"
+                        ].append(
+                            float(existing_faithfulness)
+                        )
+                    except (TypeError, ValueError):
+                        pass
+
+                if has_factual:
+                    try:
+                        ragas_values[
+                            "factual_correctness"
+                        ].append(
+                            float(existing_factual)
+                        )
+                    except (TypeError, ValueError):
+                        pass
+
+            else:
+                if (
+                    not args.factual_only
+                    and has_faithfulness
+                    and not run_faithfulness
+                ):
+                    print(
+                        "  [RESUME] faithfulness 기존 값 유지"
+                    )
+
+                if (
+                    has_factual
+                    and not run_factual
+                ):
+                    print(
+                        "  [RESUME] factual_correctness 기존 값 유지"
+                    )
+
+                scores, metric_times = await score_one_with_ragas(
                     scorers=scorers,
                     user_input=user_input,
                     reference=reference,
                     response=response,
                     contexts=contexts,
-                    factual_only=(
-                        args.factual_only
-                    ),
+                    factual_only=args.factual_only,
+                    run_faithfulness=run_faithfulness,
+                    run_factual_correctness=run_factual,
                 )
-            )
 
-            for (
-                metric_name,
-                elapsed,
-            ) in metric_times.items():
-                metric_time_totals[
-                    metric_name
-                ] += elapsed
+                for metric_name, elapsed in metric_times.items():
+                    metric_time_totals[
+                        metric_name
+                    ] += elapsed
 
-            for (
-                metric_name,
-                score,
-            ) in scores.items():
+                if run_faithfulness:
+                    ws.cell(
+                        row=row,
+                        column=columns[
+                            "faithfulness"
+                        ],
+                        value=scores[
+                            "faithfulness"
+                        ],
+                    )
+
+                if run_factual:
+                    ws.cell(
+                        row=row,
+                        column=columns[
+                            "factual_correctness"
+                        ],
+                        value=scores[
+                            "factual_correctness"
+                        ],
+                    )
+
+                final_faithfulness = (
+                    scores["faithfulness"]
+                    if run_faithfulness
+                    else existing_faithfulness
+                )
+
+                final_factual = (
+                    scores["factual_correctness"]
+                    if run_factual
+                    else existing_factual
+                )
+
+                if not args.factual_only:
+                    try:
+                        if (
+                            final_faithfulness is not None
+                            and str(final_faithfulness).strip() != ""
+                        ):
+                            ragas_values[
+                                "faithfulness"
+                            ].append(
+                                float(final_faithfulness)
+                            )
+                    except (TypeError, ValueError):
+                        pass
+
+                try:
+                    if (
+                        final_factual is not None
+                        and str(final_factual).strip() != ""
+                    ):
+                        ragas_values[
+                            "factual_correctness"
+                        ].append(
+                            float(final_factual)
+                        )
+                except (TypeError, ValueError):
+                    pass
+
+                if args.factual_only:
+                    status = (
+                        "OK - FACTUAL_ONLY"
+                        if final_factual is not None
+                        and str(final_factual).strip() != ""
+                        else "FAILED - FACTUAL_ONLY"
+                    )
+                elif (
+                    final_faithfulness is not None
+                    and str(final_faithfulness).strip() != ""
+                    and final_factual is not None
+                    and str(final_factual).strip() != ""
+                ):
+                    status = "OK"
+                elif (
+                    (
+                        final_faithfulness is not None
+                        and str(final_faithfulness).strip() != ""
+                    )
+                    or (
+                        final_factual is not None
+                        and str(final_factual).strip() != ""
+                    )
+                ):
+                    status = "PARTIAL"
+                else:
+                    status = "FAILED"
 
                 ws.cell(
                     row=row,
-                    column=columns[
-                        metric_name
-                    ],
-                    value=score,
+                    column=ragas_status_col,
+                    value=status,
                 )
-
-                if score is not None:
-
-                    ragas_values[
-                        metric_name
-                    ].append(
-                        score
-                    )
-
-            if args.factual_only:
-
-                if (
-                    scores[
-                        "factual_correctness"
-                    ]
-                    is not None
-                ):
-                    status = (
-                        "OK - FACTUAL_ONLY"
-                    )
-                else:
-                    status = (
-                        "FAILED - FACTUAL_ONLY"
-                    )
-
-            elif all(
-                value is not None
-                for value
-                in scores.values()
-            ):
-                status = "OK"
-
-            elif any(
-                value is not None
-                for value
-                in scores.values()
-            ):
-                status = "PARTIAL"
-
-            else:
-                status = "FAILED"
-
-            ws.cell(
-                row=row,
-                column=ragas_status_col,
-                value=status,
-            )
 
         question_elapsed = (
             time.perf_counter()
@@ -2485,6 +2592,17 @@ def parse_args() -> argparse.Namespace:
             "Faithfulness를 생략하고 "
             "Factual Correctness만 계산합니다. "
             "Judge 비교/디버깅용 빠른 평가 옵션입니다."
+        ),
+    )
+
+
+    parser.add_argument(
+        "--rerun-success",
+        action="store_true",
+        help=(
+            "기존 출력 파일에 값이 있는 metric도 "
+            "강제로 다시 계산합니다. "
+            "기본값은 성공 metric 자동 SKIP입니다."
         ),
     )
 
