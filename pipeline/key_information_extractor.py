@@ -186,6 +186,9 @@ FIELD_RULES: dict[str, dict[str, tuple[str, ...]]] = {
             "입주 대상자 발표",
             "예비입주자 발표",
             "예비입주자발표",
+            "예비입주자 순번 발표",
+            "예비 입주자 순번 발표",
+            "예비자 순번 발표",
             "예비입주대상자 발표",
             "예비 입주 대상자 발표",
             "선정결과 발표",
@@ -221,6 +224,21 @@ FIELD_RULES: dict[str, dict[str, tuple[str, ...]]] = {
 INCOME_ASSET_KEYWORDS = FIELD_RULES[
     "income_asset_criteria"
 ]["keywords"]
+
+
+WINNER_PRIORITY_KEYWORDS = (
+    "예비입주자 순번 발표",
+    "예비 입주자 순번 발표",
+    "예비자 순번 발표",
+    "입주대상자 발표",
+    "입주 대상자 발표",
+    "당첨자 발표",
+)
+
+WINNER_EXCLUSION_KEYWORDS = (
+    "서류제출대상자 발표",
+    "서류 제출 대상자 발표",
+)
 
 
 # ============================================================
@@ -2841,6 +2859,34 @@ def _key_value_matches_for_field(
 # ============================================================
 # 날짜 정규화
 # ============================================================
+_YEARLESS_DATE_PATTERN = re.compile(
+    r"(?<!\d)"
+    r"(?P<month>\d{1,2})"
+    r"\s*(?:[./]|월)\s*"
+    r"(?P<day>\d{1,2})"
+    r"\s*(?:일)?"
+    r"\s*\.?"
+    r"(?:\s*\([^)]{1,3}\))?"
+)
+
+_YEARLESS_DATE_RANGE_PATTERN = re.compile(
+    r"(?<!\d)"
+    r"(?P<start_month>\d{1,2})"
+    r"\s*(?:[./]|월)\s*"
+    r"(?P<start_day>\d{1,2})"
+    r"\s*(?:일)?"
+    r"\s*\.?"
+    r"(?:\s*\([^)]{1,3}\))?"
+    r"\s*(?:~|∼|～|–|—|부터)\s*"
+    r"(?P<end_month>\d{1,2})"
+    r"\s*(?:[./]|월)\s*"
+    r"(?P<end_day>\d{1,2})"
+    r"\s*(?:일)?"
+    r"\s*\.?"
+    r"(?:\s*\([^)]{1,3}\))?"
+)
+
+
 _DATE_WITH_TIME_PATTERN = re.compile(
     r"[‘’']?"
     r"(?P<year>\d{2,4})[.\-/년]\s*"
@@ -3086,6 +3132,111 @@ def _normalize_date_range_match(
     return start, end
 
 
+def _normalize_yearless_date(
+    *,
+    month: int,
+    day: int,
+    reference_year: int,
+) -> str:
+    if not 1 <= month <= 12:
+        raise ValueError(
+            f"잘못된 month: {month}"
+        )
+
+    if not 1 <= day <= 31:
+        raise ValueError(
+            f"잘못된 day: {day}"
+        )
+
+    return (
+        f"{reference_year:04d}-"
+        f"{month:02d}-"
+        f"{day:02d}"
+    )
+
+
+def _normalize_yearless_date_range_match(
+    match: re.Match[str],
+    *,
+    reference_year: int,
+) -> tuple[str, str]:
+    start_month = int(
+        match.group(
+            "start_month"
+        )
+    )
+    start_day = int(
+        match.group(
+            "start_day"
+        )
+    )
+
+    end_month = int(
+        match.group(
+            "end_month"
+        )
+    )
+    end_day = int(
+        match.group(
+            "end_day"
+        )
+    )
+
+    start_year = reference_year
+    end_year = reference_year
+
+    if (
+        (end_month, end_day)
+        < (start_month, start_day)
+    ):
+        end_year += 1
+
+    start = _normalize_yearless_date(
+        month=start_month,
+        day=start_day,
+        reference_year=start_year,
+    )
+    end = _normalize_yearless_date(
+        month=end_month,
+        day=end_day,
+        reference_year=end_year,
+    )
+
+    return start, end
+
+
+def _normalize_yearless_single_date(
+    value: str,
+    *,
+    reference_year: int | None,
+) -> str | None:
+    if reference_year is None:
+        return None
+
+    match = _YEARLESS_DATE_PATTERN.search(
+        _clean_text(value)
+    )
+
+    if not match:
+        return None
+
+    try:
+        return _normalize_yearless_date(
+            month=int(
+                match.group("month")
+            ),
+            day=int(
+                match.group("day")
+            ),
+            reference_year=reference_year,
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+
 def _keyword_positions(
     text: str,
     keywords: Iterable[str],
@@ -3136,6 +3287,51 @@ def _distance_to_nearest_keyword(
         for keyword_position
         in keyword_positions
     )
+
+
+def _extract_reference_year(
+    structure: dict[str, Any],
+    context: dict[str, Any],
+) -> int | None:
+    announcement_date = _clean_text(
+        context.get(
+            "announcement_date"
+        )
+    )
+
+    context_match = re.match(
+        r"(?P<year>20\d{2})",
+        announcement_date,
+    )
+
+    if context_match:
+        return int(
+            context_match.group(
+                "year"
+            )
+        )
+
+    structure_text = json.dumps(
+        structure,
+        ensure_ascii=False,
+    )
+
+    announcement_match = re.search(
+        r"(?:입주자\s*모집공고일|모집공고일|공고일)"
+        r".{0,50}?"
+        r"(?P<year>20\d{2})"
+        r"\s*(?:[./]|년)",
+        structure_text,
+    )
+
+    if announcement_match:
+        return int(
+            announcement_match.group(
+                "year"
+            )
+        )
+
+    return None
 
 
 def _collect_application_search_texts(
@@ -3208,6 +3404,8 @@ def _extract_application_period_values(
     matches: list[
         dict[str, Any]
     ],
+    *,
+    reference_year: int | None = None,
 ) -> tuple[
     str | None,
     str | None,
@@ -3344,6 +3542,97 @@ def _extract_application_period_values(
                     ),
                 }
             )
+
+    if (
+        not range_candidates
+        and reference_year is not None
+    ):
+        for (
+            text_index,
+            text_value,
+        ) in enumerate(search_texts):
+            keyword_positions = (
+                _keyword_positions(
+                    text_value,
+                    positive_keywords,
+                )
+            )
+
+            for range_match in (
+                _YEARLESS_DATE_RANGE_PATTERN.finditer(
+                    text_value
+                )
+            ):
+                distance = (
+                    _distance_to_nearest_keyword(
+                        range_match.start(),
+                        keyword_positions,
+                    )
+                )
+
+                left = max(
+                    0,
+                    range_match.start()
+                    - 180,
+                )
+                right = min(
+                    len(text_value),
+                    range_match.end()
+                    + 180,
+                )
+
+                range_context = _clean_text(
+                    text_value[
+                        left:right
+                    ]
+                )
+
+                context_has_keyword = (
+                    _contains_keyword(
+                        range_context,
+                        positive_keywords,
+                    )
+                )
+
+                if (
+                    distance > 500
+                    and not context_has_keyword
+                ):
+                    continue
+
+                try:
+                    start, end = (
+                        _normalize_yearless_date_range_match(
+                            range_match,
+                            reference_year=reference_year,
+                        )
+                    )
+                except (
+                    TypeError,
+                    ValueError,
+                ):
+                    continue
+
+                range_candidates.append(
+                    {
+                        "start": start,
+                        "end": end,
+                        "raw": _clean_text(
+                            range_match.group(
+                                0
+                            )
+                        ),
+                        "context": (
+                            range_context
+                        ),
+                        "distance": (
+                            distance
+                        ),
+                        "text_index": (
+                            text_index
+                        ),
+                    }
+                )
 
     if range_candidates:
         range_candidates.sort(
@@ -3748,21 +4037,282 @@ def _build_generic_field(
 # ============================================================
 # 최종 7개 필드 생성
 # ============================================================
+def _collect_structure_texts(
+    structure: dict[str, Any],
+) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+
+    for node in _iter_nested_dicts(
+        structure
+    ):
+        for key in (
+            "text",
+            "search_text",
+        ):
+            value = node.get(key)
+
+            if not isinstance(
+                value,
+                str,
+            ):
+                continue
+
+            cleaned = _clean_text(
+                value
+            )
+
+            if not cleaned:
+                continue
+
+            normalized = (
+                _normalized_match_text(
+                    cleaned
+                )
+            )
+
+            if normalized in seen:
+                continue
+
+            seen.add(normalized)
+            result.append(cleaned)
+
+    return result
+
+
+def _extract_schedule_table_value(
+    structure: dict[str, Any],
+    *,
+    target_keywords: tuple[str, ...],
+    exclusion_keywords: tuple[str, ...] = (),
+) -> str | None:
+    for node in _iter_nested_dicts(
+        structure
+    ):
+        cells = node.get("cells")
+
+        if not isinstance(
+            cells,
+            list,
+        ):
+            continue
+
+        headers: dict[
+            int,
+            str,
+        ] = {}
+        values: dict[
+            int,
+            str,
+        ] = {}
+
+        for cell in cells:
+            if not isinstance(
+                cell,
+                dict,
+            ):
+                continue
+
+            row = cell.get("row")
+            col = cell.get("col")
+            cell_text = _clean_text(
+                cell.get("text")
+            )
+
+            if (
+                not isinstance(row, int)
+                or not isinstance(col, int)
+                or not cell_text
+            ):
+                continue
+
+            if row == 0:
+                headers[col] = cell_text
+            elif row == 1:
+                values[col] = cell_text
+
+        for col, header in (
+            headers.items()
+        ):
+            if (
+                exclusion_keywords
+                and _contains_keyword(
+                    header,
+                    exclusion_keywords,
+                )
+            ):
+                continue
+
+            if not _contains_keyword(
+                header,
+                target_keywords,
+            ):
+                continue
+
+            value = values.get(col)
+
+            if value:
+                return value
+
+    return None
+
+
+def _extract_application_period_from_schedule_table(
+    structure: dict[str, Any],
+    *,
+    reference_year: int | None,
+) -> tuple[
+    str | None,
+    str | None,
+    list[dict[str, Any]],
+]:
+    if reference_year is None:
+        return None, None, []
+
+    raw_value = (
+        _extract_schedule_table_value(
+            structure,
+            target_keywords=(
+                "신청",
+                "신청접수",
+                "신청 접수",
+                "청약접수",
+                "청약 접수",
+                "신청기간",
+                "신청 기간",
+                "접수기간",
+                "접수 기간",
+            ),
+        )
+    )
+
+    if not raw_value:
+        return None, None, []
+
+    explicit_range = (
+        _DATE_RANGE_PATTERN.search(
+            raw_value
+        )
+    )
+
+    if explicit_range:
+        try:
+            start, end = (
+                _normalize_date_range_match(
+                    explicit_range
+                )
+            )
+
+            return (
+                start,
+                end,
+                [
+                    {
+                        "raw": (
+                            _clean_text(
+                                raw_value
+                            )
+                        ),
+                        "normalized_value": (
+                            f"{start} ~ {end}"
+                        ),
+                        "context": (
+                            "structured_schedule_table"
+                        ),
+                    }
+                ],
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            pass
+
+    yearless_range = (
+        _YEARLESS_DATE_RANGE_PATTERN.search(
+            raw_value
+        )
+    )
+
+    if not yearless_range:
+        return None, None, []
+
+    try:
+        start, end = (
+            _normalize_yearless_date_range_match(
+                yearless_range,
+                reference_year=reference_year,
+            )
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return None, None, []
+
+    return (
+        start,
+        end,
+        [
+            {
+                "raw": (
+                    _clean_text(
+                        raw_value
+                    )
+                ),
+                "normalized_value": (
+                    f"{start} ~ {end}"
+                ),
+                "context": (
+                    "structured_schedule_table"
+                ),
+            }
+        ],
+    )
+
+
 def _build_application_period(
     matches: list[
         dict[str, Any]
     ],
+    *,
+    structure: dict[str, Any] | None = None,
+    reference_year: int | None = None,
 ) -> dict[str, Any]:
     result = _build_generic_field(
         "application_period",
         matches,
     )
 
-    start, end, dates = (
-        _extract_application_period_values(
-            matches
+    table_start = None
+    table_end = None
+    table_dates: list[
+        dict[str, Any]
+    ] = []
+
+    if structure is not None:
+        (
+            table_start,
+            table_end,
+            table_dates,
+        ) = (
+            _extract_application_period_from_schedule_table(
+                structure,
+                reference_year=reference_year,
+            )
         )
-    )
+
+    if table_start and table_end:
+        start = table_start
+        end = table_end
+        dates = table_dates
+    else:
+        start, end, dates = (
+            _extract_application_period_values(
+                matches,
+                reference_year=reference_year,
+            )
+        )
 
     result.update(
         {
@@ -3779,12 +4329,12 @@ def _build_application_period(
         }
     )
 
-    if (
-        start is None
-        and end is None
-        and not result.get(
-            "key_values"
+    if start or end:
+        result["status"] = (
+            "extracted"
         )
+    elif not result.get(
+        "key_values"
     ):
         result["status"] = (
             "not_found"
@@ -3839,10 +4389,955 @@ def _build_eligibility(
     return result
 
 
+SUPPLY_TABLE_HEADER_RULES = (
+    (
+        "complex_name",
+        (
+            "단지명",
+            "단지 명",
+        ),
+    ),
+    (
+        "housing_group",
+        (
+            "주택군",
+            "주택 군",
+        ),
+    ),
+    (
+        "housing_type",
+        (
+            "주택형",
+            "주택 형",
+        ),
+    ),
+    (
+        "location",
+        (
+            "주택소재지",
+            "주택 소재지",
+            "소재지",
+        ),
+    ),
+    (
+        "area",
+        (
+            "전용면적",
+            "전용 면적",
+            "공급면적",
+            "공급 면적",
+            "면적",
+        ),
+    ),
+    (
+        "supply_units",
+        (
+            "공급호수",
+            "공급 호수",
+        ),
+    ),
+    (
+        "recruitment_units",
+        (
+            "모집호수",
+            "모집 호수",
+        ),
+    ),
+    (
+        "recruitment_waitlist",
+        (
+            "모집예비자수",
+            "모집 예비자수",
+            "모집예비자",
+            "모집 예비자",
+            "모집하는예비자수",
+            "모집하는 예비자수",
+            "예비자수",
+            "예비자 수",
+        ),
+    ),
+    (
+        "deposit",
+        (
+            "임대보증금",
+            "임대 보증금",
+        ),
+    ),
+    (
+        "monthly_rent",
+        (
+            "월임대료",
+            "월 임대료",
+        ),
+    ),
+    (
+        "rental_condition",
+        (
+            "임대조건",
+            "임대 조건",
+        ),
+    ),
+)
+
+
+SUPPLY_TABLE_NUMERIC_FIELDS = {
+    "supply_units",
+    "recruitment_units",
+    "recruitment_waitlist",
+}
+
+
+def _supply_table_header_field(
+    value: Any,
+) -> str | None:
+    """
+    공급 표의 헤더명을 내부 field명으로 변환한다.
+    """
+    text_value = _clean_text(
+        value
+    )
+
+    if not text_value:
+        return None
+
+    for field, keywords in (
+        SUPPLY_TABLE_HEADER_RULES
+    ):
+        if _contains_keyword(
+            text_value,
+            keywords,
+        ):
+            return field
+
+    return None
+
+
+def _parse_supply_table_integer(
+    value: Any,
+) -> int | None:
+    """
+    '58', '58호', '260명', '1,200' 형태의 숫자를 정수로 변환한다.
+    숫자가 없으면 None.
+    """
+    text_value = _clean_text(
+        value
+    )
+
+    if not text_value:
+        return None
+
+    found = re.search(
+        r"(?<!\d)"
+        r"(?P<number>\d[\d,]*)"
+        r"(?!\d)",
+        text_value,
+    )
+
+    if not found:
+        return None
+
+    try:
+        return int(
+            found.group(
+                "number"
+            ).replace(
+                ",",
+                "",
+            )
+        )
+    except ValueError:
+        return None
+
+
+def _extract_supply_table_rows(
+    structure: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """
+    Structure의 원본 table cells를 기준으로 공급 표를 구조화한다.
+
+    지원 예:
+    - 단지명
+    - 주택군
+    - 주택형
+    - 소재지
+    - 면적
+    - 공급호수
+    - 모집호수
+    - 모집예비자 / 모집예비자수 / 모집하는 예비자수
+    - 임대보증금
+    - 월임대료
+    - 임대조건
+
+    표에서 '공급호수'와 '모집예비자'는 서로 다른 값으로 유지한다.
+    """
+
+    rows_result: list[
+        dict[str, Any]
+    ] = []
+
+    seen_rows: set[
+        tuple[
+            tuple[str, str],
+            ...
+        ]
+    ] = set()
+
+    for node in _iter_nested_dicts(
+        structure
+    ):
+        cells = node.get(
+            "cells"
+        )
+
+        if not isinstance(
+            cells,
+            list,
+        ):
+            continue
+
+        table_cells = [
+            cell
+            for cell in cells
+            if isinstance(
+                cell,
+                dict,
+            )
+        ]
+
+        if not table_cells:
+            continue
+
+        rows: dict[
+            int,
+            dict[int, str],
+        ] = {}
+
+        for cell in table_cells:
+            row = cell.get(
+                "row"
+            )
+            col = cell.get(
+                "col"
+            )
+
+            if (
+                not isinstance(
+                    row,
+                    int,
+                )
+                or not isinstance(
+                    col,
+                    int,
+                )
+            ):
+                continue
+
+            cell_text = _clean_text(
+                cell.get(
+                    "text"
+                )
+            )
+
+            if not cell_text:
+                continue
+
+            rows.setdefault(
+                row,
+                {},
+            )[col] = cell_text
+
+        if not rows:
+            continue
+
+        sorted_row_numbers = sorted(
+            rows
+        )
+
+        # -----------------------------------------------
+        # 이 table에서 공급정보 header row를 찾는다.
+        # 최소 2개 공급 헤더가 있거나,
+        # 공급호수/모집예비자처럼 강한 헤더가 1개 이상 있어야 한다.
+        # -----------------------------------------------
+        header_row_number: (
+            int | None
+        ) = None
+        header_fields: dict[
+            int,
+            str,
+        ] = {}
+
+        for row_number in (
+            sorted_row_numbers
+        ):
+            candidate_fields: dict[
+                int,
+                str,
+            ] = {}
+
+            for (
+                col,
+                cell_text,
+            ) in rows[
+                row_number
+            ].items():
+                field = (
+                    _supply_table_header_field(
+                        cell_text
+                    )
+                )
+
+                if field:
+                    candidate_fields[
+                        col
+                    ] = field
+
+            strong_fields = {
+                "supply_units",
+                "recruitment_units",
+                "recruitment_waitlist",
+            }
+
+            if (
+                len(
+                    candidate_fields
+                ) >= 2
+                or bool(
+                    set(
+                        candidate_fields.values()
+                    )
+                    & strong_fields
+                )
+            ):
+                header_row_number = (
+                    row_number
+                )
+                header_fields = (
+                    candidate_fields
+                )
+                break
+
+        if (
+            header_row_number
+            is None
+            or not header_fields
+        ):
+            continue
+
+        # -----------------------------------------------
+        # header 아래의 실제 data row를 구조화한다.
+        # -----------------------------------------------
+        for row_number in (
+            sorted_row_numbers
+        ):
+            if (
+                row_number
+                <= header_row_number
+            ):
+                continue
+
+            row_cells = rows[
+                row_number
+            ]
+
+            item: dict[
+                str,
+                Any,
+            ] = {}
+
+            for (
+                col,
+                field,
+            ) in header_fields.items():
+                raw_value = _clean_text(
+                    row_cells.get(
+                        col
+                    )
+                )
+
+                if not raw_value:
+                    continue
+
+                if (
+                    field
+                    in SUPPLY_TABLE_NUMERIC_FIELDS
+                ):
+                    numeric_value = (
+                        _parse_supply_table_integer(
+                            raw_value
+                        )
+                    )
+
+                    if (
+                        numeric_value
+                        is not None
+                    ):
+                        item[
+                            field
+                        ] = (
+                            numeric_value
+                        )
+                        continue
+
+                item[
+                    field
+                ] = raw_value
+
+            if not item:
+                continue
+
+            # 헤더 반복행을 data로 잘못 잡지 않도록 제외
+            repeated_header = any(
+                _supply_table_header_field(
+                    value
+                )
+                is not None
+                for value in item.values()
+                if isinstance(
+                    value,
+                    str,
+                )
+            )
+
+            if repeated_header:
+                continue
+
+            # 공급정보로 쓸 수 있는 실제 값이 하나라도 있어야 한다.
+            useful_fields = {
+                "complex_name",
+                "housing_group",
+                "housing_type",
+                "location",
+                "area",
+                "supply_units",
+                "recruitment_units",
+                "recruitment_waitlist",
+                "deposit",
+                "monthly_rent",
+                "rental_condition",
+            }
+
+            if not (
+                set(
+                    item
+                )
+                & useful_fields
+            ):
+                continue
+
+            row_key = tuple(
+                sorted(
+                    (
+                        str(key),
+                        str(value),
+                    )
+                    for key, value
+                    in item.items()
+                )
+            )
+
+            if row_key in seen_rows:
+                continue
+
+            seen_rows.add(
+                row_key
+            )
+
+            item[
+                "source"
+            ] = {
+                "type": (
+                    "structured_supply_table"
+                ),
+                "row": (
+                    row_number
+                ),
+            }
+
+            rows_result.append(
+                item
+            )
+
+    return rows_result
+
+
+def _summarize_supply_table_rows(
+    rows: list[
+        dict[str, Any]
+    ],
+) -> dict[str, Any]:
+    """
+    표에서 추출한 여러 행을 top-level 카드 값으로 요약한다.
+
+    우선순위:
+    1. '소계' / '합계' / '총계' 행이 있으면 해당 값을 사용
+    2. 합계 행이 없을 때만 상세 행 값을 합산
+
+    이렇게 해야 아래와 같은 표에서
+    소계 58 / 260
+    + 상세 행들
+    을 모두 더해서 99 / 450으로 중복 집계하는 문제를 막을 수 있다.
+    """
+
+    total_row_keywords = (
+        "소계",
+        "합계",
+        "총계",
+        "계",
+    )
+
+    total_rows: list[
+        dict[str, Any]
+    ] = []
+
+    for item in rows:
+        labels = [
+            _clean_text(
+                item.get(key)
+            )
+            for key in (
+                "complex_name",
+                "housing_group",
+                "housing_type",
+                "location",
+            )
+            if _clean_text(
+                item.get(key)
+            )
+        ]
+
+        if any(
+            label in total_row_keywords
+            for label in labels
+        ):
+            total_rows.append(
+                item
+            )
+
+    # 표 안에 명시적인 소계/합계가 있으면 그 값을 최우선으로 사용
+    if total_rows:
+        supply_units = next(
+            (
+                item.get(
+                    "supply_units"
+                )
+                for item in total_rows
+                if isinstance(
+                    item.get(
+                        "supply_units"
+                    ),
+                    int,
+                )
+            ),
+            None,
+        )
+
+        recruitment_units = next(
+            (
+                item.get(
+                    "recruitment_units"
+                )
+                for item in total_rows
+                if isinstance(
+                    item.get(
+                        "recruitment_units"
+                    ),
+                    int,
+                )
+            ),
+            None,
+        )
+
+        recruitment_waitlist = next(
+            (
+                item.get(
+                    "recruitment_waitlist"
+                )
+                for item in total_rows
+                if isinstance(
+                    item.get(
+                        "recruitment_waitlist"
+                    ),
+                    int,
+                )
+            ),
+            None,
+        )
+
+        return {
+            "supply_units": (
+                supply_units
+            ),
+            "recruitment_waitlist": (
+                recruitment_waitlist
+            ),
+            "recruitment_units": (
+                recruitment_units
+            ),
+        }
+
+    # 합계 행이 없는 표만 상세 행을 합산
+    supply_values = [
+        item.get(
+            "supply_units"
+        )
+        for item in rows
+        if isinstance(
+            item.get(
+                "supply_units"
+            ),
+            int,
+        )
+    ]
+
+    waitlist_values = [
+        item.get(
+            "recruitment_waitlist"
+        )
+        for item in rows
+        if isinstance(
+            item.get(
+                "recruitment_waitlist"
+            ),
+            int,
+        )
+    ]
+
+    recruitment_unit_values = [
+        item.get(
+            "recruitment_units"
+        )
+        for item in rows
+        if isinstance(
+            item.get(
+                "recruitment_units"
+            ),
+            int,
+        )
+    ]
+
+    return {
+        "supply_units": (
+            sum(
+                supply_values
+            )
+            if supply_values
+            else None
+        ),
+        "recruitment_waitlist": (
+            sum(
+                waitlist_values
+            )
+            if waitlist_values
+            else None
+        ),
+        "recruitment_units": (
+            sum(
+                recruitment_unit_values
+            )
+            if recruitment_unit_values
+            else None
+        ),
+    }
+
+
+def _extract_supply_from_structure(
+    structure: dict[str, Any],
+) -> dict[str, Any]:
+    texts = _collect_structure_texts(
+        structure
+    )
+
+    total_units: int | None = None
+    total_units_text = ""
+    details_reference = ""
+    rental_condition_summary = ""
+
+    total_pattern = re.compile(
+        r"공급대상\s*주택"
+        r"\s*[:：]?\s*"
+        r"총\s*"
+        r"(?P<count>\d[\d,]*)"
+        r"\s*호"
+    )
+
+    supply_count_pattern = re.compile(
+        r"(?:공급|모집)\s*호수"
+        r"\s*[:：]?\s*"
+        r"(?P<count>\d[\d,]*)"
+        r"\s*호?"
+    )
+
+    for text_value in texts:
+        found = total_pattern.search(
+            text_value
+        )
+
+        if found:
+            total_units = int(
+                found.group(
+                    "count"
+                ).replace(
+                    ",",
+                    "",
+                )
+            )
+            total_units_text = (
+                _clean_text(
+                    found.group(0)
+                )
+            )
+            break
+
+    if total_units is None:
+        for text_value in texts:
+            found = (
+                supply_count_pattern.search(
+                    text_value
+                )
+            )
+
+            if not found:
+                continue
+
+            total_units = int(
+                found.group(
+                    "count"
+                ).replace(
+                    ",",
+                    "",
+                )
+            )
+            total_units_text = (
+                _clean_text(
+                    found.group(0)
+                )
+            )
+            break
+
+    for text_value in texts:
+        for line in (
+            text_value.splitlines()
+        ):
+            cleaned = _clean_text(
+                line
+            )
+
+            if (
+                not details_reference
+                and "주택내역"
+                in cleaned
+                and any(
+                    keyword in cleaned
+                    for keyword in (
+                        "세부내역",
+                        "주택군",
+                        "소재지",
+                        "면적",
+                        "임대조건",
+                    )
+                )
+            ):
+                details_reference = (
+                    cleaned
+                )
+
+            if (
+                not rental_condition_summary
+                and "시중 시세"
+                in cleaned
+                and (
+                    "임대료"
+                    in cleaned
+                    or "임대보증금"
+                    in cleaned
+                )
+            ):
+                rental_condition_summary = (
+                    cleaned
+                )
+
+    return {
+        "total_units": total_units,
+        "total_units_text": (
+            total_units_text
+        ),
+        "details_reference": (
+            details_reference
+        ),
+        "rental_condition_summary": (
+            rental_condition_summary
+        ),
+    }
+
+
+def _extract_total_supply_units(
+    matches: list[
+        dict[str, Any]
+    ],
+) -> int | None:
+    priority_patterns = (
+        re.compile(
+            r"공급대상\s*주택"
+            r"\s*[:：]?\s*"
+            r"총\s*"
+            r"(?P<count>\d[\d,]*)"
+            r"\s*호"
+        ),
+        re.compile(
+            r"(?:공급|모집)"
+            r"\s*호수"
+            r"\s*[:：]?\s*"
+            r"(?P<count>\d[\d,]*)"
+            r"\s*호?"
+        ),
+    )
+
+    fallback_pattern = re.compile(
+        r"총\s*"
+        r"(?P<count>\d[\d,]*)"
+        r"\s*호"
+    )
+
+    for item in matches:
+        text_value = _clean_text(
+            item.get("text")
+        )
+
+        for pattern in (
+            priority_patterns
+        ):
+            found = pattern.search(
+                text_value
+            )
+
+            if found:
+                return int(
+                    found.group(
+                        "count"
+                    ).replace(
+                        ",",
+                        "",
+                    )
+                )
+
+    for item in matches:
+        text_value = _clean_text(
+            item.get("text")
+        )
+
+        found = fallback_pattern.search(
+            text_value
+        )
+
+        if found:
+            return int(
+                found.group(
+                    "count"
+                ).replace(
+                    ",",
+                    "",
+                )
+            )
+
+    return None
+
+
+def _extract_supply_details_reference(
+    matches: list[
+        dict[str, Any]
+    ],
+) -> str:
+    for item in matches:
+        text_value = _clean_text(
+            item.get("text")
+        )
+
+        for line in (
+            text_value.splitlines()
+        ):
+            cleaned = _clean_text(
+                line
+            )
+
+            if (
+                "주택내역"
+                not in cleaned
+            ):
+                continue
+
+            if any(
+                keyword in cleaned
+                for keyword in (
+                    "세부내역",
+                    "주택군",
+                    "소재지",
+                    "면적",
+                    "임대조건",
+                )
+            ):
+                return cleaned
+
+    return ""
+
+
+def _extract_supply_rental_condition_summary(
+    matches: list[
+        dict[str, Any]
+    ],
+) -> str:
+    for item in matches:
+        text_value = _clean_text(
+            item.get("text")
+        )
+
+        for line in (
+            text_value.splitlines()
+        ):
+            cleaned = _clean_text(
+                line
+            )
+
+            if (
+                "시중 시세"
+                in cleaned
+                and (
+                    "임대료"
+                    in cleaned
+                    or "임대보증금"
+                    in cleaned
+                )
+            ):
+                return cleaned
+
+    for item in matches:
+        text_value = _clean_text(
+            item.get("text")
+        )
+
+        for line in (
+            text_value.splitlines()
+        ):
+            cleaned = _clean_text(
+                line
+            )
+
+            if (
+                "임대조건"
+                in cleaned
+                and "주택내역"
+                in cleaned
+            ):
+                return cleaned
+
+    return ""
+
+
 def _build_supply_information(
     matches: list[
         dict[str, Any]
     ],
+    *,
+    structure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     valid_matches = [
         match
@@ -3857,11 +5352,183 @@ def _build_supply_information(
         valid_matches,
     )
 
-    result["summary"] = (
+    total_units = (
+        _extract_total_supply_units(
+            valid_matches
+        )
+    )
+
+    details_reference = (
+        _extract_supply_details_reference(
+            valid_matches
+        )
+    )
+
+    rental_condition_summary = (
+        _extract_supply_rental_condition_summary(
+            valid_matches
+        )
+    )
+
+    summary = (
         _build_supply_summary(
             valid_matches
         )
     )
+
+    housing_items: list[
+        dict[str, Any]
+    ] = []
+
+    supply_units: int | None = None
+    recruitment_units: (
+        int | None
+    ) = None
+    recruitment_waitlist: (
+        int | None
+    ) = None
+
+    if structure is not None:
+        fallback = (
+            _extract_supply_from_structure(
+                structure
+            )
+        )
+
+        if total_units is None:
+            total_units = (
+                fallback.get(
+                    "total_units"
+                )
+            )
+
+        if not details_reference:
+            details_reference = (
+                fallback.get(
+                    "details_reference"
+                )
+                or ""
+            )
+
+        if not rental_condition_summary:
+            rental_condition_summary = (
+                fallback.get(
+                    "rental_condition_summary"
+                )
+                or ""
+            )
+
+        if not summary:
+            summary = (
+                fallback.get(
+                    "total_units_text"
+                )
+                or ""
+            )
+
+        # ----------------------------------------------------
+        # 공급 표 구조화
+        #
+        # 예:
+        # 공급호수 58
+        # 모집예비자 260
+        #
+        # 또는 여러 단지/주택형별 행
+        # ----------------------------------------------------
+        housing_items = (
+            _extract_supply_table_rows(
+                structure
+            )
+        )
+
+        table_summary = (
+            _summarize_supply_table_rows(
+                housing_items
+            )
+        )
+
+        supply_units = (
+            table_summary.get(
+                "supply_units"
+            )
+        )
+        recruitment_units = (
+            table_summary.get(
+                "recruitment_units"
+            )
+        )
+        recruitment_waitlist = (
+            table_summary.get(
+                "recruitment_waitlist"
+            )
+        )
+
+        # 본문에 '총 N호'가 없고 표에만 공급호수가 있는 경우
+        # 표의 공급호수 합계를 total_units fallback으로 사용한다.
+        if (
+            total_units is None
+            and isinstance(
+                supply_units,
+                int,
+            )
+        ):
+            total_units = (
+                supply_units
+            )
+
+        if (
+            not summary
+            and isinstance(
+                total_units,
+                int,
+            )
+        ):
+            summary = (
+                "공급대상 주택 : "
+                f"총 {total_units}호"
+            )
+
+    result.update(
+        {
+            "summary": summary,
+            "total_units": (
+                total_units
+            ),
+            "supply_units": (
+                supply_units
+            ),
+            "recruitment_units": (
+                recruitment_units
+            ),
+            "recruitment_waitlist": (
+                recruitment_waitlist
+            ),
+            "housing_items": (
+                housing_items
+            ),
+            "details_reference": (
+                details_reference
+            ),
+            "rental_condition_summary": (
+                rental_condition_summary
+            ),
+        }
+    )
+
+    if (
+        total_units is not None
+        or supply_units is not None
+        or recruitment_units is not None
+        or recruitment_waitlist is not None
+        or bool(
+            housing_items
+        )
+        or details_reference
+        or rental_condition_summary
+    ):
+        result["status"] = (
+            "extracted"
+        )
 
     return result
 
@@ -3913,15 +5580,65 @@ def _build_winner_announcement(
     matches: list[
         dict[str, Any]
     ],
+    *,
+    structure: dict[str, Any] | None = None,
+    reference_year: int | None = None,
 ) -> dict[str, Any]:
     result = _build_generic_field(
         "winner_announcement",
         matches,
     )
 
-    keywords = FIELD_RULES[
-        "winner_announcement"
-    ]["keywords"]
+    table_raw_value: str | None = None
+    table_announcement_date: (
+        str | None
+    ) = None
+
+    if structure is not None:
+        table_raw_value = (
+            _extract_schedule_table_value(
+                structure,
+                target_keywords=(
+                    WINNER_PRIORITY_KEYWORDS
+                ),
+                exclusion_keywords=(
+                    WINNER_EXCLUSION_KEYWORDS
+                ),
+            )
+        )
+
+        if table_raw_value:
+            explicit_match = (
+                _DATE_WITH_TIME_PATTERN.search(
+                    table_raw_value
+                )
+            )
+
+            if explicit_match:
+                try:
+                    table_announcement_date = (
+                        _normalize_date_match(
+                            explicit_match
+                        )
+                    )
+                except (
+                    TypeError,
+                    ValueError,
+                ):
+                    table_announcement_date = (
+                        None
+                    )
+
+            if (
+                table_announcement_date
+                is None
+            ):
+                table_announcement_date = (
+                    _normalize_yearless_single_date(
+                        table_raw_value,
+                        reference_year=reference_year,
+                    )
+                )
 
     winner_dates: list[
         dict[str, Any]
@@ -3935,7 +5652,7 @@ def _build_winner_announcement(
         keyword_positions = (
             _keyword_positions(
                 text_value,
-                keywords,
+                WINNER_PRIORITY_KEYWORDS,
             )
         )
 
@@ -3957,6 +5674,29 @@ def _build_winner_announcement(
             if distance > 180:
                 continue
 
+            left = max(
+                0,
+                date_match.start()
+                - 100,
+            )
+            right = min(
+                len(text_value),
+                date_match.end()
+                + 100,
+            )
+
+            date_context = _clean_text(
+                text_value[
+                    left:right
+                ]
+            )
+
+            if _contains_keyword(
+                date_context,
+                WINNER_EXCLUSION_KEYWORDS,
+            ):
+                continue
+
             try:
                 normalized = (
                     _normalize_date_match(
@@ -3969,35 +5709,18 @@ def _build_winner_announcement(
             ):
                 continue
 
-            left = max(
-                0,
-                date_match.start()
-                - 100,
-            )
-            right = min(
-                len(text_value),
-                date_match.end()
-                + 100,
-            )
-
             winner_dates.append(
                 {
-                    "raw": (
-                        _clean_text(
-                            date_match.group(
-                                0
-                            )
+                    "raw": _clean_text(
+                        date_match.group(
+                            0
                         )
                     ),
                     "normalized_value": (
                         normalized
                     ),
                     "context": (
-                        _clean_text(
-                            text_value[
-                                left:right
-                            ]
-                        )
+                        date_context
                     ),
                     "distance": (
                         distance
@@ -4045,21 +5768,55 @@ def _build_winner_announcement(
         for item in deduped
     ]
 
-    result["dates"] = (
-        public_dates
-    )
-    result[
-        "announcement_date"
-    ] = (
-        deduped[0][
-            "normalized_value"
+    if table_announcement_date:
+        result["dates"] = [
+            {
+                "raw": (
+                    table_raw_value
+                    or ""
+                ),
+                "normalized_value": (
+                    table_announcement_date
+                ),
+                "context": (
+                    "structured_schedule_table"
+                ),
+            }
         ]
-        if deduped
-        else None
-    )
+        result[
+            "announcement_date"
+        ] = (
+            table_announcement_date
+        )
+        result["summary"] = (
+            table_announcement_date
+        )
+        result["status"] = (
+            "extracted"
+        )
+    else:
+        result["dates"] = (
+            public_dates
+        )
+        result[
+            "announcement_date"
+        ] = (
+            deduped[0][
+                "normalized_value"
+            ]
+            if deduped
+            else None
+        )
+        result["summary"] = (
+            result.get(
+                "announcement_date"
+            )
+            or ""
+        )
 
     if (
-        not deduped
+        not table_announcement_date
+        and not deduped
         and not result.get(
             "key_values"
         )
@@ -4178,6 +5935,13 @@ def extract_key_information(
             "Structure JSON에 sections 배열이 없습니다."
         )
 
+    reference_year = (
+        _extract_reference_year(
+            structure,
+            context,
+        )
+    )
+
     matches = {
         field: (
             _collect_field_matches(
@@ -4197,7 +5961,11 @@ def extract_key_information(
             _build_application_period(
                 matches[
                     "application_period"
-                ]
+                ],
+                structure=structure,
+                reference_year=(
+                    reference_year
+                ),
             )
         ),
         "eligibility": (
@@ -4211,7 +5979,8 @@ def extract_key_information(
             _build_supply_information(
                 matches[
                     "supply_information"
-                ]
+                ],
+                structure=structure,
             )
         ),
         "income_asset_criteria": (
@@ -4232,7 +6001,11 @@ def extract_key_information(
             _build_winner_announcement(
                 matches[
                     "winner_announcement"
-                ]
+                ],
+                structure=structure,
+                reference_year=(
+                    reference_year
+                ),
             )
         ),
         "contact_information": (
