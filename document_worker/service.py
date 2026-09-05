@@ -5,34 +5,29 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import numpy as np
-
 from config.paths import OUTPUT_ROOT
-
 from document_worker.api.schemas import (
     DocumentProcessRequest,
     DocumentProcessResponse,
 )
-
-from pipeline.parser.format_detector import (
-    detect_actual_document_format,
-)
-
 from pipeline.embedding.input_loader import (
     ChunkLoadError,
     load_chunk_document,
 )
-
 from pipeline.key_information_extractor import (
     REQUIRED_FIELDS,
     extract_key_information,
 )
-
+from pipeline.parser.format_detector import (
+    detect_actual_document_format,
+)
 from services.embedding.client import (
     EmbeddingClient,
     EmbeddingClientError,
@@ -1115,6 +1110,7 @@ def _run_key_information_extraction(
     announcement_key: str,
     structure_path: Path,
     verification_path: Path,
+    announcement_date: date | None = None,
 ) -> dict[str, Any]:
     """
     Structure / Verification 결과에서
@@ -1128,6 +1124,7 @@ def _run_key_information_extraction(
         "document_id": document_id,
         "announcement_id": announcement_id,
         "announcement_key": announcement_key,
+        "announcement_date": announcement_date,
     }
 
     try:
@@ -1451,6 +1448,9 @@ def process_document(
             ),
             announcement_key=(
                 request.announcement_key
+            ),
+            announcement_date=(
+                request.announcement_date
             ),
             structure_path=(
                 paths["structure"]

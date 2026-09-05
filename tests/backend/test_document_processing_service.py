@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import date
 from unittest.mock import patch
 
 from backend.app.clients.document_worker_client import (
@@ -57,6 +58,7 @@ class DocumentProcessingServiceTest(
         context = {
             "announcement_key": "LH-TEST-001",
             "announcement_db_id": 20,
+            "announcement_date": date(2026, 9, 3),
             "document_db_id": 30,
             "filename": "sample.hwp",
             "format": "HWP",
@@ -98,6 +100,7 @@ class DocumentProcessingServiceTest(
             document_id=30,
             announcement_id=20,
             announcement_key="LH-TEST-001",
+            announcement_date=date(2026, 9, 3),
             filename="sample.hwp",
             document_format="hwp",
             storage_path=(
