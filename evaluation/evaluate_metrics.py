@@ -13,16 +13,15 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-from evaluation.dataset_resolver import (
-    DEFAULT_SHEET_NAME,
-    default_scored_path,
-    resolve_result_xlsx,
-)
-
 
 # ============================================================
-# RAGAS 설정
+# 기본 경로 / 설정
 # ============================================================
+
+BASE_DIR = Path(__file__).resolve().parent
+RESULTS_DIR = BASE_DIR / "results"
+
+DEFAULT_SHEET_NAME = "평가셋"
 
 DEFAULT_RAGAS_BASE_URL = os.getenv(
     "RAGAS_API_BASE_URL",
@@ -39,48 +38,6 @@ DEFAULT_RAGAS_MODEL = os.getenv(
     "",
 ).strip()
 
-DEFAULT_EMBEDDING_MODEL = os.getenv(
-    "RAGAS_EMBEDDING_MODEL",
-    "BAAI/bge-m3",
-)
-
-DEFAULT_METRIC_TIMEOUT_SECONDS = int(
-    os.getenv(
-        "RAGAS_METRIC_TIMEOUT_SECONDS",
-        "300",
-    )
-)
-
-DEFAULT_RAGAS_REQUEST_TIMEOUT_SECONDS = float(
-    os.getenv(
-        "RAGAS_REQUEST_TIMEOUT_SECONDS",
-        str(
-            DEFAULT_METRIC_TIMEOUT_SECONDS
-        ),
-    )
-)
-
-# Faithfulness는 retrieved_contexts가 길어질수록
-# Judge 모델의 context window를 초과할 수 있으므로
-# Faithfulness에 전달하는 Context만 별도로 제한한다.
-#
-# - Recall@K: 전체 retrieved_contexts 그대로 사용
-# - Response Relevancy: 기존 방식 그대로
-# - Factual Correctness: 기존 방식 그대로
-# - Faithfulness: 상위 3개 Context, Context당 최대 2000자
-FAITHFULNESS_MAX_CONTEXTS = int(
-    os.getenv(
-        "RAGAS_FAITHFULNESS_MAX_CONTEXTS",
-        "3",
-    )
-)
-
-FAITHFULNESS_MAX_CHARS_PER_CONTEXT = int(
-    os.getenv(
-        "RAGAS_FAITHFULNESS_MAX_CHARS_PER_CONTEXT",
-        "2000",
-    )
-)
 
 
 # ============================================================
@@ -97,6 +54,58 @@ HIGH_SIMILARITY_THRESHOLD = 0.75
 
 
 # ============================================================
+# Dataset
+# ============================================================
+
+
+def normalize_dataset_name(
+    value: str,
+) -> str:
+    dataset = value.strip().upper()
+
+    aliases = {
+        "GC": "GC",
+        "GOCHANG": "GC",
+        "고창": "GC",
+
+        "BD": "BD",
+        "BUNDONG": "BD",
+        "서울번동": "BD",
+    }
+
+    if dataset not in aliases:
+        raise ValueError(
+            f"지원하지 않는 dataset입니다: {value}\n"
+            "사용 가능: GC, BD"
+        )
+
+    return aliases[dataset]
+
+
+def dataset_paths(
+    dataset: str,
+) -> tuple[Path, Path]:
+    dataset = normalize_dataset_name(
+        dataset
+    )
+
+    input_xlsx = (
+        RESULTS_DIR
+        / f"{dataset}_FINAL_V1_result.xlsx"
+    )
+
+    output_xlsx = (
+        RESULTS_DIR
+        / f"{dataset}_FINAL_V1_scored.xlsx"
+    )
+
+    return (
+        input_xlsx,
+        output_xlsx,
+    )
+
+
+# ============================================================
 # Excel
 # ============================================================
 
@@ -104,11 +113,15 @@ HIGH_SIMILARITY_THRESHOLD = 0.75
 def find_columns(
     ws,
 ) -> dict[str, int]:
-    return {
-        str(cell.value).strip(): cell.column
-        for cell in ws[1]
-        if cell.value is not None
-    }
+    columns: dict[str, int] = {}
+
+    for cell in ws[1]:
+        if cell.value is not None:
+            columns[
+                str(cell.value).strip()
+            ] = cell.column
+
+    return columns
 
 
 def ensure_column(
@@ -119,10 +132,7 @@ def ensure_column(
     if name in columns:
         return columns[name]
 
-    new_column = (
-        ws.max_column
-        + 1
-    )
+    new_column = ws.max_column + 1
 
     ws.cell(
         row=1,
@@ -130,33 +140,9 @@ def ensure_column(
         value=name,
     )
 
-    columns[name] = (
-        new_column
-    )
+    columns[name] = new_column
 
     return new_column
-
-
-def to_float_or_none(
-    value: Any,
-) -> float | None:
-    if value is None:
-        return None
-
-    try:
-        number = float(
-            value
-        )
-    except (
-        TypeError,
-        ValueError,
-    ):
-        return None
-
-    if math.isnan(number):
-        return None
-
-    return number
 
 
 # ============================================================
@@ -171,12 +157,11 @@ def split_retrieved_contexts(
     evaluate_rag.py에서 저장한 retrieved_contexts를
     Rank별 Context 리스트로 변환한다.
     """
+
     if value is None:
         return []
 
-    text = str(
-        value
-    ).strip()
+    text = str(value).strip()
 
     if not text:
         return []
@@ -194,9 +179,7 @@ def split_retrieved_contexts(
         if not part:
             continue
 
-        lines = (
-            part.splitlines()
-        )
+        lines = part.splitlines()
 
         if (
             lines
@@ -224,30 +207,34 @@ def split_retrieved_contexts(
 def normalize_text(
     text: str,
 ) -> str:
-    text = str(
-        text
-    ).lower()
+    """
+    Recall 비교용 정규화.
+    """
 
-    # 2026 -> 26
+    text = str(text).lower()
+
+    # 2026 → 26
     text = re.sub(
         r"\b20(\d{2})\b",
         r"\1",
         text,
     )
 
-    # 10시 -> 10:00
+    # 10시 → 10:00
     text = re.sub(
         r"(\d{1,2})\s*시",
         r"\1:00",
         text,
     )
 
+    # 공백 제거
     text = re.sub(
         r"\s+",
         "",
         text,
     )
 
+    # 한글 / 영어 / 숫자만 유지
     text = re.sub(
         r"[^0-9a-z가-힣]",
         "",
@@ -257,9 +244,21 @@ def normalize_text(
     return text
 
 
+# ============================================================
+# 숫자 정규화
+# ============================================================
+
+
 def normalize_number(
     value: str,
 ) -> str:
+    """
+    숫자 표기 통일.
+
+    08 → 8
+    08.0 → 8
+    """
+
     value = value.strip()
 
     try:
@@ -283,10 +282,16 @@ def normalize_number(
 def extract_numbers(
     text: str,
 ) -> list[str]:
+    """
+    날짜 / 시간 / 금액 / 면적 / 나이 등의
+    숫자 정보를 추출한다.
+    """
+
     text = str(
         text
     )
 
+    # 2026 → 26
     text = re.sub(
         r"\b20(\d{2})\b",
         r"\1",
@@ -302,13 +307,24 @@ def extract_numbers(
         normalize_number(
             number
         )
-        for number in numbers
+        for number
+        in numbers
     ]
+
+
+# ============================================================
+# 토큰 추출
+# ============================================================
 
 
 def extract_tokens(
     text: str,
 ) -> list[str]:
+    """
+    reference_text에서 의미 비교에 사용할
+    핵심 토큰을 추출한다.
+    """
+
     text = str(
         text
     ).lower()
@@ -366,10 +382,20 @@ def extract_tokens(
     return result
 
 
+# ============================================================
+# Token Coverage
+# ============================================================
+
+
 def token_coverage(
     reference_text: str,
     context: str,
 ) -> float:
+    """
+    reference_text의 핵심 토큰 중
+    context에 포함된 비율을 계산한다.
+    """
+
     tokens = extract_tokens(
         reference_text
     )
@@ -377,19 +403,15 @@ def token_coverage(
     if not tokens:
         return 0.0
 
-    context_norm = (
-        normalize_text(
-            context
-        )
+    context_norm = normalize_text(
+        context
     )
 
     matched = 0
 
     for token in tokens:
-        token_norm = (
-            normalize_text(
-                token
-            )
+        token_norm = normalize_text(
+            token
         )
 
         if (
@@ -405,10 +427,22 @@ def token_coverage(
     )
 
 
+# ============================================================
+# Numeric Coverage
+# ============================================================
+
+
 def number_coverage(
     reference_text: str,
     context: str,
 ) -> float | None:
+    """
+    reference_text의 숫자 정보가
+    context 안에 얼마나 존재하는지 계산한다.
+
+    reference_text에 숫자가 없다면 None.
+    """
+
     reference_numbers = (
         extract_numbers(
             reference_text
@@ -433,7 +467,8 @@ def number_coverage(
 
     matched = sum(
         1
-        for number in reference_numbers
+        for number
+        in reference_numbers
         if number
         in context_number_set
     )
@@ -444,10 +479,20 @@ def number_coverage(
     )
 
 
+# ============================================================
+# 부분 문자열 유사도
+# ============================================================
+
+
 def partial_similarity(
     reference_text: str,
     context: str,
 ) -> float:
+    """
+    긴 Context의 일부 구간이
+    reference_text와 얼마나 유사한지 계산한다.
+    """
+
     ref_norm = normalize_text(
         reference_text
     )
@@ -504,8 +549,7 @@ def partial_similarity(
     ):
         candidate = ctx_norm[
             start:
-            start
-            + window_size
+            start + window_size
         ]
 
         score = SequenceMatcher(
@@ -541,6 +585,11 @@ def partial_similarity(
     return best_score
 
 
+# ============================================================
+# Evidence 판정
+# ============================================================
+
+
 def evidence_matches(
     reference_text: str,
     context: str,
@@ -550,14 +599,18 @@ def evidence_matches(
     str,
 ]:
     """
-    현재 develop-api의 Hybrid Evidence Matching 로직을 유지한다.
+    Context 안에 reference_text의 정답 근거가
+    존재하는지 판단한다.
 
-    1. 정규화 완전 포함
-    2. 숫자 + 핵심 토큰
-    3. 숫자 없는 문장의 토큰/유사도
+    판정 순서
+    --------
+    1. 정규화 후 완전 포함
+    2. 숫자 + 핵심 토큰 기반 사실 일치
+    3. 숫자가 없는 문장의 의미 토큰 일치
     4. 높은 문자열 유사도
-    5. 복합 Evidence
+    5. 복합 Evidence 보완 판정
     """
+
     ref_norm = normalize_text(
         reference_text
     )
@@ -576,6 +629,10 @@ def evidence_matches(
             "empty",
         )
 
+    # ========================================================
+    # 1. 정규화 후 완전 포함
+    # ========================================================
+
     if ref_norm in ctx_norm:
         return (
             True,
@@ -583,28 +640,32 @@ def evidence_matches(
             "normalized_exact_containment",
         )
 
-    word_score = (
-        token_coverage(
-            reference_text,
-            context,
-        )
+    # ========================================================
+    # 개별 점수 계산
+    # ========================================================
+
+    word_score = token_coverage(
+        reference_text,
+        context,
     )
 
-    numeric_score = (
-        number_coverage(
-            reference_text,
-            context,
-        )
+    numeric_score = number_coverage(
+        reference_text,
+        context,
     )
 
-    similarity = (
-        partial_similarity(
-            reference_text,
-            context,
-        )
+    similarity = partial_similarity(
+        reference_text,
+        context,
     )
+
+    # ========================================================
+    # 2. 숫자 정보가 있는 정답
+    # ========================================================
 
     if numeric_score is not None:
+
+        # 숫자 대부분 + 핵심 단어 충분히 일치
         if (
             numeric_score
             >= NUMERIC_COVERAGE_THRESHOLD
@@ -612,12 +673,9 @@ def evidence_matches(
             >= TOKEN_COVERAGE_THRESHOLD
         ):
             score = (
-                0.55
-                * numeric_score
-                + 0.35
-                * word_score
-                + 0.10
-                * similarity
+                0.55 * numeric_score
+                + 0.35 * word_score
+                + 0.10 * similarity
             )
 
             return (
@@ -626,17 +684,14 @@ def evidence_matches(
                 "numeric_fact_match",
             )
 
+        # 숫자가 거의 전부 일치
         if (
-            numeric_score
-            >= 0.95
-            and similarity
-            >= 0.35
+            numeric_score >= 0.95
+            and similarity >= 0.35
         ):
             score = (
-                0.60
-                * numeric_score
-                + 0.40
-                * similarity
+                0.60 * numeric_score
+                + 0.40 * similarity
             )
 
             return (
@@ -645,23 +700,24 @@ def evidence_matches(
                 "numeric_full_match",
             )
 
+        # ----------------------------------------------------
+        # 숫자 근거 보완 판정
+        #
+        # 날짜/시간/금액 등 핵심 숫자가 매우 잘 맞고,
+        # 텍스트 쪽 근거도 조금이라도 있어야 HIT
+        # ----------------------------------------------------
+
         if (
-            numeric_score
-            >= 0.80
+            numeric_score >= 0.80
             and (
-                word_score
-                >= 0.25
-                or similarity
-                >= 0.25
+                word_score >= 0.25
+                or similarity >= 0.25
             )
         ):
             score = (
-                0.60
-                * numeric_score
-                + 0.25
-                * word_score
-                + 0.15
-                * similarity
+                0.60 * numeric_score
+                + 0.25 * word_score
+                + 0.15 * similarity
             )
 
             return (
@@ -670,7 +726,12 @@ def evidence_matches(
                 "numeric_evidence_match",
             )
 
+    # ========================================================
+    # 3. 숫자가 없는 일반 문장
+    # ========================================================
+
     if numeric_score is None:
+
         if (
             word_score
             >= NO_NUMBER_TOKEN_THRESHOLD
@@ -678,10 +739,8 @@ def evidence_matches(
             >= NO_NUMBER_SIMILARITY_THRESHOLD
         ):
             score = (
-                0.70
-                * word_score
-                + 0.30
-                * similarity
+                0.70 * word_score
+                + 0.30 * similarity
             )
 
             return (
@@ -691,16 +750,12 @@ def evidence_matches(
             )
 
         if (
-            word_score
-            >= 0.70
-            and similarity
-            >= 0.25
+            word_score >= 0.70
+            and similarity >= 0.25
         ):
             score = (
-                0.75
-                * word_score
-                + 0.25
-                * similarity
+                0.75 * word_score
+                + 0.25 * similarity
             )
 
             return (
@@ -708,6 +763,10 @@ def evidence_matches(
                 score,
                 "strong_token_match",
             )
+
+    # ========================================================
+    # 4. 문자열 자체가 매우 유사
+    # ========================================================
 
     if (
         similarity
@@ -719,6 +778,14 @@ def evidence_matches(
             "high_text_similarity",
         )
 
+    # ========================================================
+    # 5. 복합 Evidence 보완 판정
+    #
+    # 숫자 하나만 우연히 겹치는 것을 막기 위해
+    # 서로 다른 Evidence가 최소 2개 이상
+    # 일정 수준 이상이어야 한다.
+    # ========================================================
+
     evidence_count = 0
 
     if word_score >= 0.50:
@@ -729,27 +796,23 @@ def evidence_matches(
 
     if (
         numeric_score is not None
-        and numeric_score
-        >= 0.70
+        and numeric_score >= 0.70
     ):
         evidence_count += 1
 
     if evidence_count >= 2:
+
         if numeric_score is None:
             final_score = (
-                0.65
-                * word_score
-                + 0.35
-                * similarity
+                0.65 * word_score
+                + 0.35 * similarity
             )
+
         else:
             final_score = (
-                0.45
-                * numeric_score
-                + 0.35
-                * word_score
-                + 0.20
-                * similarity
+                0.45 * numeric_score
+                + 0.35 * word_score
+                + 0.20 * similarity
             )
 
         if final_score >= 0.55:
@@ -758,6 +821,10 @@ def evidence_matches(
                 final_score,
                 "multi_evidence_match",
             )
+
+    # ========================================================
+    # 6. 실패
+    # ========================================================
 
     candidates = [
         word_score,
@@ -780,6 +847,11 @@ def evidence_matches(
     )
 
 
+# ============================================================
+# Recall@K
+# ============================================================
+
+
 def recall_at_k(
     reference_text: str,
     contexts: list[str],
@@ -790,6 +862,17 @@ def recall_at_k(
     float,
     str,
 ]:
+    """
+    Recall@K 계산.
+
+    1. Top-K의 Context를 개별적으로 검사
+    2. 개별 Context에서 실패하면
+       Top-K 전체를 합쳐서 다시 검사
+
+    비교형 / 복합형 질문에서
+    정답 근거가 여러 청크에 나뉜 경우 대응.
+    """
+
     if not reference_text.strip():
         return (
             None,
@@ -798,9 +881,7 @@ def recall_at_k(
             "no_reference_text",
         )
 
-    top_k_contexts = (
-        contexts[:k]
-    )
+    top_k_contexts = contexts[:k]
 
     if not top_k_contexts:
         return (
@@ -811,9 +892,11 @@ def recall_at_k(
         )
 
     best_score = 0.0
-    best_reason = (
-        "no_match"
-    )
+    best_reason = "no_match"
+
+    # ========================================================
+    # 1. 개별 Context 검사
+    # ========================================================
 
     for rank, context in enumerate(
         top_k_contexts,
@@ -840,6 +923,10 @@ def recall_at_k(
                 reason,
             )
 
+    # ========================================================
+    # 2. Top-K Context 통합 검사
+    # ========================================================
+
     combined_context = "\n".join(
         top_k_contexts
     )
@@ -854,12 +941,8 @@ def recall_at_k(
     )
 
     if combined_score > best_score:
-        best_score = (
-            combined_score
-        )
-        best_reason = (
-            combined_reason
-        )
+        best_score = combined_score
+        best_reason = combined_reason
 
     if combined_matched:
         return (
@@ -872,6 +955,10 @@ def recall_at_k(
             ),
         )
 
+    # ========================================================
+    # 3. Top-K 전체에서도 실패
+    # ========================================================
+
     return (
         0,
         None,
@@ -880,9 +967,26 @@ def recall_at_k(
     )
 
 
+# ============================================================
+# 선택 평가 문항 파싱
+# ============================================================
+
+
 def parse_question_ids(
     value: str | None,
 ) -> set[str] | None:
+    """
+    --question-ids로 전달된 문항 ID를 set으로 변환한다.
+
+    예:
+    Q002,Q003,Q007
+        ↓
+    {"Q002", "Q003", "Q007"}
+
+    옵션을 사용하지 않으면 None을 반환하여
+    기존처럼 전체 문항을 평가한다.
+    """
+
     if value is None:
         return None
 
@@ -899,45 +1003,8 @@ def parse_question_ids(
 
 
 # ============================================================
-# RAGAS
+# RAGAS 패키지 확인
 # ============================================================
-
-
-def build_faithfulness_contexts(
-    contexts: list[str],
-) -> list[str]:
-    """
-    Faithfulness 평가에만 사용할 Context를 제한한다.
-
-    기본값:
-    - 검색 순위 상위 3개 Context만 사용
-    - Context 1개당 최대 2000자
-
-    Recall@K 계산에 사용하는 contexts 원본은 수정하지 않는다.
-    Response Relevancy와 Factual Correctness 입력도 변경하지 않는다.
-    """
-    if not contexts:
-        return []
-
-    limited_contexts: list[str] = []
-
-    for context in contexts[
-        :FAITHFULNESS_MAX_CONTEXTS
-    ]:
-        context_text = str(
-            context
-        ).strip()
-
-        if not context_text:
-            continue
-
-        limited_contexts.append(
-            context_text[
-                :FAITHFULNESS_MAX_CHARS_PER_CONTEXT
-            ]
-        )
-
-    return limited_contexts
 
 
 def check_ragas_packages() -> None:
@@ -946,52 +1013,47 @@ def check_ragas_packages() -> None:
     try:
         import ragas  # noqa: F401
     except ImportError:
-        missing.append("ragas")
+        missing.append(
+            "ragas"
+        )
 
     try:
         import openai  # noqa: F401
     except ImportError:
-        missing.append("openai")
-
-    try:
-        import sentence_transformers  # noqa: F401
-    except ImportError:
         missing.append(
-            "sentence-transformers"
+            "openai"
         )
+
 
     if missing:
         raise RuntimeError(
-            "RAGAS 평가에 필요한 패키지가 없습니다.\n\n"
+            "RAGAS 평가에 필요한 "
+            "패키지가 없습니다.\n\n"
             "다음 명령으로 설치하세요:\n\n"
             f"pip install {' '.join(missing)}"
         )
 
 
+# ============================================================
+# RAGAS Scorer 생성
+# ============================================================
+
+
 async def build_ragas_scorers(
-    *,
     base_url: str,
     api_key: str,
     model: str,
-    embedding_model: str,
-    adapt_factual_korean: bool,
-    factual_only: bool,
-    request_timeout_seconds: float,
+    adapt_factual_korean: bool = False,
+    factual_only: bool = False,
 ) -> dict[str, Any]:
-    from openai import (
-        AsyncOpenAI,
-    )
 
-    from ragas.embeddings import (
-        HuggingFaceEmbeddings,
-    )
+    from openai import AsyncOpenAI
 
     from ragas.llms import (
         llm_factory,
     )
 
     from ragas.metrics.collections import (
-        AnswerRelevancy,
         Faithfulness,
         FactualCorrectness,
     )
@@ -1001,15 +1063,13 @@ async def build_ragas_scorers(
             "RAGAS 평가용 모델명이 없습니다.\n\n"
             "예:\n"
             "python evaluation/evaluate_metrics.py "
-            "--dataset BD "
+            "--dataset GC "
             "--ragas-model 모델명"
         )
 
     client = AsyncOpenAI(
         api_key=api_key,
         base_url=base_url,
-        timeout=request_timeout_seconds,
-        max_retries=1,
     )
 
     llm = llm_factory(
@@ -1018,14 +1078,9 @@ async def build_ragas_scorers(
         max_tokens=4096,
     )
 
-    embeddings = None
-
-    if not factual_only:
-        embeddings = (
-            HuggingFaceEmbeddings(
-                model=embedding_model,
-            )
-        )
+    # ========================================================
+    # Factual Correctness
+    # ========================================================
 
     factual_correctness = (
         FactualCorrectness(
@@ -1034,6 +1089,7 @@ async def build_ragas_scorers(
     )
 
     if adapt_factual_korean:
+
         print(
             "[RAGAS] FactualCorrectness "
             "한국어 Prompt adaptation 시작"
@@ -1070,85 +1126,79 @@ async def build_ragas_scorers(
             f"{factual_correctness.nli_prompt.language}"
         )
 
-    scorers: dict[
-        str,
-        Any,
-    ] = {
+    scorers = {
         "factual_correctness":
             factual_correctness,
     }
 
     if not factual_only:
-        assert embeddings is not None
-
-        scorers.update(
-            {
-                "faithfulness":
-                    Faithfulness(
-                        llm=llm
-                    ),
-                "response_relevancy":
-                    AnswerRelevancy(
-                        llm=llm,
-                        embeddings=embeddings,
-                    ),
-            }
+        faithfulness = Faithfulness(
+            llm=llm
         )
+
+        # Faithfulness의 판정 기준과 출력 스키마는 유지하면서
+        # Judge가 불필요하게 긴 설명/추론을 생성하지 않도록 한다.
+        # RAGAS 스키마상 reason 필드는 필요하므로 제거하지 않고
+        # 한 문장으로 짧게 제한한다.
+        faithfulness.nli_statements_prompt.instruction = (
+            "주어진 context를 기준으로 각 statement의 "
+            "faithfulness를 판정하세요. "
+            "statement가 context에서 직접 확인되거나 "
+            "직접 추론 가능하면 verdict=1, 그렇지 않으면 verdict=0입니다. "
+            "판정 기준을 바꾸지 마세요. "
+            "반드시 요구된 JSON 스키마만 출력하고, "
+            "추가 설명, 분석 과정, reasoning, 서론/결론은 출력하지 마세요. "
+            "각 항목의 statement는 원문을 그대로 유지하고, "
+            "reason은 판정 근거만 한 문장으로 매우 짧게 작성하세요. "
+            "verdict는 반드시 0 또는 1만 사용하세요."
+        )
+
+        scorers[
+            "faithfulness"
+        ] = faithfulness
 
     return scorers
 
 
+# ============================================================
+# RAGAS 문항 1개 평가
+# ============================================================
+
+
 async def score_one_with_ragas(
-    *,
     scorers: dict[str, Any],
     user_input: str,
     reference: str,
     response: str,
     contexts: list[str],
-    factual_only: bool,
-    metric_timeout_seconds: int,
+    factual_only: bool = False,
 ) -> tuple[
     dict[str, float | None],
     dict[str, float],
 ]:
-    """
-    metric별 독립 timeout을 적용한다.
 
-    한 metric이 timeout/실패해도 None으로 처리하고
-    나머지 metric 및 다음 문항을 계속 평가한다.
-    """
     scores: dict[
         str,
         float | None,
     ] = {
         "faithfulness": None,
-        "response_relevancy": None,
         "factual_correctness": None,
     }
 
-    metric_times: dict[
-        str,
-        float,
-    ] = {}
+    metric_times: dict[str, float] = {}
 
     async def safe_score(
         name: str,
         **kwargs,
     ) -> float | None:
-        metric_start = (
-            time.perf_counter()
-        )
+
+        metric_start = time.perf_counter()
 
         try:
-            result = await asyncio.wait_for(
-                scorers[
-                    name
-                ].ascore(
-                    **kwargs
-                ),
-                timeout=(
-                    metric_timeout_seconds
-                ),
+            result = await scorers[
+                name
+            ].ascore(
+                **kwargs
             )
 
             value = result.value
@@ -1167,20 +1217,12 @@ async def score_one_with_ragas(
 
             return value
 
-        except asyncio.TimeoutError:
-            print(
-                "    [RAGAS TIMEOUT] "
-                f"{name}: "
-                f"{metric_timeout_seconds}s 초과"
-            )
-            return None
-
         except Exception as exc:
             print(
                 "    [RAGAS 경고] "
-                f"{name} 실패: "
-                f"{type(exc).__name__}: {exc}"
+                f"{name} 실패: {exc}"
             )
+
             return None
 
         finally:
@@ -1200,39 +1242,13 @@ async def score_one_with_ragas(
             )
 
     if not factual_only:
-        # Faithfulness에만 길이 제한된 Context를 사용한다.
-        # 원본 contexts는 Recall 계산 등 다른 로직에 그대로 유지된다.
-        faithfulness_contexts = (
-            build_faithfulness_contexts(
-                contexts
-            )
-        )
-
-        print(
-            "  [Faithfulness Context] "
-            f"{len(contexts)}개 -> "
-            f"{len(faithfulness_contexts)}개, "
-            f"Context당 최대 "
-            f"{FAITHFULNESS_MAX_CHARS_PER_CONTEXT}자"
-        )
-
         scores[
             "faithfulness"
         ] = await safe_score(
             "faithfulness",
             user_input=user_input,
             response=response,
-            retrieved_contexts=(
-                faithfulness_contexts
-            ),
-        )
-
-        scores[
-            "response_relevancy"
-        ] = await safe_score(
-            "response_relevancy",
-            user_input=user_input,
-            response=response,
+            retrieved_contexts=contexts,
         )
 
     scores[
@@ -1250,151 +1266,71 @@ async def score_one_with_ragas(
 
 
 # ============================================================
-# 최종 통계
+# UNANSWERABLE / Correct Rejection
 # ============================================================
 
+REFUSAL_PATTERNS = (
+    "제공된 LH 공고문에서 확인할 수 없습니다.",
+    "확인할 수 없습니다",
+    "확인되지 않습니다",
+    "찾을 수 없습니다",
+    "문서에서 확인할 수 없습니다",
+    "문서에서 확인되지 않습니다",
+    "공고문에서 확인할 수 없습니다",
+    "공고문에서 확인되지 않습니다",
+    "해당 정보가 없습니다",
+    "관련 정보가 없습니다",
+    "근거를 찾을 수 없습니다",
+    "답변할 수 없습니다",
+    "알 수 없습니다",
+)
 
-def collect_final_statistics(
-    *,
-    ws,
-    columns: dict[str, int],
-    selected_question_ids: (
-        set[str] | None
-    ),
-    factual_only: bool,
-) -> dict[str, Any]:
-    total_questions = 0
-    answerable = 0
 
-    recall_hits = {
-        1: 0,
-        3: 0,
-        5: 0,
-    }
+def score_correct_rejection(
+    expected_behavior: str,
+    response: str,
+) -> tuple[int | None, str]:
 
-    ragas_values: dict[
-        str,
-        list[float],
-    ] = {
-        "faithfulness": [],
-        "response_relevancy": [],
-        "factual_correctness": [],
-    }
+    behavior = str(
+        expected_behavior
+        or ""
+    ).strip().lower()
 
-    for row in range(
-        2,
-        ws.max_row + 1,
-    ):
-        question_id = str(
-            ws.cell(
-                row=row,
-                column=columns[
-                    "question_id"
-                ],
-            ).value
+    if behavior not in {
+        "refuse",
+        "unanswerable",
+    }:
+        return (
+            None,
+            "N/A - answerable",
+        )
+
+    normalized = re.sub(
+        r"\s+",
+        " ",
+        str(
+            response
             or ""
-        ).strip().upper()
+        ).strip(),
+    )
 
-        if (
-            selected_question_ids
-            is not None
-            and question_id
-            not in selected_question_ids
-        ):
-            continue
-
-        user_input = str(
-            ws.cell(
-                row=row,
-                column=columns[
-                    "user_input"
-                ],
-            ).value
-            or ""
-        ).strip()
-
-        if not user_input:
-            continue
-
-        total_questions += 1
-
-        r1 = to_float_or_none(
-            ws.cell(
-                row=row,
-                column=columns[
-                    "recall_at_1"
-                ],
-            ).value
+    if not normalized:
+        return (
+            0,
+            "empty_response",
         )
 
-        r3 = to_float_or_none(
-            ws.cell(
-                row=row,
-                column=columns[
-                    "recall_at_3"
-                ],
-            ).value
-        )
-
-        r5 = to_float_or_none(
-            ws.cell(
-                row=row,
-                column=columns[
-                    "recall_at_5"
-                ],
-            ).value
-        )
-
-        if r1 is not None:
-            answerable += 1
-            recall_hits[1] += int(
-                r1 >= 1.0
-            )
-            recall_hits[3] += int(
-                (r3 or 0.0)
-                >= 1.0
-            )
-            recall_hits[5] += int(
-                (r5 or 0.0)
-                >= 1.0
+    for pattern in REFUSAL_PATTERNS:
+        if pattern in normalized:
+            return (
+                1,
+                f"refusal_pattern={pattern}",
             )
 
-        for metric_name in (
-            "faithfulness",
-            "response_relevancy",
-            "factual_correctness",
-        ):
-            if (
-                factual_only
-                and metric_name
-                != "factual_correctness"
-            ):
-                continue
-
-            value = to_float_or_none(
-                ws.cell(
-                    row=row,
-                    column=columns[
-                        metric_name
-                    ],
-                ).value
-            )
-
-            if value is not None:
-                ragas_values[
-                    metric_name
-                ].append(value)
-
-    return {
-        "total_questions":
-            total_questions,
-        "answerable":
-            answerable,
-        "recall_hits":
-            recall_hits,
-        "ragas_values":
-            ragas_values,
-    }
+    return (
+        0,
+        "no_refusal_pattern",
+    )
 
 
 # ============================================================
@@ -1405,609 +1341,776 @@ def collect_final_statistics(
 async def evaluate_metrics(
     args: argparse.Namespace,
 ) -> None:
-    dataset, input_path = (
-        resolve_result_xlsx(
-            dataset=args.dataset,
-            xlsx=args.xlsx,
-        )
+
+    dataset = normalize_dataset_name(
+        args.dataset
+    )
+
+    (
+        default_input,
+        default_output,
+    ) = dataset_paths(
+        dataset
+    )
+
+    input_path = (
+        Path(args.xlsx)
+        if args.xlsx
+        else default_input
     )
 
     output_path = (
         Path(args.output)
         if args.output
-        else default_scored_path(
-            input_path
-        )
+        else default_output
     )
 
-    if not output_path.is_absolute():
-        output_path = (
-            Path.cwd()
-            / output_path
-        ).resolve()
+    # ========================================================
+    # 입력 파일 확인
+    # ========================================================
+
+    if not input_path.exists():
+        raise FileNotFoundError(
+            "평가 결과 파일을 "
+            "찾을 수 없습니다:\n"
+            f"{input_path}\n\n"
+            "먼저 evaluate_rag.py를 "
+            "실행하세요."
+        )
 
     output_path.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    # Resume이면 기존 scored.xlsx를 입력으로 사용한다.
-    workbook_path = (
-        output_path
-        if (
-            args.resume
-            and output_path.is_file()
-        )
-        else input_path
-    )
+    # ========================================================
+    # Excel 읽기
+    # ========================================================
 
     wb = load_workbook(
-        workbook_path
+        input_path
     )
 
-    try:
-        if (
-            args.sheet
-            not in wb.sheetnames
-        ):
-            raise ValueError(
-                f"'{args.sheet}' 시트가 없습니다. "
-                f"현재 시트={wb.sheetnames}"
-            )
-
-        ws = wb[
-            args.sheet
-        ]
-
-        columns = find_columns(
-            ws
+    if (
+        args.sheet
+        not in wb.sheetnames
+    ):
+        raise ValueError(
+            f"'{args.sheet}' "
+            "시트가 없습니다.\n"
+            f"현재 시트: "
+            f"{wb.sheetnames}"
         )
 
-        selected_question_ids = (
-            parse_question_ids(
-                args.question_ids
-            )
+    ws = wb[
+        args.sheet
+    ]
+
+    columns = find_columns(
+        ws
+    )
+
+    # ========================================================
+    # 선택 평가 문항
+    # ========================================================
+
+    selected_question_ids = (
+        parse_question_ids(
+            args.question_ids
         )
+    )
 
-        required = [
-            "question_id",
-            "user_input",
-            "reference",
-            "reference_text",
-            "retrieved_contexts",
-            "response",
-            "recall_at_1",
-            "recall_at_3",
-            "recall_at_5",
-            "faithfulness",
-            "response_relevancy",
-            "factual_correctness",
-        ]
+    found_question_ids: set[str] = set()
 
-        missing = [
-            name
-            for name in required
-            if name not in columns
-        ]
+    # ========================================================
+    # 필수 열 확인
+    # ========================================================
 
-        if missing:
-            raise ValueError(
-                "평가에 필요한 Excel 열이 없습니다: "
-                + ", ".join(missing)
-            )
+    required = [
+        "question_id",
+        "user_input",
+        "reference",
+        "reference_text",
+        "retrieved_contexts",
+        "response",
+        "expected_behavior",
+        "recall_at_1",
+        "recall_at_3",
+        "recall_at_5",
+        "faithfulness",
+        "factual_correctness",
+    ]
 
-        recall_method_col = (
-            ensure_column(
-                ws,
-                columns,
-                "recall_match_method",
-            )
-        )
+    missing = [
+        name
+        for name in required
+        if name not in columns
+    ]
 
-        recall_rank_col = (
-            ensure_column(
-                ws,
-                columns,
-                "recall_matched_rank",
-            )
-        )
-
-        recall_score_col = (
-            ensure_column(
-                ws,
-                columns,
-                "recall_match_score",
+    if missing:
+        raise ValueError(
+            "평가에 필요한 Excel 열이 "
+            "없습니다:\n"
+            + ", ".join(
+                missing
             )
         )
 
-        ragas_status_col = (
-            ensure_column(
-                ws,
-                columns,
-                "ragas_status",
+    # ========================================================
+    # Recall 진단용 열
+    # ========================================================
+
+    recall_method_col = ensure_column(
+        ws,
+        columns,
+        "recall_match_method",
+    )
+
+    recall_rank_col = ensure_column(
+        ws,
+        columns,
+        "recall_matched_rank",
+    )
+
+    recall_score_col = ensure_column(
+        ws,
+        columns,
+        "recall_match_score",
+    )
+
+    ragas_status_col = ensure_column(
+        ws,
+        columns,
+        "ragas_status",
+    )
+
+    # 기존 결과 파일 호환을 위해 response_relevancy 열은 유지한다.
+    # 새 RUN에서는 계산하지 않고 빈칸으로 둔다.
+    response_relevancy_col = ensure_column(
+        ws,
+        columns,
+        "response_relevancy",
+    )
+
+    correct_rejection_col = ensure_column(
+        ws,
+        columns,
+        "correct_rejection",
+    )
+
+    rejection_reason_col = ensure_column(
+        ws,
+        columns,
+        "rejection_match_reason",
+    )
+
+    # ========================================================
+    # RAGAS 준비
+    # ========================================================
+
+    scorers = None
+
+    if not args.skip_ragas:
+
+        check_ragas_packages()
+
+        scorers = (
+            await build_ragas_scorers(
+                base_url=(
+                    args.ragas_base_url
+                ),
+                api_key=(
+                    args.ragas_api_key
+                ),
+                model=(
+                    args.ragas_model
+                ),
+                adapt_factual_korean=(
+                    args.adapt_factual_korean
+                ),
+                factual_only=(
+                    args.factual_only
+                ),
             )
         )
 
-        scorers = None
+    # ========================================================
+    # 시작 정보
+    # ========================================================
 
-        if not args.skip_ragas:
-            check_ragas_packages()
+    print(
+        "=" * 78
+    )
 
-            scorers = (
-                await build_ragas_scorers(
-                    base_url=(
-                        args.ragas_base_url
-                    ),
-                    api_key=(
-                        args.ragas_api_key
-                    ),
-                    model=(
-                        args.ragas_model
-                    ),
-                    embedding_model=(
-                        args.embedding_model
-                    ),
-                    adapt_factual_korean=(
-                        args.adapt_factual_korean
-                    ),
-                    factual_only=(
-                        args.factual_only
-                    ),
-                    request_timeout_seconds=(
-                        args.ragas_request_timeout
-                    ),
+    print(
+        "RAG 평가 지표 계산"
+    )
+
+    print(
+        f"dataset          : "
+        f"{dataset}"
+    )
+
+    print(
+        f"입력 파일       : "
+        f"{input_path}"
+    )
+
+    print(
+        f"출력 파일       : "
+        f"{output_path}"
+    )
+
+    print(
+        "Recall 방식      : "
+        "Hybrid Evidence Matching "
+        "+ Combined Top-K Context"
+    )
+
+    print(
+        f"RAGAS            : "
+        f"{'실행 안 함' if args.skip_ragas else '실행'}"
+    )
+
+    print(
+        "평가 모드       : "
+        + (
+            "Factual Correctness only"
+            if args.factual_only
+            else "RAGAS 핵심 2개 metrics"
+        )
+    )
+
+    print(
+        "Factual Prompt   : "
+        + (
+            "한국어 Adaptation"
+            if args.adapt_factual_korean
+            else "기본 Prompt"
+        )
+    )
+
+    if selected_question_ids:
+        print(
+            "선택 문항       : "
+            + ", ".join(
+                sorted(
+                    selected_question_ids
                 )
             )
-
-        print("=" * 78)
-        print("RAG 평가 지표 계산")
-        print(
-            f"dataset          : "
-            f"{dataset}"
         )
+    else:
         print(
-            f"입력 파일       : "
-            f"{workbook_path}"
-        )
-        print(
-            f"출력 파일       : "
-            f"{output_path}"
-        )
-        print(
-            "Recall 방식      : "
-            "Hybrid Evidence Matching "
-            "+ Combined Top-K Context"
-        )
-        print(
-            f"RAGAS            : "
-            f"{'실행 안 함' if args.skip_ragas else '실행'}"
-        )
-        print(
-            "Metric Timeout   : "
-            f"{args.metric_timeout}s"
-        )
-        print(
-            "Resume           : "
-            f"{args.resume}"
-        )
-        print(
-            "평가 모드       : "
-            + (
-                "Factual Correctness only"
-                if args.factual_only
-                else "RAGAS 핵심 3개 metrics"
-            )
-        )
-        print(
-            "Factual Prompt   : "
-            + (
-                "한국어 Adaptation"
-                if args.adapt_factual_korean
-                else "기본 Prompt"
-            )
+            "선택 문항       : 전체"
         )
 
-        if selected_question_ids:
-            print(
-                "선택 문항       : "
-                + ", ".join(
-                    sorted(
-                        selected_question_ids
-                    )
-                )
-            )
-        else:
-            print(
-                "선택 문항       : 전체"
-            )
+    print(
+        "=" * 78
+    )
 
-        print("=" * 78)
+    # ========================================================
+    # 통계 변수
+    # ========================================================
 
-        processed = 0
-        resume_skipped = 0
-        found_question_ids: set[
-            str
-        ] = set()
+    processed = 0
+    answerable = 0
+    unanswerable = 0
+    correct_rejection_hits = 0
 
-        metric_time_totals: dict[
-            str,
-            float,
-        ] = {
-            "recall": 0.0,
-            "faithfulness": 0.0,
-            "response_relevancy": 0.0,
-            "factual_correctness": 0.0,
-        }
+    recall_1_hits = 0
+    recall_3_hits = 0
+    recall_5_hits = 0
 
-        evaluation_start = (
-            time.perf_counter()
-        )
+    ragas_values: dict[
+        str,
+        list[float],
+    ] = {
+        "faithfulness": [],
+        "factual_correctness": [],
+    }
 
-        for row in range(
-            2,
-            ws.max_row + 1,
-        ):
-            question_id = str(
-                ws.cell(
-                    row=row,
-                    column=columns[
-                        "question_id"
-                    ],
-                ).value
-                or ""
+    metric_time_totals: dict[
+        str,
+        float,
+    ] = {
+        "recall": 0.0,
+        "faithfulness": 0.0,
+        "factual_correctness": 0.0,
+    }
+
+    evaluation_start = time.perf_counter()
+
+    # ========================================================
+    # 문항 반복
+    # ========================================================
+
+    for row in range(
+        2,
+        ws.max_row + 1,
+    ):
+
+        question_id = ws.cell(
+            row=row,
+            column=columns[
+                "question_id"
+            ],
+        ).value
+
+        question_id = (
+            ""
+            if question_id is None
+            else str(
+                question_id
             ).strip().upper()
+        )
 
-            if (
-                selected_question_ids
-                is not None
-                and question_id
-                not in selected_question_ids
-            ):
-                continue
+        if (
+            selected_question_ids is not None
+            and question_id
+            not in selected_question_ids
+        ):
+            continue
 
-            if selected_question_ids is not None:
-                found_question_ids.add(
-                    question_id
-                )
-
-            user_input = str(
-                ws.cell(
-                    row=row,
-                    column=columns[
-                        "user_input"
-                    ],
-                ).value
-                or ""
-            ).strip()
-
-            if not user_input:
-                continue
-
-            # RAGAS 성공 문항 Resume Skip.
-            # PARTIAL/FAILED/미평가는 다시 실행한다.
-            if (
-                args.resume
-                and not args.rerun_success
-                and not args.skip_ragas
-            ):
-                current_status = str(
-                    ws.cell(
-                        row=row,
-                        column=ragas_status_col,
-                    ).value
-                    or ""
-                ).strip()
-
-                completed_statuses = {
-                    "OK",
-                    "OK - FACTUAL_ONLY",
-                }
-
-                if (
-                    current_status
-                    in completed_statuses
-                ):
-                    resume_skipped += 1
-                    print(
-                        f"[RESUME] {question_id}: "
-                        "기존 RAGAS 성공 결과 유지"
-                    )
-                    continue
-
-            reference = str(
-                ws.cell(
-                    row=row,
-                    column=columns[
-                        "reference"
-                    ],
-                ).value
-                or ""
-            ).strip()
-
-            reference_text = str(
-                ws.cell(
-                    row=row,
-                    column=columns[
-                        "reference_text"
-                    ],
-                ).value
-                or ""
-            ).strip()
-
-            retrieved_raw = (
-                ws.cell(
-                    row=row,
-                    column=columns[
-                        "retrieved_contexts"
-                    ],
-                ).value
+        if selected_question_ids is not None:
+            found_question_ids.add(
+                question_id
             )
 
-            response = str(
-                ws.cell(
-                    row=row,
-                    column=columns[
-                        "response"
-                    ],
-                ).value
-                or ""
-            ).strip()
+        user_input = ws.cell(
+            row=row,
+            column=columns[
+                "user_input"
+            ],
+        ).value
 
-            contexts = (
-                split_retrieved_contexts(
-                    retrieved_raw
-                )
+        if user_input is None:
+            continue
+
+        user_input = (
+            str(user_input)
+            .strip()
+        )
+
+        if not user_input:
+            continue
+
+        reference = ws.cell(
+            row=row,
+            column=columns[
+                "reference"
+            ],
+        ).value
+
+        reference_text = ws.cell(
+            row=row,
+            column=columns[
+                "reference_text"
+            ],
+        ).value
+
+        retrieved_raw = ws.cell(
+            row=row,
+            column=columns[
+                "retrieved_contexts"
+            ],
+        ).value
+
+        response = ws.cell(
+            row=row,
+            column=columns[
+                "response"
+            ],
+        ).value
+
+        reference = (
+            ""
+            if reference is None
+            else str(
+                reference
+            ).strip()
+        )
+
+        reference_text = (
+            ""
+            if reference_text is None
+            else str(
+                reference_text
+            ).strip()
+        )
+
+        response = (
+            ""
+            if response is None
+            else str(
+                response
+            ).strip()
+        )
+
+        expected_behavior = str(
+            ws.cell(
+                row=row,
+                column=columns[
+                    "expected_behavior"
+                ],
+            ).value
+            or ""
+        ).strip().lower()
+
+        # 최종 성능에서 제외된 Response Relevancy는
+        # 기존 열만 유지하고 새 RUN에서는 빈칸으로 둔다.
+        ws.cell(
+            row=row,
+            column=response_relevancy_col,
+            value=None,
+        )
+
+        (
+            correct_rejection,
+            rejection_reason,
+        ) = score_correct_rejection(
+            expected_behavior,
+            response,
+        )
+
+        ws.cell(
+            row=row,
+            column=correct_rejection_col,
+            value=correct_rejection,
+        )
+
+        ws.cell(
+            row=row,
+            column=rejection_reason_col,
+            value=rejection_reason,
+        )
+
+        if correct_rejection is not None:
+            unanswerable += 1
+            correct_rejection_hits += (
+                correct_rejection
             )
 
-            processed += 1
+        contexts = (
+            split_retrieved_contexts(
+                retrieved_raw
+            )
+        )
 
-            question_start = (
-                time.perf_counter()
+        processed += 1
+
+        question_start = time.perf_counter()
+
+        print(
+            f"\n[{processed:02d}] "
+            f"{question_id}: "
+            f"{user_input}"
+        )
+
+        # ====================================================
+        # Recall@1 / @3 / @5 실행시간 측정
+        # ====================================================
+
+        recall_start = time.perf_counter()
+
+        (
+            r1,
+            rank1,
+            score1,
+            reason1,
+        ) = recall_at_k(
+            reference_text,
+            contexts,
+            1,
+        )
+
+        # ====================================================
+        # Recall@3
+        # ====================================================
+
+        (
+            r3,
+            rank3,
+            score3,
+            reason3,
+        ) = recall_at_k(
+            reference_text,
+            contexts,
+            3,
+        )
+
+        # ====================================================
+        # Recall@5
+        # ====================================================
+
+        (
+            r5,
+            rank5,
+            score5,
+            reason5,
+        ) = recall_at_k(
+            reference_text,
+            contexts,
+            5,
+        )
+
+        recall_elapsed = (
+            time.perf_counter()
+            - recall_start
+        )
+
+        metric_time_totals[
+            "recall"
+        ] += recall_elapsed
+
+        print(
+            "  [TIME] "
+            f"{'recall@1/3/5':22s}: "
+            f"{recall_elapsed:8.4f}s"
+        )
+
+        # ====================================================
+        # Recall 저장
+        # ====================================================
+
+        ws.cell(
+            row=row,
+            column=columns[
+                "recall_at_1"
+            ],
+            value=r1,
+        )
+
+        ws.cell(
+            row=row,
+            column=columns[
+                "recall_at_3"
+            ],
+            value=r3,
+        )
+
+        ws.cell(
+            row=row,
+            column=columns[
+                "recall_at_5"
+            ],
+            value=r5,
+        )
+
+        # ====================================================
+        # Unanswerable
+        # ====================================================
+
+        if r1 is None:
+
+            ws.cell(
+                row=row,
+                column=recall_method_col,
+                value=(
+                    "N/A - "
+                    "reference_text 없음"
+                ),
+            )
+
+            ws.cell(
+                row=row,
+                column=recall_rank_col,
+                value=None,
+            )
+
+            ws.cell(
+                row=row,
+                column=recall_score_col,
+                value=None,
             )
 
             print(
-                f"\n[{processed:02d}] "
-                f"{question_id}: "
-                f"{user_input}"
+                "  Recall@K       : N/A"
             )
 
-            # ------------------------------------------------
-            # Recall@1 / @3 / @5
-            # ------------------------------------------------
-            recall_start = (
-                time.perf_counter()
+        # ====================================================
+        # Answerable
+        # ====================================================
+
+        else:
+
+            answerable += 1
+
+            recall_1_hits += (
+                r1 or 0
             )
 
-            (
-                r1,
-                rank1,
-                score1,
-                reason1,
-            ) = recall_at_k(
-                reference_text,
-                contexts,
-                1,
+            recall_3_hits += (
+                r3 or 0
             )
 
-            (
-                r3,
-                rank3,
-                score3,
-                reason3,
-            ) = recall_at_k(
-                reference_text,
-                contexts,
-                3,
+            recall_5_hits += (
+                r5 or 0
             )
 
-            (
-                r5,
-                rank5,
-                score5,
-                reason5,
-            ) = recall_at_k(
-                reference_text,
-                contexts,
-                5,
+            # 가장 작은 K에서 성공한 결과 기록
+            if r1 == 1:
+
+                final_rank = rank1
+                final_score = score1
+                final_reason = reason1
+                matched_scope = "Top-1"
+
+            elif r3 == 1:
+
+                final_rank = rank3
+                final_score = score3
+                final_reason = reason3
+                matched_scope = "Top-3"
+
+            elif r5 == 1:
+
+                final_rank = rank5
+                final_score = score5
+                final_reason = reason5
+                matched_scope = "Top-5"
+
+            else:
+
+                final_rank = None
+                final_score = score5
+                final_reason = reason5
+                matched_scope = (
+                    "Top-5 미탐지"
+                )
+
+            ws.cell(
+                row=row,
+                column=recall_method_col,
+                value=(
+                    "hybrid evidence match"
+                    f" | scope={matched_scope}"
+                    f" | reason={final_reason}"
+                ),
             )
 
-            recall_elapsed = (
-                time.perf_counter()
-                - recall_start
+            ws.cell(
+                row=row,
+                column=recall_rank_col,
+                value=final_rank,
             )
 
-            metric_time_totals[
-                "recall"
-            ] += recall_elapsed
+            ws.cell(
+                row=row,
+                column=recall_score_col,
+                value=round(
+                    final_score,
+                    4,
+                ),
+            )
+
+            # Console 출력
+            print(
+                "  Recall@1/3/5   : "
+                f"{r1} / "
+                f"{r3} / "
+                f"{r5}"
+            )
 
             print(
-                "  [TIME] "
-                f"{'recall@1/3/5':22s}: "
-                f"{recall_elapsed:8.4f}s"
+                "  Match Scope    : "
+                f"{matched_scope}"
             )
 
-            ws.cell(
-                row=row,
-                column=columns[
-                    "recall_at_1"
-                ],
-                value=r1,
-            )
-
-            ws.cell(
-                row=row,
-                column=columns[
-                    "recall_at_3"
-                ],
-                value=r3,
-            )
-
-            ws.cell(
-                row=row,
-                column=columns[
-                    "recall_at_5"
-                ],
-                value=r5,
-            )
-
-            if r1 is None:
-                ws.cell(
-                    row=row,
-                    column=recall_method_col,
-                    value=(
-                        "N/A - "
-                        "reference_text 없음"
-                    ),
-                )
-
-                ws.cell(
-                    row=row,
-                    column=recall_rank_col,
-                    value=None,
-                )
-
-                ws.cell(
-                    row=row,
-                    column=recall_score_col,
-                    value=None,
-                )
+            if final_rank is not None:
 
                 print(
-                    "  Recall@K       : N/A"
+                    "  Match Rank     : "
+                    f"{final_rank}"
+                )
+
+            elif (
+                r1 == 1
+                or r3 == 1
+                or r5 == 1
+            ):
+
+                print(
+                    "  Match Rank     : "
+                    "복수 Context"
                 )
 
             else:
-                if r1 == 1:
-                    final_rank = rank1
-                    final_score = score1
-                    final_reason = reason1
-                    matched_scope = "Top-1"
-
-                elif r3 == 1:
-                    final_rank = rank3
-                    final_score = score3
-                    final_reason = reason3
-                    matched_scope = "Top-3"
-
-                elif r5 == 1:
-                    final_rank = rank5
-                    final_score = score5
-                    final_reason = reason5
-                    matched_scope = "Top-5"
-
-                else:
-                    final_rank = None
-                    final_score = score5
-                    final_reason = reason5
-                    matched_scope = (
-                        "Top-5 미탐지"
-                    )
-
-                ws.cell(
-                    row=row,
-                    column=recall_method_col,
-                    value=(
-                        "hybrid evidence match"
-                        f" | scope={matched_scope}"
-                        f" | reason={final_reason}"
-                    ),
-                )
-
-                ws.cell(
-                    row=row,
-                    column=recall_rank_col,
-                    value=final_rank,
-                )
-
-                ws.cell(
-                    row=row,
-                    column=recall_score_col,
-                    value=round(
-                        final_score,
-                        4,
-                    ),
-                )
 
                 print(
-                    "  Recall@1/3/5   : "
-                    f"{r1} / {r3} / {r5}"
-                )
-                print(
-                    "  Match Scope    : "
-                    f"{matched_scope}"
+                    "  Match Rank     : "
+                    "없음"
                 )
 
-                if final_rank is not None:
-                    print(
-                        "  Match Rank     : "
-                        f"{final_rank}"
-                    )
-                elif (
-                    r1 == 1
-                    or r3 == 1
-                    or r5 == 1
-                ):
-                    print(
-                        "  Match Rank     : "
-                        "복수 Context"
-                    )
-                else:
-                    print(
-                        "  Match Rank     : 없음"
-                    )
+            print(
+                "  Match Reason   : "
+                f"{final_reason}"
+            )
 
-                print(
-                    "  Match Reason   : "
-                    f"{final_reason}"
-                )
-                print(
-                    "  Match Score    : "
-                    f"{final_score:.4f}"
-                )
+            print(
+                "  Match Score    : "
+                f"{final_score:.4f}"
+            )
 
-            # ------------------------------------------------
-            # RAGAS
-            # ------------------------------------------------
-            if args.skip_ragas:
-                current_status = ws.cell(
-                    row=row,
-                    column=ragas_status_col,
-                ).value
+        # ====================================================
+        # RAGAS
+        # ====================================================
 
-                if current_status is None:
-                    ws.cell(
-                        row=row,
-                        column=ragas_status_col,
-                        value="SKIPPED",
-                    )
+        if expected_behavior in {
+            "refuse",
+            "unanswerable",
+        }:
+            ws.cell(
+                row=row,
+                column=ragas_status_col,
+                value="SKIPPED - UNANSWERABLE",
+            )
 
-            elif not response:
+        elif args.skip_ragas:
+
+            current_status = ws.cell(
+                row=row,
+                column=ragas_status_col,
+            ).value
+
+            if current_status is None:
+
                 ws.cell(
                     row=row,
                     column=ragas_status_col,
-                    value=(
-                        "SKIPPED - "
-                        "response 없음"
-                    ),
+                    value="SKIPPED",
                 )
 
-            elif not contexts:
-                ws.cell(
-                    row=row,
-                    column=ragas_status_col,
-                    value=(
-                        "SKIPPED - "
-                        "retrieved_contexts 없음"
-                    ),
-                )
+        elif not response:
 
-            else:
-                assert scorers is not None
+            ws.cell(
+                row=row,
+                column=ragas_status_col,
+                value=(
+                    "SKIPPED - "
+                    "response 없음"
+                ),
+            )
 
-                (
-                    scores,
-                    metric_times,
-                ) = await score_one_with_ragas(
+        elif not contexts:
+
+            ws.cell(
+                row=row,
+                column=ragas_status_col,
+                value=(
+                    "SKIPPED - "
+                    "retrieved_contexts 없음"
+                ),
+            )
+
+        else:
+
+            assert scorers is not None
+
+            (
+                scores,
+                metric_times,
+            ) = (
+                await score_one_with_ragas(
                     scorers=scorers,
                     user_input=user_input,
                     reference=reference,
@@ -2016,265 +2119,292 @@ async def evaluate_metrics(
                     factual_only=(
                         args.factual_only
                     ),
-                    metric_timeout_seconds=(
-                        args.metric_timeout
-                    ),
                 )
+            )
 
-                for (
-                    metric_name,
-                    elapsed,
-                ) in metric_times.items():
-                    metric_time_totals[
-                        metric_name
-                    ] += elapsed
+            for (
+                metric_name,
+                elapsed,
+            ) in metric_times.items():
+                metric_time_totals[
+                    metric_name
+                ] += elapsed
 
-                for (
-                    metric_name,
-                    score,
-                ) in scores.items():
-                    ws.cell(
-                        row=row,
-                        column=columns[
-                            metric_name
-                        ],
-                        value=score,
-                    )
-
-                if args.factual_only:
-                    if (
-                        scores[
-                            "factual_correctness"
-                        ]
-                        is not None
-                    ):
-                        status = (
-                            "OK - FACTUAL_ONLY"
-                        )
-                    else:
-                        status = (
-                            "FAILED - FACTUAL_ONLY"
-                        )
-
-                elif all(
-                    value is not None
-                    for value
-                    in scores.values()
-                ):
-                    status = "OK"
-
-                elif any(
-                    value is not None
-                    for value
-                    in scores.values()
-                ):
-                    status = "PARTIAL"
-
-                else:
-                    status = "FAILED"
+            for (
+                metric_name,
+                score,
+            ) in scores.items():
 
                 ws.cell(
                     row=row,
-                    column=ragas_status_col,
-                    value=status,
+                    column=columns[
+                        metric_name
+                    ],
+                    value=score,
                 )
 
-            question_elapsed = (
-                time.perf_counter()
-                - question_start
-            )
+                if score is not None:
 
-            print(
-                "  [TIME] "
-                f"{'QUESTION TOTAL':22s}: "
-                f"{question_elapsed:8.2f}s"
-            )
-
-            # 문항 1개가 끝날 때마다 저장한다.
-            # metric timeout이 발생해도 PARTIAL/FAILED 상태가 저장된다.
-            wb.save(
-                output_path
-            )
-
-        if selected_question_ids is not None:
-            missing_question_ids = (
-                selected_question_ids
-                - found_question_ids
-            )
-
-            if missing_question_ids:
-                print(
-                    "\n[경고] Excel에서 찾지 못한 문항: "
-                    + ", ".join(
-                        sorted(
-                            missing_question_ids
-                        )
-                    )
-                )
-
-        final_stats = (
-            collect_final_statistics(
-                ws=ws,
-                columns=columns,
-                selected_question_ids=(
-                    selected_question_ids
-                ),
-                factual_only=(
-                    args.factual_only
-                ),
-            )
-        )
-
-        evaluation_elapsed = (
-            time.perf_counter()
-            - evaluation_start
-        )
-
-        print(
-            "\n"
-            + "=" * 78
-        )
-        print("평가 완료")
-        print(
-            "이번 실행 처리 질문 : "
-            f"{processed}"
-        )
-        print(
-            "Resume Skip        : "
-            f"{resume_skipped}"
-        )
-        print(
-            "결과 내 전체 질문 : "
-            f"{final_stats['total_questions']}"
-        )
-
-        answerable = int(
-            final_stats[
-                "answerable"
-            ]
-        )
-
-        recall_hits = (
-            final_stats[
-                "recall_hits"
-            ]
-        )
-
-        if answerable > 0:
-            for k in (
-                1,
-                3,
-                5,
-            ):
-                hits = int(
-                    recall_hits[k]
-                )
-
-                recall_value = (
-                    hits
-                    / answerable
-                )
-
-                print(
-                    f"Recall@{k:<9d}: "
-                    f"{hits}/{answerable} "
-                    f"= {recall_value:.4f} "
-                    f"({recall_value * 100:.1f}%)"
-                )
-
-        if not args.skip_ragas:
-            print(
-                "\n[RAGAS 평균]"
-            )
-
-            ragas_values = (
-                final_stats[
-                    "ragas_values"
-                ]
-            )
-
-            for metric_name in (
-                "faithfulness",
-                "response_relevancy",
-                "factual_correctness",
-            ):
-                if (
-                    args.factual_only
-                    and metric_name
-                    != "factual_correctness"
-                ):
-                    continue
-
-                values = (
                     ragas_values[
                         metric_name
-                    ]
-                )
-
-                if values:
-                    average = (
-                        sum(values)
-                        / len(values)
+                    ].append(
+                        score
                     )
 
-                    print(
-                        f"{metric_name:22s}: "
-                        f"{average:.4f} "
-                        f"({len(values)}개)"
+            if args.factual_only:
+
+                if (
+                    scores[
+                        "factual_correctness"
+                    ]
+                    is not None
+                ):
+                    status = (
+                        "OK - FACTUAL_ONLY"
                     )
                 else:
-                    print(
-                        f"{metric_name:22s}: "
-                        "N/A"
+                    status = (
+                        "FAILED - FACTUAL_ONLY"
                     )
 
-        print(
-            "\n[이번 실행시간 요약]"
-        )
-
-        print(
-            f"{'Recall@1/3/5 합계':26s}: "
-            f"{metric_time_totals['recall']:.2f}s"
-        )
-
-        if not args.skip_ragas:
-            for metric_name in (
-                "faithfulness",
-                "response_relevancy",
-                "factual_correctness",
+            elif all(
+                value is not None
+                for value
+                in scores.values()
             ):
-                if (
-                    args.factual_only
-                    and metric_name
-                    != "factual_correctness"
-                ):
-                    continue
+                status = "OK"
 
-                print(
-                    f"{metric_name:26s}: "
-                    f"{metric_time_totals[metric_name]:.2f}s"
-                )
+            elif any(
+                value is not None
+                for value
+                in scores.values()
+            ):
+                status = "PARTIAL"
 
-        print(
-            f"{'전체 평가시간':26s}: "
-            f"{evaluation_elapsed:.2f}s "
-            f"({evaluation_elapsed / 60:.1f}분)"
-        )
+            else:
+                status = "FAILED"
 
-        if processed > 0:
-            print(
-                f"{'이번 처리 문항당 평균':26s}: "
-                f"{evaluation_elapsed / processed:.2f}s"
+            ws.cell(
+                row=row,
+                column=ragas_status_col,
+                value=status,
             )
 
-        print(
-            f"\n결과 파일       : "
-            f"{output_path}"
+        question_elapsed = (
+            time.perf_counter()
+            - question_start
         )
-        print("=" * 78)
 
-    finally:
-        wb.close()
+        print(
+            "  [TIME] "
+            f"{'QUESTION TOTAL':22s}: "
+            f"{question_elapsed:8.2f}s"
+        )
+
+        # 중간 저장
+        wb.save(
+            output_path
+        )
+
+    # ========================================================
+    # 선택 문항 확인
+    # ========================================================
+
+    if selected_question_ids is not None:
+
+        missing_question_ids = (
+            selected_question_ids
+            - found_question_ids
+        )
+
+        if missing_question_ids:
+
+            print(
+                "\n[경고] Excel에서 "
+                "찾지 못한 문항: "
+                + ", ".join(
+                    sorted(
+                        missing_question_ids
+                    )
+                )
+            )
+
+    # ========================================================
+    # 최종 Recall 통계
+    # ========================================================
+
+    print(
+        "\n"
+        + "=" * 78
+    )
+
+    print(
+        "평가 완료"
+    )
+
+    print(
+        f"전체 처리 질문 : "
+        f"{processed}"
+    )
+
+    if answerable > 0:
+
+        recall1 = (
+            recall_1_hits
+            / answerable
+        )
+
+        recall3 = (
+            recall_3_hits
+            / answerable
+        )
+
+        recall5 = (
+            recall_5_hits
+            / answerable
+        )
+
+        print(
+            f"Answerable 질문 : "
+            f"{answerable}"
+        )
+
+        print(
+            "Recall@1        : "
+            f"{recall_1_hits}/"
+            f"{answerable} "
+            f"= {recall1:.4f} "
+            f"({recall1 * 100:.1f}%)"
+        )
+
+        print(
+            "Recall@3        : "
+            f"{recall_3_hits}/"
+            f"{answerable} "
+            f"= {recall3:.4f} "
+            f"({recall3 * 100:.1f}%)"
+        )
+
+        print(
+            "Recall@5        : "
+            f"{recall_5_hits}/"
+            f"{answerable} "
+            f"= {recall5:.4f} "
+            f"({recall5 * 100:.1f}%)"
+        )
+
+    # ========================================================
+    # Correct Rejection Rate
+    # ========================================================
+
+    if unanswerable > 0:
+        correct_rejection_rate = (
+            correct_rejection_hits
+            / unanswerable
+        )
+
+        print(
+            "Correct Rejection : "
+            f"{correct_rejection_hits}/"
+            f"{unanswerable} "
+            f"= {correct_rejection_rate:.4f} "
+            f"({correct_rejection_rate * 100:.1f}%)"
+        )
+
+    # ========================================================
+    # RAGAS 평균
+    # ========================================================
+
+    if not args.skip_ragas:
+
+        print(
+            "\n[RAGAS 평균]"
+        )
+
+        for (
+            metric_name,
+            values,
+        ) in ragas_values.items():
+
+            if (
+                args.factual_only
+                and metric_name
+                != "factual_correctness"
+            ):
+                continue
+
+            if values:
+
+                average = (
+                    sum(values)
+                    / len(values)
+                )
+
+                print(
+                    f"{metric_name:22s}: "
+                    f"{average:.4f} "
+                    f"({len(values)}개)"
+                )
+
+            else:
+
+                print(
+                    f"{metric_name:22s}: "
+                    "N/A"
+                )
+
+    evaluation_elapsed = (
+        time.perf_counter()
+        - evaluation_start
+    )
+
+    print(
+        "\n[실행시간 요약]"
+    )
+
+    print(
+        f"{'Recall@1/3/5 합계':26s}: "
+        f"{metric_time_totals['recall']:.2f}s"
+    )
+
+    if not args.skip_ragas:
+
+        for metric_name in (
+            "faithfulness",
+            "factual_correctness",
+        ):
+            if (
+                args.factual_only
+                and metric_name
+                != "factual_correctness"
+            ):
+                continue
+
+            print(
+                f"{metric_name:26s}: "
+                f"{metric_time_totals[metric_name]:.2f}s"
+            )
+
+    print(
+        f"{'전체 평가시간':26s}: "
+        f"{evaluation_elapsed:.2f}s "
+        f"({evaluation_elapsed / 60:.1f}분)"
+    )
+
+    if processed > 0:
+        print(
+            f"{'문항당 평균시간':26s}: "
+            f"{evaluation_elapsed / processed:.2f}s"
+        )
+
+    print(
+        f"\n결과 파일       : "
+        f"{output_path}"
+    )
+
+    print(
+        "=" * 78
+    )
 
 
 # ============================================================
@@ -2283,6 +2413,7 @@ async def evaluate_metrics(
 
 
 def parse_args() -> argparse.Namespace:
+
     parser = argparse.ArgumentParser(
         description=(
             "evaluate_rag.py 결과를 읽어 "
@@ -2292,10 +2423,10 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--dataset",
-        default=None,
+        default="GC",
         help=(
-            "평가셋 코드. GC/BD/DH/GP 등 어떤 코드도 "
-            "코드 수정 없이 사용할 수 있습니다."
+            "평가셋 코드 "
+            "(GC=고창율계, BD=서울번동3)"
         ),
     )
 
@@ -2303,8 +2434,8 @@ def parse_args() -> argparse.Namespace:
         "--xlsx",
         default=None,
         help=(
-            "평가 입력 Excel 경로. 생략하면 dataset의 "
-            "가장 최근 ACTUAL_RUN result를 자동 탐색합니다."
+            "평가 입력 Excel 경로. "
+            "생략하면 dataset 기본 경로 사용."
         ),
     )
 
@@ -2312,8 +2443,8 @@ def parse_args() -> argparse.Namespace:
         "--output",
         default=None,
         help=(
-            "평가 결과 Excel 저장 경로. 생략하면 "
-            "입력 result 이름의 _scored.xlsx를 사용합니다."
+            "평가 결과 Excel 저장 경로. "
+            "생략하면 dataset 기본 경로 사용."
         ),
     )
 
@@ -2326,7 +2457,8 @@ def parse_args() -> argparse.Namespace:
         "--skip-ragas",
         action="store_true",
         help=(
-            "RAGAS는 실행하지 않고 Recall@K만 계산합니다."
+            "RAGAS 평가는 실행하지 않고 "
+            "Recall@K만 다시 계산합니다."
         ),
     )
 
@@ -2345,40 +2477,14 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_RAGAS_MODEL,
     )
 
-    parser.add_argument(
-        "--embedding-model",
-        default=DEFAULT_EMBEDDING_MODEL,
-    )
-
-    parser.add_argument(
-        "--ragas-request-timeout",
-        type=float,
-        default=(
-            DEFAULT_RAGAS_REQUEST_TIMEOUT_SECONDS
-        ),
-        help=(
-            "OpenAI 호환 Judge HTTP 요청 timeout(초)."
-        ),
-    )
-
-    parser.add_argument(
-        "--metric-timeout",
-        type=int,
-        default=(
-            DEFAULT_METRIC_TIMEOUT_SECONDS
-        ),
-        help=(
-            "RAGAS metric 1개당 최대 대기시간(초). "
-            "기본 300초. 초과 시 해당 metric만 실패 처리하고 "
-            "다음 metric/문항으로 진행합니다."
-        ),
-    )
 
     parser.add_argument(
         "--factual-only",
         action="store_true",
         help=(
-            "Factual Correctness만 계산합니다."
+            "Faithfulness를 생략하고 "
+            "Factual Correctness만 계산합니다. "
+            "Judge 비교/디버깅용 빠른 평가 옵션입니다."
         ),
     )
 
@@ -2386,8 +2492,10 @@ def parse_args() -> argparse.Namespace:
         "--question-ids",
         default=None,
         help=(
-            "Q002,Q003,Q007처럼 쉼표로 지정. "
-            "생략하면 전체 문항."
+            "평가할 question_id를 "
+            "쉼표로 구분하여 지정합니다. "
+            "예: Q002,Q003,Q007 "
+            "생략하면 전체 문항을 평가합니다."
         ),
     )
 
@@ -2395,51 +2503,26 @@ def parse_args() -> argparse.Namespace:
         "--adapt-factual-korean",
         action="store_true",
         help=(
-            "FactualCorrectness claim/NLI prompt를 "
+            "RAGAS FactualCorrectness의 "
+            "claim 분해 prompt와 NLI prompt를 "
             "한국어로 adaptation합니다."
         ),
     )
 
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help=(
-            "output scored.xlsx가 있으면 그 파일에서 이어서 실행합니다. "
-            "ragas_status=OK 문항은 건너뛰고 "
-            "PARTIAL/FAILED/미평가 문항을 다시 평가합니다."
-        ),
-    )
+    return parser.parse_args()
 
-    parser.add_argument(
-        "--rerun-success",
-        action="store_true",
-        help=(
-            "--resume 상태에서도 기존 OK 문항을 다시 평가합니다."
-        ),
-    )
 
-    args = parser.parse_args()
-
-    if args.metric_timeout <= 0:
-        parser.error(
-            "--metric-timeout은 1 이상이어야 합니다."
-        )
-
-    if (
-        args.ragas_request_timeout
-        <= 0
-    ):
-        parser.error(
-            "--ragas-request-timeout은 0보다 커야 합니다."
-        )
-
-    return args
+# ============================================================
+# Main
+# ============================================================
 
 
 def main() -> None:
+
     args = parse_args()
 
     try:
+
         asyncio.run(
             evaluate_metrics(
                 args
@@ -2447,17 +2530,22 @@ def main() -> None:
         )
 
     except KeyboardInterrupt:
+
         print(
-            "\n사용자가 평가를 중단했습니다. "
-            "완료된 문항은 결과 파일에 저장되어 있습니다."
+            "\n사용자가 평가를 "
+            "중단했습니다."
         )
+
         sys.exit(130)
 
     except Exception as exc:
+
         print(
-            "\n평가 중 오류가 발생했습니다:\n"
-            f"{type(exc).__name__}: {exc}"
+            "\n평가 중 오류가 "
+            "발생했습니다:\n"
+            f"{exc}"
         )
+
         sys.exit(1)
 
 
