@@ -13,6 +13,12 @@ from typing import Any
 
 from openpyxl import load_workbook
 
+from evaluation.dataset_resolver import (
+    default_scored_path,
+    normalize_dataset_id,
+    resolve_result_xlsx,
+)
+
 
 # ============================================================
 # 기본 경로 / 설정
@@ -57,52 +63,18 @@ HIGH_SIMILARITY_THRESHOLD = 0.75
 # Dataset
 # ============================================================
 
-
-def normalize_dataset_name(
-    value: str,
-) -> str:
-    dataset = value.strip().upper()
-
-    aliases = {
-        "GC": "GC",
-        "GOCHANG": "GC",
-        "고창": "GC",
-
-        "BD": "BD",
-        "BUNDONG": "BD",
-        "서울번동": "BD",
-    }
-
-    if dataset not in aliases:
-        raise ValueError(
-            f"지원하지 않는 dataset입니다: {value}\n"
-            "사용 가능: GC, BD"
-        )
-
-    return aliases[dataset]
-
-
-def dataset_paths(
-    dataset: str,
-) -> tuple[Path, Path]:
-    dataset = normalize_dataset_name(
-        dataset
-    )
-
-    input_xlsx = (
-        RESULTS_DIR
-        / f"{dataset}_FINAL_V1_result.xlsx"
-    )
-
-    output_xlsx = (
-        RESULTS_DIR
-        / f"{dataset}_FINAL_V1_scored.xlsx"
-    )
-
-    return (
-        input_xlsx,
-        output_xlsx,
-    )
+# Dataset ID는 소스에 하드코딩하지 않는다.
+# evaluation/dataset_resolver.py의 규칙을 그대로 사용한다.
+#
+# 기본 결과 파일명 규칙:
+#   <DATASET>_FINAL_V<version>_ACTUAL_RUN_<run>_result.xlsx
+#
+# --xlsx를 직접 지정하면 해당 파일을 사용하고,
+# --dataset만 지정하면 evaluation/results/에서 해당 Dataset의
+# 최신 ACTUAL_RUN result.xlsx를 자동 탐색한다.
+#
+# 따라서 새 Dataset을 추가할 때 evaluate_metrics.py의 alias를
+# 수정할 필요가 없다.
 
 
 # ============================================================
@@ -1724,28 +1696,32 @@ async def evaluate_metrics(
     args: argparse.Namespace,
 ) -> None:
 
-    dataset = normalize_dataset_name(
-        args.dataset
-    )
+    # ========================================================
+    # Dataset / 입력 결과 파일 자동 탐색
+    # ========================================================
 
-    (
-        default_input,
-        default_output,
-    ) = dataset_paths(
-        dataset
-    )
-
-    input_path = (
-        Path(args.xlsx)
-        if args.xlsx
-        else default_input
+    dataset, input_path = resolve_result_xlsx(
+        dataset=(
+            normalize_dataset_id(args.dataset)
+            if args.dataset
+            else None
+        ),
+        xlsx=args.xlsx,
     )
 
     output_path = (
-        Path(args.output)
+        Path(args.output).expanduser()
         if args.output
-        else default_output
+        else default_scored_path(
+            input_path
+        )
     )
+
+    if not output_path.is_absolute():
+        output_path = (
+            Path.cwd()
+            / output_path
+        ).resolve()
 
     # ========================================================
     # 입력 파일 확인
@@ -3284,10 +3260,13 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--dataset",
-        default="GC",
+        default=None,
         help=(
-            "평가셋 코드 "
-            "(GC=고창율계, BD=서울번동3)"
+            "평가셋 코드. 예: GC, BD, DH, GP. "
+            "코드 목록은 하드코딩하지 않으며 새 Dataset도 사용할 수 있습니다. "
+            "--xlsx를 함께 지정하면 해당 Dataset ID로 사용하고, "
+            "--xlsx 없이 지정하면 evaluation/results/에서 "
+            "<DATASET>_FINAL_V*_ACTUAL_RUN_*_result.xlsx를 자동 탐색합니다."
         ),
     )
 
@@ -3296,7 +3275,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "평가 입력 Excel 경로. "
-            "생략하면 dataset 기본 경로 사용."
+            "생략하면 --dataset 기준 최신 ACTUAL_RUN result.xlsx를 자동 탐색합니다."
         ),
     )
 
@@ -3305,7 +3284,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "평가 결과 Excel 저장 경로. "
-            "생략하면 dataset 기본 경로 사용."
+            "생략하면 입력 result.xlsx 기준 *_scored.xlsx로 자동 생성합니다."
         ),
     )
 
@@ -3472,6 +3451,11 @@ def main() -> None:
     args = parse_args()
 
     try:
+
+        if not args.dataset and not args.xlsx:
+            raise ValueError(
+                "--dataset 또는 --xlsx 중 하나는 필요합니다."
+            )
 
         if args.answer_quality_only and args.answer_quality:
             raise ValueError(
