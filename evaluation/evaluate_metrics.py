@@ -1035,6 +1035,256 @@ def check_ragas_packages() -> None:
 
 
 # ============================================================
+# OneCycle Factual Correctness 보완 기준
+# ============================================================
+
+PROJECT_FACTUAL_PROMPT_GUIDELINES = """
+[OneCycle LH 공고문 사실 정확성 판정 보완 기준]
+
+이 평가는 LH 임대주택 공고문 질의응답의 사실 정확성을 판정하기 위한 것입니다.
+기존 Factual Correctness의 출력 형식과 TP/FP/FN 계산 방식은 그대로 유지하되,
+아래 기준에 따라 각 사실을 의미 단위로 판정하세요.
+
+1. 핵심 사실을 개별적으로 분리하여 판정
+
+reference와 response에 여러 사실이 포함되어 있으면 다음 항목을 각각 독립적인
+원자적 사실(atomic claim)로 분리하여 비교하세요.
+
+- 대상 또는 공급계층
+- 주택형
+- 날짜
+- 시작 시간과 종료 시간
+- 금액
+- 비율
+- 기간
+- 면적
+- 모집 인원
+- 자격 조건
+- 예외 조건
+- 신청 가능 또는 불가능 여부
+
+답변의 일부 사실이 맞고 일부가 틀리거나 누락된 경우,
+답변 전체를 0점으로 처리하지 말고 일치·불일치·누락 사실을 각각 구분하세요.
+
+2. 의미가 동일한 표현은 일치로 인정
+
+표현 방식, 문장 구조, 어순, 존댓말, 조사, 띄어쓰기, 동의어가 달라도
+핵심 의미와 값이 같으면 동일한 사실로 인정하세요.
+
+예:
+- "신청할 수 있습니다" = "신청 가능합니다"
+- "확인할 수 없습니다" = "공고문에 해당 정보가 없습니다"
+- "19세 이상 39세 이하" = "만 19세부터 만 39세까지"
+- "17시 이후" = "오후 5시 이후"
+
+3. 날짜와 시간 표현 정규화
+
+다음처럼 표기 형식만 다른 날짜와 시간은 동일하게 인정하세요.
+
+- 2026년 9월 29일 = 2026.09.29 = 26.9.29 = '26.9.29
+- 2026년 9월 29일부터 10월 1일까지
+  = 2026.09.29~2026.10.01
+  = 9/29~10/1
+- 17:00 = 17시 = 오후 5시
+
+연도가 뒤의 날짜에서 생략되었더라도 문맥상 같은 연도임이 명확하면
+동일한 날짜로 인정하세요.
+
+요일이 추가되거나 생략된 것은 감점하지 않습니다.
+다만 날짜나 시간이 실제로 다르면 불일치로 판정하세요.
+
+4. 금액과 단위 표현 정규화
+
+단위를 변환했을 때 값이 같으면 동일한 금액으로 인정하세요.
+
+예:
+- 10,800만원 = 1억 800만원 = 108,000,000원
+- 25,100만원 = 2억 5,100만원 = 251,000,000원
+- 4,542만원 = 45,420,000원
+- 36,720천원 = 36,720,000원
+- 월 156,060원 = 기본 월임대료 156,060원
+
+쉼표, 공백, 원·만원·천원 표기가 달라도 실제 환산값이 같으면 일치입니다.
+단위 환산 후 값이 다른 경우에는 불일치로 판정하세요.
+
+5. 긴 답변 안에 포함된 핵심 정답 인정
+
+response가 reference보다 길더라도 reference의 핵심 사실이 명확하게 포함되어
+있으면 해당 사실은 일치로 판정하세요.
+
+핵심 정답이 답변의 첫 문장이 아닌 중간이나 마지막 부분에 있더라도
+위치만을 이유로 누락 또는 불일치로 판단하지 마세요.
+
+예:
+reference:
+"16A형 대학생의 기본 월임대료는 156,060원입니다."
+
+response:
+"보증금 전환 시 월임대료는 243,560원 또는 66,060원이며,
+기본 월임대료는 156,060원입니다."
+
+이 경우 "기본 월임대료 156,060원"은 일치하는 사실입니다.
+추가된 전환 임대료는 별도의 사실로 평가하세요.
+
+6. 추가 설명 처리
+
+response에 reference보다 자세한 설명이 포함되어 있다는 이유만으로
+감점하지 않습니다.
+
+추가 설명이 다음 조건을 만족하면 사실 오류로 처리하지 마세요.
+
+- reference의 핵심 사실과 모순되지 않음
+- 질문의 대상과 다른 계층의 기준으로 바꾸지 않음
+- 공고문 Context에서 확인할 수 있음
+- 핵심 결론을 혼동시키지 않음
+
+반대로 추가 설명이 핵심 사실과 모순되거나 잘못된 조건을 포함하면,
+정답 사실은 일치로 인정하되 잘못된 추가 사실은 별도의 오류로 처리하세요.
+정답 사실까지 모두 불일치로 처리하지 마세요.
+
+7. 조건 누락과 부분 정답 처리
+
+답변이 핵심 사실 일부만 정확하게 포함하면 포함된 사실은 일치,
+빠진 사실은 누락으로 판정하세요.
+
+예:
+reference:
+"청년은 19세 이상 39세 이하이며 미혼이어야 하고,
+총자산 25,100만원 이하, 자동차 4,542만원 이하여야 합니다."
+
+response:
+"청년은 19세 이상 39세 이하입니다."
+
+연령 기준은 일치하지만 혼인·자산·자동차 조건은 누락입니다.
+응답 전체를 완전 오답으로 처리하지 마세요.
+
+8. 대상과 적용 범위를 엄격하게 구분
+
+금액이 같더라도 적용 대상이나 조건이 다르면 완전한 일치로 판정하지 마세요.
+
+다음 항목을 구분하세요.
+
+- 대학생 / 청년 / 예술인 / 신혼부부 / 한부모가족
+- 기본 기준 / 출산자녀 가산 기준
+- 기본 임대료 / 보증금 전환 후 임대료
+- 서류제출대상자 발표 / 최종 당첨자 발표
+- 모집 인원 / 전체 공급 호수
+
+예:
+일반 청년 기준을 묻는 질문에 예술인 세대주 기준으로만 답했다면,
+금액이 같더라도 적용 범위가 잘못되었으므로 부분 일치로 판단하세요.
+
+9. 조건형 질문의 결론 판정
+
+"신청할 수 있나요?", "기준을 넘나요?"와 같은 질문은
+최종 결론과 그 근거를 분리하여 평가하세요.
+
+- 근거와 결론이 모두 맞으면 완전 일치
+- 기준값은 맞지만 결론이 틀리면 결론 사실은 불일치
+- 결론은 맞지만 필수 조건을 누락하면 부분 일치
+- 다른 계층이나 예외 기준을 적용해 결론을 바꾸면 불일치
+
+10. 최종 판정 원칙
+
+판정의 중심은 표면적인 문자열 유사도가 아니라 다음 사항입니다.
+
+- reference가 요구하는 핵심 사실이 response에 존재하는가
+- 핵심 숫자를 단위 변환한 결과가 같은가
+- 대상과 적용 조건이 같은가
+- 핵심 결론이 같은가
+- 누락된 사실과 잘못 추가된 사실은 무엇인가
+
+일부 사실이 일치하면 그 사실은 반드시 일치로 인정하고,
+다른 사실의 오류 때문에 답변 전체를 일괄적으로 0점 처리하지 마세요.
+
+11. LH 공고문 용어 및 표현의 동치 판정
+
+LH 공고문에서 다음 표현은 같은 의미로 인정하세요.
+
+- 예비자 = 예비입주자
+- 모집 예비자 = 모집 예비입주자
+- 금회 모집 = 이번 모집 = 이번에 모집 = 이번에 새로 모집
+- 모집 인원 = 모집인원 = 모집하는 인원
+- 월세 = 월임대료
+- 접수기간 = 신청기간
+- 온라인 신청 = 인터넷 신청 = 인터넷·모바일 신청
+- 결과 발표 = 당첨자 발표
+- 서류 대상자 = 서류제출대상자
+
+수식어나 표현 순서가 달라도 공고 대상, 주택형, 모집 대상,
+핵심 숫자와 조건이 동일하면 같은 사실로 인정하세요.
+
+예시:
+
+reference:
+"서울번동3 행복주택 44A형의 금회 모집 예비입주자 수는 15명입니다."
+
+response:
+"44A형 신혼부부·한부모가족 공급 대상의 이번 금회 모집 예비자 수는 15명입니다."
+
+위 두 문장은 주택형과 모집 인원이 동일하고,
+'예비자'와 '예비입주자'가 같은 의미이므로 일치하는 사실입니다.
+
+'이번 금회'처럼 의미가 중복된 표현이나 공급계층에 대한 상세 설명이
+추가되어도 핵심 사실과 모순되지 않으면 감점하지 마세요.
+""".strip()
+
+
+def append_project_factual_guidelines(
+    prompt_obj: Any,
+) -> Any:
+    """
+    RAGAS prompt 객체의 기존 instruction을 유지하면서
+    OneCycle용 판정 기준을 뒤에 추가한다.
+
+    RAGAS 버전에 따라 Pydantic model_copy 또는 일반 setattr을 사용한다.
+    """
+    current_instruction = str(
+        getattr(
+            prompt_obj,
+            "instruction",
+            "",
+        )
+        or ""
+    ).strip()
+
+    updated_instruction = (
+        current_instruction
+        + "\n\n"
+        + PROJECT_FACTUAL_PROMPT_GUIDELINES
+    ).strip()
+
+    # Pydantic v2 계열
+    if hasattr(
+        prompt_obj,
+        "model_copy",
+    ):
+        try:
+            return prompt_obj.model_copy(
+                update={
+                    "instruction":
+                        updated_instruction,
+                }
+            )
+        except Exception:
+            pass
+
+    # 일반 객체 / mutable model
+    try:
+        setattr(
+            prompt_obj,
+            "instruction",
+            updated_instruction,
+        )
+        return prompt_obj
+    except Exception as exc:
+        raise RuntimeError(
+            "OneCycle Factual Correctness 보완 프롬프트를 "
+            "RAGAS prompt 객체에 적용하지 못했습니다."
+        ) from exc
+
+
+# ============================================================
 # RAGAS Scorer 생성
 # ============================================================
 
@@ -1044,7 +1294,9 @@ async def build_ragas_scorers(
     api_key: str,
     model: str,
     adapt_factual_korean: bool = False,
+    use_project_factual_prompt: bool = False,
     factual_only: bool = False,
+    factual_mode: str = "f1",
 ) -> dict[str, Any]:
 
     from openai import AsyncOpenAI
@@ -1084,7 +1336,8 @@ async def build_ragas_scorers(
 
     factual_correctness = (
         FactualCorrectness(
-            llm=llm
+            llm=llm,
+            mode=factual_mode,
         )
     )
 
@@ -1124,6 +1377,25 @@ async def build_ragas_scorers(
         print(
             "  NLI Prompt Language   : "
             f"{factual_correctness.nli_prompt.language}"
+        )
+
+    if use_project_factual_prompt:
+
+        factual_correctness.prompt = (
+            append_project_factual_guidelines(
+                factual_correctness.prompt
+            )
+        )
+
+        factual_correctness.nli_prompt = (
+            append_project_factual_guidelines(
+                factual_correctness.nli_prompt
+            )
+        )
+
+        print(
+            "[RAGAS] OneCycle Factual Correctness "
+            "보완 판정 기준 적용"
         )
 
     scorers = {
@@ -1517,8 +1789,14 @@ async def evaluate_metrics(
                 adapt_factual_korean=(
                     args.adapt_factual_korean
                 ),
+                use_project_factual_prompt=(
+                    args.use_project_factual_prompt
+                ),
                 factual_only=(
                     args.factual_only
+                ),
+                factual_mode=(
+                    args.factual_mode
                 ),
             )
         )
@@ -1580,11 +1858,25 @@ async def evaluate_metrics(
     )
 
     print(
+        "Factual Mode    : "
+        f"{args.factual_mode}"
+    )
+
+    print(
         "Factual Prompt   : "
         + (
             "한국어 Adaptation"
             if args.adapt_factual_korean
             else "기본 Prompt"
+        )
+    )
+
+    print(
+        "Project Criteria : "
+        + (
+            "적용"
+            if args.use_project_factual_prompt
+            else "미적용"
         )
     )
 
@@ -2595,6 +2887,23 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    parser.add_argument(
+        "--factual-mode",
+        choices=[
+            "f1",
+            "precision",
+            "recall",
+        ],
+        default="f1",
+        help=(
+            "Factual Correctness 계산 방식. "
+            "f1=정확성과 정답 포함 범위 종합, "
+            "precision=응답 사실의 정확성 중심, "
+            "recall=모범답안 핵심 사실 포함 여부 중심. "
+            "기본값은 f1입니다."
+        ),
+    )
+
 
     parser.add_argument(
         "--rerun-success",
@@ -2624,6 +2933,18 @@ def parse_args() -> argparse.Namespace:
             "RAGAS FactualCorrectness의 "
             "claim 분해 prompt와 NLI prompt를 "
             "한국어로 adaptation합니다."
+        ),
+    )
+
+
+    parser.add_argument(
+        "--use-project-factual-prompt",
+        action="store_true",
+        help=(
+            "한국어 adaptation 여부와 별개로 "
+            "OneCycle LH 공고문용 Factual Correctness "
+            "보완 판정 기준을 추가합니다. "
+            "기본값은 미적용입니다."
         ),
     )
 
