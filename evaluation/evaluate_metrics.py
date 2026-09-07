@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import time
+from collections import Counter
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -1077,33 +1078,70 @@ reference claim과 response claim의 표면 문자열이 아니라 의미, 대�
 """.strip()
 
 
+# Answer Quality 평가 기준 버전.
+# 실행 로그에서 실제 적용된 프롬프트를 확인하기 위해 별도로 기록한다.
+ANSWER_QUALITY_PROMPT_VERSION = "V5.1-AUTO-GUARDRAILS"
+
+
 # 실제 평가셋 문항과 정답값을 few-shot 예시에 사용하지 않는다.
 ANSWER_QUALITY_PROMPT = """
 당신은 LH 임대주택 공고문 질의응답의 품질을 판정하는 평가자입니다.
 
-아래 입력에서 REFERENCE는 사람이 작성한 모범답안이고,
-RESPONSE는 평가할 챗봇 답변입니다.
-두 입력의 역할을 바꾸거나 혼동하지 마세요.
+아래 입력의 역할은 서로 다릅니다.
+
+- REQUIRED_FACTS: 질문에 반드시 답해야 하는 필수 정답 목록
+- REFERENCE: 사람이 작성한 자연어 모범답안
+- SOURCE_EVIDENCE: 공고문에서 사람이 지정한 원문 근거
+- RESPONSE: 평가할 챗봇 답변
+
+각 입력의 역할을 바꾸거나 혼동하지 마세요.
+
+[입력 우선순위]
+
+1. 필수 정답의 범위와 누락 여부는 REQUIRED_FACTS만을 기준으로 판정합니다.
+2. REFERENCE는 REQUIRED_FACTS의 의미와 질문 맥락을 이해하는 보조 자료입니다.
+3. SOURCE_EVIDENCE는 RESPONSE에 추가된 설명의 사실 여부를 확인하는
+   근거로만 사용합니다.
+4. SOURCE_EVIDENCE의 모든 내용을 RESPONSE가 답해야 하는 필수 사실로
+   간주하지 마세요.
+5. REQUIRED_FACTS와 다른 입력이 충돌하면 REQUIRED_FACTS를 필수 정답의
+   기준으로 우선 적용하고, 판정 사유에 충돌 내용을 밝히세요.
 
 [판정 순서]
 
-1. QUESTION이 요구하는 핵심 사실을 REFERENCE에서 추출합니다.
-2. 해당 핵심 사실이 RESPONSE에 실제로 포함되어 있는지 확인합니다.
+1. REQUIRED_FACTS에 적힌 필수 사실을 항목별로 확인합니다.
+2. 각 필수 사실이 RESPONSE에 실제로 포함되어 있는지 확인합니다.
 3. 날짜, 시간, 금액, 비율, 연령, 기간, 대상, 조건과 결론을 비교합니다.
-4. RESPONSE의 추가 설명은 핵심 정답과 모순되는 경우에만 감점합니다.
-5. 아래 기준에 따라 PASS, PARTIAL, FAIL 중 하나를 선택합니다.
+4. 각 핵심값에 대응하는 문구가 RESPONSE에 실제로 존재하는지 확인합니다.
+5. 누락, 모호한 결론, 잘못된 적용 대상과 상충되는 추가 설명을 확인합니다.
+6. 아래 기준에 따라 PASS, PARTIAL, FAIL 중 하나를 선택합니다.
+
+[RESPONSE 실제 포함 여부 확인]
+
+- REQUIRED_FACTS에만 있는 날짜, 시간, 금액 또는 조건을 RESPONSE에도 있다고
+  추론하지 마세요.
+- RESPONSE에 없는 값을 문맥이나 상식으로 보완하지 마세요.
+- RESPONSE에 날짜만 있으면 시간이 포함된 것으로 판단하지 마세요.
+- RESPONSE에 기준값만 있으면 가능·불가능 결론까지 말했다고 판단하지 마세요.
+- 같은 숫자가 있어도 대상, 계층, 주택형, 일정 명칭 또는 적용 조건이 다르면
+  완전히 일치한 것으로 판단하지 마세요.
 
 [PASS]
 
 다음 조건을 모두 만족하면 PASS입니다.
 
 - 질문에서 요구한 핵심 사실과 결론이 모두 정확합니다.
-- REFERENCE의 핵심 날짜, 시간, 금액, 대상과 조건이 RESPONSE에 존재합니다.
+- REQUIRED_FACTS의 모든 날짜, 시간, 금액, 대상, 조건과 결론이 RESPONSE에
+  존재합니다.
 - 핵심 정답이 답변의 중간이나 마지막에 있어도 인정합니다.
 - 답변이 길거나 추가 설명이 있어도 핵심 정답과 모순되지 않으면 감점하지 않습니다.
 - “직접적이지 않다”, “답변이 길다”, “부가 설명이 있다”는 이유만으로
   PARTIAL로 판정하지 않습니다.
 - 날짜, 시간과 금액의 표기 단위가 달라도 실제 값이 같으면 인정합니다.
+- 핵심값에 연결된 대상, 계층, 주택형과 일정 명칭이 정확합니다.
+- 가능·불가능 또는 초과·이하를 묻는 질문에는 확정적인 결론이 있습니다.
+- 추가 설명에 객관적으로 틀린 값, 잘못된 대상 또는 핵심 정답과 상충하는
+  조건이 없습니다.
 
 예:
 - 2027년 1월 12일 = 2027.01.12
@@ -1111,7 +1149,7 @@ RESPONSE는 평가할 챗봇 답변입니다.
 - 12,300만원 = 123,000,000원
 - 181,000원 = 181천원
 
-REFERENCE의 핵심 사실이 RESPONSE에 모두 포함되어 있고
+REQUIRED_FACTS의 필수 사실이 RESPONSE에 모두 포함되어 있고
 서로 모순되지 않는다면 반드시 PASS로 판정하세요.
 
 [PARTIAL]
@@ -1122,46 +1160,68 @@ REFERENCE의 핵심 사실이 RESPONSE에 모두 포함되어 있고
 - 기준값은 정확하지만 질문이 요구한 가능·불가능, 초과·이하 등의
   최종 결론이 빠졌습니다.
 - 답변에 일부 관련 정보는 있지만 질문에 직접 필요한 핵심값이 빠졌습니다.
+- “어려울 수 있습니다”, “가능할 수 있습니다”처럼 질문이 요구한 확정 결론을
+  가능성 표현으로 모호하게 답했습니다.
+- 정확한 핵심값은 포함했지만 일반 기준을 특정 예외 계층이나 대상에만
+  적용되는 것처럼 잘못 한정했습니다.
+- 정확한 날짜나 금액은 포함했지만 발표 종류, 계층, 주택형 또는 적용 조건을
+  잘못 연결했습니다.
+- 핵심 정답 일부는 정확하지만 추가 설명에 객관적으로 틀린 값, 잘못된 대상
+  또는 핵심 정답과 상충하는 조건이 있습니다.
+- 정답과 상충되는 설명이 있어도 질문에 대한 올바른 핵심 사실이 하나 이상
+  명확하게 포함되어 있습니다.
+- 다중 질문에서 일부는 정확하지만 다른 일부에 대해 “확인할 수 없다”고
+  답했습니다.
+- 기본값과 전환값을 함께 제시했지만 둘의 구분이 불명확합니다.
 
 답변이 길거나 추가 설명이 있다는 이유만으로 PARTIAL을 선택하지 마세요.
+
+PARTIAL은 완전히 틀린 답변이 아닙니다. 질문에 필요한 핵심 사실 중
+의미 있는 일부가 정확하지만 누락, 모호함 또는 오류가 함께 있는 경우입니다.
 
 [FAIL]
 
 다음 중 하나에 해당하면 FAIL입니다.
 
-- 핵심 날짜, 시간, 금액, 대상, 자격 조건 또는 최종 결론이 틀렸습니다.
-- 다른 공급계층, 주택형, 기본값 또는 전환값을 정답으로 제시했습니다.
-- 정답과 상충되는 조건이나 결론을 함께 제시했습니다.
-- REFERENCE에 정답이 존재하는데 RESPONSE가
-  “확인할 수 없다”, “알 수 없다”, “정보가 없다”고 답했습니다.
+- 질문에 필요한 핵심 사실이 하나도 정확하게 포함되지 않았습니다.
+- 핵심 날짜, 시간, 금액, 대상 또는 조건을 전부 잘못 답했습니다.
+- 질문의 최종 결론과 반대되는 결론만 제시했습니다.
+- 단일 사실 질문에서 다른 계층, 주택형, 일정 또는 금액만 답했습니다.
+- 단일 사실 질문에서 정답이 존재하는데 “확인할 수 없다”, “알 수 없다”,
+  “정보가 없다”고만 답했습니다.
+- 답변이 질문과 관계없어 실질적인 정답을 제공하지 못했습니다.
+- 다른 계층, 주택형, 일정 또는 예외 대상의 사실만 제시하고 QUESTION이
+  요구한 대상의 값이나 결론은 하나도 제시하지 않았습니다.
 
-정답이 존재하는데 RESPONSE가 확인할 수 없다고 명시한 경우,
-뒤에서 관련 숫자나 배점 구간을 일부 언급하더라도
-질문의 정답을 명확히 제시하지 않았다면 반드시 FAIL로 판정하세요.
+RESPONSE에 올바른 핵심 사실이 하나 이상 포함되어 있다면 나머지 내용에
+누락이나 오류가 있더라도 PARTIAL 가능성을 먼저 검토하세요.
+
+단, QUESTION이 요구하지 않은 다른 계층, 주택형, 일정 또는 예외 대상의
+사실은 질문에 대한 올바른 핵심 사실로 계산하지 마세요.
 
 [최우선 판정 원칙]
 
-1. 필수 사실의 범위는 REFERENCE 전체가 아니라 QUESTION이 결정합니다.
+1. 필수 사실의 범위는 REFERENCE나 SOURCE_EVIDENCE 전체가 아니라
+   REQUIRED_FACTS가 결정합니다.
 
-REFERENCE에 질문보다 자세한 날짜, 출생일, 적용 근거 또는 보충 조건이
+REFERENCE나 SOURCE_EVIDENCE에 질문보다 자세한 날짜, 출생일, 적용 근거 또는 보충 조건이
 포함되어 있어도, QUESTION이 해당 세부정보를 요구하지 않았다면
 RESPONSE의 필수 답변으로 간주하지 마세요.
 
 QUESTION이 요구한 핵심 사실과 결론이 정확하면,
 REFERENCE의 보충 설명을 생략했더라도 PASS로 판정하세요.
 
-2. 판정 우선순위는 FAIL > PARTIAL > PASS입니다.
+2. 다음 순서로 판정합니다.
 
-RESPONSE에 틀린 값, 상충되는 조건 또는 서로 반대되는 결론이 하나라도
-포함되어 사용자를 오도한다면 PARTIAL이 아니라 FAIL로 판정하세요.
-
-PARTIAL은 일부 필수 사실이 누락되었지만,
-틀린 사실이나 상충되는 결론은 없는 경우에만 선택할 수 있습니다.
+- 모든 핵심 사실이 정확하고 오류가 없음 → PASS
+- 정확한 핵심 사실이 하나 이상 있지만 누락·모호함·오류가 있음 → PARTIAL
+- 정확한 핵심 사실이 없거나 전체 결론이 틀림 → FAIL
 
 3. QUESTION에 예외 조건이 명시되지 않았다면 기본 기준으로 답해야 합니다.
 
-RESPONSE가 질문에 없는 예외 조건을 임의로 추가하여
-기본 기준과 반대되는 결론을 함께 제시하면 FAIL로 판정하세요.
+RESPONSE가 일반 기준을 특정 예외 대상에 한정하거나 기본 기준과 다른
+적용 대상을 제시하면 PASS로 판정하지 마세요. 올바른 핵심값도 포함되어
+있다면 PARTIAL, 올바른 핵심값이 없다면 FAIL입니다.
 
 예시 — PASS
 
@@ -1182,7 +1242,7 @@ QUESTION은 최소 연령을 묻고 있습니다. RESPONSE가 만 60세 이상�
 핵심 조건을 정확히 답했으므로 출생일 기준을 생략했더라도 PASS입니다.
 
 
-예시 — FAIL
+예시 — PARTIAL
 
 QUESTION:
 총자산이 2억 4천만원이면 기본 자산 기준을 넘나요?
@@ -1194,37 +1254,107 @@ RESPONSE:
 기본 기준은 초과하지만 특정 예외 조건에서는 기준 이하입니다.
 
 판정:
-FAIL
+PARTIAL
 
 이유:
-QUESTION에 예외 조건이 제시되지 않았는데 반대되는 결론을 함께 제공하여
-사용자를 오도하므로 PARTIAL이 아니라 FAIL입니다.
+기본 기준을 초과한다는 올바른 핵심 사실은 포함했지만, 질문에 없는 예외
+조건과 반대 결론을 함께 제공하여 사용자를 혼동시키므로 PARTIAL입니다.
 
 [추가 정보 처리]
 
 - RESPONSE에만 존재하는 추가 정보를 REFERENCE의 필수 조건으로
   잘못 해석하지 마세요.
 - RESPONSE의 추가 설명이 REFERENCE와 모순되지 않으면 감점하지 마세요.
-- 추가 설명이 잘못된 경우에만 오류로 판단하세요.
+- 추가 설명이 잘못됐거나 대상·조건을 오해하게 만들면 PASS가 아닙니다.
+- 올바른 핵심 내용과 잘못된 추가 설명이 함께 있으면 PARTIAL입니다.
+- 올바른 핵심 내용 없이 잘못된 설명만 있으면 FAIL입니다.
+
+[추가 설명 감점 제한]
+
+- 추가 설명이 있다는 이유만으로 PARTIAL로 판정하지 마세요.
+- “사용자를 혼동시킬 수 있다”, “불필요하게 자세하다”, “질문보다 범위가
+  넓다”는 추측만으로 감점하지 마세요.
+- 추가 설명을 감점하려면 RESPONSE에서 객관적으로 틀린 문장,
+  REFERENCE와 상충되는 조건 또는 잘못 연결된 대상을 구체적으로 찾을 수
+  있어야 합니다.
+- 추가 설명이 정확하고 핵심 정답과 모순되지 않으면 설명이 길거나 여러
+  조건을 함께 안내하더라도 반드시 PASS입니다.
+- 기본값을 명확히 제시한 뒤 전환값, 가산 기준 또는 예외 기준을 별도로
+  구분하여 설명한 경우, 추가 정보가 정확하면 PASS입니다.
+- 추가 정보가 실제로 틀렸는지 판단할 근거가 REFERENCE와 QUESTION에 없다면
+  틀렸다고 추측하지 말고 핵심 정답의 충족 여부로 판정하세요.
+- 판정 사유에서 구체적으로 잘못된 문구를 지적할 수 없다면 추가 설명을
+  이유로 PARTIAL을 선택하지 마세요.
+
+[정답 일부의 인정 범위]
+
+- QUESTION이 요구하지 않은 다른 계층, 다른 주택형, 다른 일정 또는 예외
+  조건의 정보는 질문에 대한 올바른 핵심 사실로 계산하지 마세요.
+- RESPONSE에 관련 정보가 있더라도 QUESTION이 요구한 대상의 값이나 결론이
+  하나도 없다면 PARTIAL이 아니라 FAIL입니다.
+- QUESTION이 요구한 핵심값을 정확히 답한 뒤 다른 정확한 정보를 별도로
+  안내한 경우에는 PASS입니다.
+
+[대상·명칭·결론 확인]
+
+- 일반 계층과 특정 예외 대상은 동일하지 않습니다.
+- 기본 기준과 가산·완화 기준은 동일하지 않습니다.
+- 기본 임대료와 보증금 전환 후 임대료는 동일하지 않습니다.
+- 서류제출대상자 발표와 최종 당첨자 발표는 동일하지 않습니다.
+- “신청할 수 없습니다”와 “신청이 어려울 수 있습니다”는 동일하지 않습니다.
+- “신청할 수 있습니다”와 “신청할 수도 있습니다”는 동일하지 않습니다.
+
+정답 숫자가 같아도 대상, 명칭 또는 결론이 다르면 PASS로 판정하지 마세요.
 
 [판정 전 확인]
 
 판정하기 전에 내부적으로 다음 세 가지를 확인하세요.
 
-1. REFERENCE에서 추출한 질문의 핵심값
-2. RESPONSE에서 발견한 대응값
+1. REQUIRED_FACTS에 명시된 질문의 필수 핵심값
+2. RESPONSE에서 실제로 발견한 대응 문구와 값
 3. 실제로 누락되거나 틀린 핵심값
+4. 적용 대상, 계층, 주택형과 일정 명칭의 일치 여부
+5. 가능·불가능 또는 초과·이하 결론의 확정성
+6. 객관적으로 틀리거나 핵심 정답과 상충하는 추가 설명의 존재 여부
+
+PASS를 선택하기 전에 REQUIRED_FACTS의 모든 핵심값에 대해 RESPONSE 안의
+대응 문구를 실제로 확인하세요. 하나라도 누락됐거나 잘못 연결되어 있으면
+PASS를 선택하지 마세요.
 
 판정 사유에는 실제 REFERENCE와 RESPONSE의 내용을 근거로
 어떤 핵심값이 일치하거나 누락되었는지 짧고 구체적으로 설명하세요.
+
+추가 설명 때문에 PARTIAL 또는 FAIL을 선택했다면 RESPONSE의 어느 문구가
+어떤 값·대상·조건과 객관적으로 충돌하는지 반드시 판정 사유에 밝히세요.
+
+[SOURCE_EVIDENCE 사용 기준]
+
+- SOURCE_EVIDENCE는 평가 대상 공고문에서 추출한 정답 근거입니다.
+- REQUIRED_FACTS는 질문에 대한 필수 답변의 충족 여부를 판단합니다.
+- REFERENCE는 REQUIRED_FACTS의 의미와 질문 맥락을 이해하는 보조 자료입니다.
+- SOURCE_EVIDENCE는 RESPONSE의 추가 설명이 원문과 일치하는지 확인하는 데
+  사용합니다.
+- RESPONSE의 추가 설명이 SOURCE_EVIDENCE와 명확히 모순되면 감점합니다.
+- SOURCE_EVIDENCE에 관련 정보가 없다는 이유만으로 RESPONSE의 추가 설명을
+  틀렸다고 추정하지 마세요.
+- 검색된 retrieved_contexts가 아니라 사람이 지정한 reference_text를
+  기준 근거로 사용합니다.
 
 <QUESTION>
 {question}
 </QUESTION>
 
+<REQUIRED_FACTS>
+{required_facts}
+</REQUIRED_FACTS>
+
 <REFERENCE>
 {reference}
 </REFERENCE>
+
+<SOURCE_EVIDENCE>
+{reference_text}
+</SOURCE_EVIDENCE>
 
 <RESPONSE>
 {response}
@@ -1455,7 +1585,334 @@ async def build_ragas_scorers(
             llm=llm,
         )
 
+        print(
+            "[RAGAS] Answer Quality 프롬프트 적용: "
+            f"{ANSWER_QUALITY_PROMPT_VERSION}"
+        )
+
     return scorers
+
+
+# ============================================================
+# Answer Quality 자동 보정
+# ============================================================
+
+
+def extract_time_values(
+    text: str,
+) -> Counter[int]:
+    """시간 표현을 자정 이후 분 단위로 정규화한다."""
+
+    value = str(
+        text
+        or ""
+    )
+
+    times: list[int] = []
+    occupied: list[tuple[int, int]] = []
+
+    for match in re.finditer(
+        r"(?<!\d)([01]?\d|2[0-3])\s*:\s*([0-5]\d)",
+        value,
+    ):
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        times.append(hour * 60 + minute)
+        occupied.append(match.span())
+
+    for match in re.finditer(
+        r"(?:(오전|오후)\s*)?([01]?\d|2[0-3])\s*시"
+        r"(?:\s*([0-5]?\d)\s*분)?",
+        value,
+    ):
+        if any(
+            start <= match.start() < end
+            for start, end in occupied
+        ):
+            continue
+
+        meridiem = match.group(1)
+        hour = int(match.group(2))
+        minute = int(match.group(3) or 0)
+
+        if meridiem == "오후" and hour < 12:
+            hour += 12
+        elif meridiem == "오전" and hour == 12:
+            hour = 0
+
+        times.append(hour * 60 + minute)
+
+    return Counter(times)
+
+
+def format_time_value(
+    minutes: int,
+) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def contains_explicit_refusal(
+    response: str,
+) -> bool:
+    normalized = re.sub(
+        r"\s+",
+        " ",
+        str(response or "").strip(),
+    )
+
+    return any(
+        pattern in normalized
+        for pattern in REFUSAL_PATTERNS
+    )
+
+
+def extract_money_values(
+    text: str,
+) -> set[int]:
+    """원·만원 표기를 원 단위 정수로 정규화한다."""
+
+    value = str(text or "")
+    amounts: set[int] = set()
+
+    for match in re.finditer(
+        r"(?<![\d,])(\d[\d,]*(?:\.\d+)?)\s*만원",
+        value,
+    ):
+        number = float(
+            match.group(1).replace(",", "")
+        )
+        amounts.add(round(number * 10_000))
+
+    for match in re.finditer(
+        r"(?<![\d,])(\d[\d,]*)\s*원",
+        value,
+    ):
+        amounts.add(
+            int(match.group(1).replace(",", ""))
+        )
+
+    return amounts
+
+
+def reason_reports_correct_core(
+    reason: str,
+) -> bool:
+    """판정 사유가 하나 이상의 올바른 핵심 사실을 인정하는지 확인한다."""
+
+    value = str(reason or "")
+
+    correct_patterns = (
+        r"나머지\s+정보는\s+정확",
+        r"(?:기준|정보|사실|내용)(?:만|을|를)?\s*일부\s*(?:포함|정확)",
+        r"일부\s*(?:기준|정보|사실|내용).*?(?:포함|정확)",
+        r"나이\s+조건은\s+정확",
+        r"연령\s+조건은\s+정확",
+        r"핵심\s+사실.*?하나\s+이상.*?(?:포함|정확)",
+    )
+
+    return any(
+        re.search(pattern, value)
+        for pattern in correct_patterns
+    )
+
+
+def reason_reports_objective_problem(
+    reason: str,
+) -> bool:
+    """판정 사유가 실제 누락·오류를 명시했는지 제한적으로 확인한다."""
+
+    value = str(reason or "")
+
+    problem_patterns = (
+        r"누락되었",
+        r"누락됐",
+        r"빠졌",
+        r"제시하지 않았",
+        r"포함하지 않았",
+        r"명시하지 않았",
+        r"잘못 연결",
+        r"잘못 적용",
+        r"부정확",
+        r"서로 상충",
+        r"명확히 모순",
+    )
+
+    return any(
+        re.search(pattern, value)
+        for pattern in problem_patterns
+    )
+
+
+def apply_answer_quality_guardrails(
+    *,
+    label: str | None,
+    reason: str | None,
+    question: str,
+    required_facts: str,
+    reference: str,
+    response: str,
+) -> tuple[str | None, str | None]:
+    """LLM 판정의 객관적인 모순만 규칙 기반으로 보정한다."""
+
+    if label not in {
+        "PASS",
+        "PARTIAL",
+        "FAIL",
+    }:
+        return label, reason
+
+    adjusted = label
+    guard_messages: list[str] = []
+
+    # 정답 전체를 거절하면 FAIL이다. 다중 질문에서 하나 이상의 올바른
+    # 핵심 사실을 답하고 나머지만 확인 불가라고 한 경우에는 PARTIAL이다.
+    if contains_explicit_refusal(response):
+        if reason_reports_correct_core(reason or ""):
+            adjusted = "PARTIAL"
+            guard_messages.append(
+                "일부 핵심 사실은 정확하지만 나머지를 확인 불가로 답함"
+            )
+        else:
+            adjusted = "FAIL"
+            guard_messages.append(
+                "질문의 핵심 정답을 명시적으로 확인 불가라고 답함"
+            )
+
+    # 원·만원 환산값이 같은데 평가 모델이 단위 변환을 잘못하여 FAIL로
+    # 판정한 경우, 다른 대상·조건 오류 가능성을 보존하기 위해 PARTIAL로만
+    # 복원한다.
+    if adjusted == "FAIL":
+        required_money = extract_money_values(
+            required_facts
+        )
+        response_money = extract_money_values(
+            response
+        )
+        common_money = required_money & response_money
+        reason_claims_money_error = bool(
+            re.search(
+                r"10배\s+차이|"
+                r"금액.*?(?:잘못|불일치|다르)|"
+                r"핵심값.*?(?:잘못|불일치|다르)",
+                reason or "",
+            )
+        )
+
+        if common_money and reason_claims_money_error:
+            adjusted = "PARTIAL"
+            normalized_money = ", ".join(
+                f"{amount:,}원"
+                for amount in sorted(common_money)
+            )
+            guard_messages.append(
+                "원·만원 환산 결과 일치: "
+                f"{normalized_money}"
+            )
+
+    if adjusted == "PASS":
+        required_times = extract_time_values(
+            required_facts
+        )
+        response_times = extract_time_values(
+            response
+        )
+        missing_times = required_times - response_times
+
+        if missing_times:
+            adjusted = "PARTIAL"
+            missing_text = ", ".join(
+                format_time_value(value)
+                for value in sorted(missing_times.elements())
+            )
+            guard_messages.append(
+                "필수 시간 누락: "
+                f"{missing_text}"
+            )
+
+    if adjusted == "PASS":
+        eligibility_question = bool(
+            re.search(
+                r"신청\s*(?:할\s*수\s*)?(?:있|가능)|"
+                r"자격",
+                question,
+            )
+        )
+        reference_has_caveat = bool(
+            re.search(
+                r"다른\s+.*(?:요건|자격).*충족|"
+                r"함께\s+충족|"
+                r"모든\s+.*(?:요건|자격)",
+                required_facts + " " + reference,
+            )
+        )
+        response_overclaims = bool(
+            re.search(
+                r"(?:네[,\s]*)?(?:신청|지원)\s*(?:이\s*)?가능",
+                response,
+            )
+        )
+        response_has_caveat = bool(
+            re.search(
+                r"다른\s+.*(?:요건|자격).*충족|"
+                r"추가\s+.*(?:요건|자격)|"
+                r"함께\s+충족|"
+                r"모든\s+.*(?:요건|자격)",
+                response,
+            )
+        )
+
+        if (
+            eligibility_question
+            and reference_has_caveat
+            and response_overclaims
+            and not response_has_caveat
+        ):
+            adjusted = "PARTIAL"
+            guard_messages.append(
+                "일부 자격만 확인한 뒤 전체 신청 가능 여부를 단정함"
+            )
+
+    if adjusted == "PASS":
+        authentication_question = (
+            "금융인증서" in question
+            and "공동인증서" in question
+        )
+        authentication_conflict = (
+            "모바일" in response
+            and "금융인증서" in response
+            and "공동인증서" in response
+            and "복사" in response
+        )
+
+        if authentication_question and authentication_conflict:
+            adjusted = "PARTIAL"
+            guard_messages.append(
+                "금융인증서 단독 사용 답변과 공동인증서 복사 조건이 상충함"
+            )
+
+    if (
+        adjusted == "PASS"
+        and reason_reports_objective_problem(reason or "")
+    ):
+        adjusted = "PARTIAL"
+        guard_messages.append(
+            "판정 사유에 누락·오류가 있으나 PASS로 반환된 모순을 보정함"
+        )
+
+    if not guard_messages:
+        return adjusted, reason
+
+    guard_reason = (
+        "[AUTO_GUARDRAIL] "
+        + "; ".join(guard_messages)
+    )
+    combined_reason = (
+        f"{reason}\n{guard_reason}"
+        if reason
+        else guard_reason
+    )
+
+    return adjusted, combined_reason
 
 
 # ============================================================
@@ -1467,6 +1924,8 @@ async def score_one_with_ragas(
     scorers: dict[str, Any],
     user_input: str,
     reference: str,
+    required_facts: str,
+    reference_text: str,
     response: str,
     contexts: list[str],
     factual_only: bool = False,
@@ -1612,6 +2071,20 @@ async def score_one_with_ragas(
         ) = await safe_discrete_score(
             "answer_quality",
             question=user_input,
+            reference=reference,
+            required_facts=required_facts,
+            reference_text=reference_text,
+            response=response,
+        )
+
+        (
+            scores["answer_quality"],
+            scores["answer_quality_reason"],
+        ) = apply_answer_quality_guardrails(
+            label=scores["answer_quality"],
+            reason=scores["answer_quality_reason"],
+            question=user_input,
+            required_facts=required_facts,
             reference=reference,
             response=response,
         )
@@ -1827,6 +2300,15 @@ async def evaluate_metrics(
                 missing
             )
         )
+
+    # required_facts는 V4.2에서 추가된 선택 입력 열이다.
+    # 기존 결과 파일에는 이 열이 없을 수 있으므로 자동 생성하고,
+    # 셀 값이 비어 있으면 문항별 reference를 폴백으로 사용한다.
+    required_facts_col = ensure_column(
+        ws,
+        columns,
+        "required_facts",
+    )
 
     # ========================================================
     # Recall 진단용 열
@@ -2228,6 +2710,11 @@ async def evaluate_metrics(
             ],
         ).value
 
+        required_facts_raw = ws.cell(
+            row=row,
+            column=required_facts_col,
+        ).value
+
         reference_text = ws.cell(
             row=row,
             column=columns[
@@ -2256,6 +2743,19 @@ async def evaluate_metrics(
                 reference
             ).strip()
         )
+
+        required_facts = (
+            ""
+            if required_facts_raw is None
+            else str(
+                required_facts_raw
+            ).strip()
+        )
+
+        # 하위 호환성: required_facts가 없는 기존 엑셀도 실행 가능하다.
+        # 다만 정밀 보정 효과를 얻으려면 해당 열을 명시적으로 작성해야 한다.
+        if not required_facts:
+            required_facts = reference
 
         reference_text = (
             ""
@@ -2794,6 +3294,8 @@ async def evaluate_metrics(
                     scorers=scorers,
                     user_input=user_input,
                     reference=reference,
+                    required_facts=required_facts,
+                    reference_text=reference_text,
                     response=response,
                     contexts=contexts,
                     factual_only=args.factual_only,
