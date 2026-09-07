@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 
-
 DOCUMENT_ROLE_PRIMARY = "primary"
 DOCUMENT_ROLE_SUPPORTING = "supporting"
 DOCUMENT_ROLE_UNKNOWN = "unknown"
@@ -34,6 +33,10 @@ SUPPORTING_KEYWORDS = (
     "확인서",
     "작성서류",
     "제출서류",
+    "서류양식",
+    "고객메뉴얼",
+    "고객매뉴얼",
+    "행정정보제공요구서",
     "required_documents",
     "supplement",
 )
