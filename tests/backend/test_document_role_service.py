@@ -87,6 +87,29 @@ class DocumentRoleServiceTest(unittest.TestCase):
             DOCUMENT_ROLE_SUPPORTING,
         )
 
+    def test_supporting_operational_forms_discovered_in_collection(
+        self,
+    ):
+        filenames = (
+            (
+                "[양식1]부천권_국민임대_"
+                "서류제출대상자서류양식.hwpx"
+            ),
+            "마이마이서비스_고객메뉴얼.hwpx",
+            "마이마이서비스_고객매뉴얼.hwpx",
+            (
+                "별표8_본인행정정보제공요구서"
+                ".hwpx"
+            ),
+        )
+
+        for filename in filenames:
+            with self.subTest(filename=filename):
+                self.assertEqual(
+                    classify_document_role(filename),
+                    DOCUMENT_ROLE_SUPPORTING,
+                )
+
     def test_supporting_english_required_documents(self):
         self.assertEqual(
             classify_document_role(
