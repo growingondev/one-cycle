@@ -257,9 +257,9 @@ export default function GlossaryAdmin() {
           </table>
         </div>
         <Pagination
-         currentPage={page}
-         totalPages={totalPages}
-         onPageChange={setPage}
+          currentPage={page}
+          totalPages={totalPages}
+          onPageChange={setPage}
         />
       </section>
       {/* 모달 유지 */}
