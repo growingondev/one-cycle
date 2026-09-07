@@ -11,6 +11,7 @@ set -eu
 : "${LLM_THREADS:?LLM_THREADS is required}"
 : "${LLM_THREADS_BATCH:?LLM_THREADS_BATCH is required}"
 : "${LLM_REASONING:?LLM_REASONING is required}"
+: "${LLM_REASONING_BUDGET:?LLM_REASONING_BUDGET is required}"
 
 if [ ! -f "${LLM_MODEL_PATH}" ]; then
     echo "LLM model file does not exist: ${LLM_MODEL_PATH}" >&2
@@ -29,6 +30,7 @@ set -- \
     --threads "${LLM_THREADS}" \
     --threads-batch "${LLM_THREADS_BATCH}" \
     --reasoning "${LLM_REASONING}" \
+    --reasoning-budget "${LLM_REASONING_BUDGET}" \
     --no-ui
 
 exec "$@"
