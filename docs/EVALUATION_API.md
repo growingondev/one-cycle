@@ -5,8 +5,7 @@
 > **현재 주 평가 방식은 파일 기반 Fixed RAG가 아니라 `one_cycle_evaluation_tmp` 평가 DB와 평가 전용 Backend/RAG/Document Worker를 사용해 실제 서비스와 동일한 Document Worker → Persistence → Publish → Hybrid Retrieval → Generation 경로를 재현하는 방식입니다.**
 >
 > 작성 기준
-> - Backend / Document Worker / Docker / `evaluate_rag.py` / `dataset_resolver.py`: `develop-api` 최신 코드
-> - `evaluation/evaluate_metrics.py`: 아직 GitHub에 push하지 않은 **현재 로컬 최신 코드** 기준
+> - Backend / Document Worker / Docker / `evaluate_rag.py` / `dataset_resolver.py` / `evaluate_metrics.py`: `develop-api` 최신 코드 기준
 
 ---
 
@@ -49,14 +48,25 @@ Recall@1 / @3 / @5
 Faithfulness
 Factual Correctness
 Correct Rejection
+
+실험/보정 시
+→ Answer Quality(PASS / PARTIAL / FAIL)
 ```
 
-현재 최종 보고용 핵심 지표는 다음 네 가지입니다.
+최종 보고에서는 **전체 Q&A 품질 KPI**와 **기술 진단 지표**를 구분합니다.
 
 ```text
-검색 근거 포함률      → Recall@3
-근거 충실성          → Faithfulness
-답변 정확성          → Factual Correctness
+[최종 Q&A 품질 KPI]
+완전일치율
+→ (Answer Quality PASS + Correct Rejection 성공) / 전체 문항
+
+부분점수 반영 품질점수
+→ (PASS + 0.5 × PARTIAL + Correct Rejection 성공) / 전체 문항
+
+[기술 진단 지표]
+검색 근거 포함률       → Recall@3
+근거 충실성           → Faithfulness
+사실 일치 진단        → Factual Correctness
 답변 불가 질문 차단율 → Correct Rejection Rate
 ```
 
@@ -415,7 +425,11 @@ python evaluation/evaluate_rag.py \
 
 # 9. 실제 RAG 답변 생성
 
-평가용 Backend를 사용할 때는 `19000`을 명시합니다.
+평가용 Backend를 사용할 때는 `19000`을 **명시적으로 지정**합니다.
+
+현재 `evaluate_rag.py`의 실제 `DEFAULT_API_BASE_URL`은 `http://127.0.0.1:18000`이므로,
+`--base-url`을 생략하면 평가 전용 Backend(`19000`)가 아니라 일반 Backend(`18000`)를 호출할 수 있습니다.
+최종 평가에서는 운영/일반 서비스와 평가 DB가 섞이지 않도록 `--base-url http://127.0.0.1:19000`을 항상 명시합니다.
 
 ```bash
 POSTGRES_DB=one_cycle_evaluation_tmp \
@@ -581,13 +595,27 @@ BD_FINAL_프롬프트O.xlsx
 | `category` | 질문 유형 |
 | `difficulty` | 난이도/질문 특성 |
 | `user_input` | 실제 질문 |
-| `reference` | 모범답안 |
+| `reference` | 사람이 작성한 자연어 모범답안 |
+| `required_facts` | Answer Quality에서 반드시 충족해야 하는 필수 정답 목록. 선택 열이지만 V5.1 정밀 평가에서는 작성 권장 |
 | `reference_source` | Reference 출처 |
-| `reference_text` | 검색되어야 하는 원문 근거 |
+| `reference_text` | 검색되어야 하는 원문 근거. Answer Quality에서는 `SOURCE_EVIDENCE`로도 사용 |
 | `expected_behavior` | `answer` 또는 `refuse` |
 | `human_score` | 2 / 1 / 0 |
 | `failure_type` | 실패 원인 |
 | `human_comment` | 수동 분석 메모 |
+
+`required_facts`는 기존 Excel에 없어도 실행이 깨지지 않도록 `evaluate_metrics.py`가 열을 자동 생성합니다.
+셀 값이 비어 있으면 해당 문항의 `reference`를 자동으로 대신 사용합니다.
+
+```text
+required_facts 값 있음
+→ 해당 값을 Answer Quality 필수 정답 기준으로 사용
+
+required_facts 값 없음
+→ reference를 required_facts로 폴백
+```
+
+하위 호환을 위한 폴백이므로 **V5.1 Answer Quality를 최종 기준으로 사용할 경우에는 문항별 `required_facts`를 명시적으로 작성하는 것이 권장됩니다.**
 
 `evaluate_rag.py`가 채우는 대표 열:
 
@@ -682,7 +710,7 @@ Correct Rejection Rate:
 정상 거절 문항 수 / 전체 Unanswerable 문항 수
 ```
 
-Unanswerable 문항은 Faithfulness / Factual Correctness RAGAS 계산에서 제외하고 Correct Rejection으로 별도 평가합니다.
+Unanswerable 문항은 Faithfulness / Factual Correctness / Answer Quality 계산에서 제외하고 Correct Rejection으로 별도 평가합니다.
 
 ---
 
@@ -753,7 +781,7 @@ NLI prompt
 
 # 17. OneCycle Factual Correctness 보완 Prompt
 
-현재 로컬 최신 코드에는 다음 옵션이 있습니다.
+현재 `develop-api` 최신 코드에는 다음 옵션이 있습니다.
 
 ```text
 --use-project-factual-prompt
@@ -796,9 +824,22 @@ NLI prompt
 
 # 18. Answer Quality 실험 지표
 
-현재 로컬 최신 `evaluate_metrics.py`에는 Factual Correctness와 별도로 Human 판정과의 정렬을 확인하기 위한 **실험용 Answer Quality**가 추가되어 있습니다.
+현재 `develop-api` 최신 `evaluate_metrics.py`에는 Factual Correctness와 별도로 Human 판정과의 정렬을 확인하기 위한 **실험용 Answer Quality**가 포함되어 있습니다.
 
-최종 KPI는 아니며 Judge 보정/분석용입니다.
+현재 코드의 Answer Quality Prompt 버전은:
+
+```text
+V5.1-AUTO-GUARDRAILS
+```
+
+이며 실행 시 다음 로그로 실제 적용 버전을 확인할 수 있습니다.
+
+```text
+[RAGAS] Answer Quality 프롬프트 적용: V5.1-AUTO-GUARDRAILS
+```
+
+현재 문서 기준으로 Answer Quality는 아직 최종 KPI가 아니라 **Human Score와 Judge 판정 차이를 보정·분석하기 위한 지표**로 둡니다.
+최종 KPI로 채택할 경우에는 Prompt 버전, 자동 보정 규칙, `required_facts` 값까지 함께 고정해야 합니다.
 
 옵션:
 
@@ -826,7 +867,139 @@ PARTIAL ↔ human_score 1
 FAIL    ↔ human_score 0
 ```
 
-`answer_quality_human_match`에 일치 여부를 1/0으로 기록합니다.
+`answer_quality_human_match`에 Human Score와의 정확 일치 여부를 1/0으로 기록합니다.
+
+## 18.1 V5.1 입력 구조
+
+V5.1 Answer Quality는 단순히 `REFERENCE`와 `RESPONSE`만 비교하지 않습니다.
+
+```text
+QUESTION
+→ 사용자가 실제로 물은 질문
+
+REQUIRED_FACTS
+→ 질문에 반드시 답해야 하는 필수 정답 목록
+
+REFERENCE
+→ 사람이 작성한 자연어 모범답안
+
+SOURCE_EVIDENCE
+→ 사람이 지정한 원문 근거(reference_text)
+
+RESPONSE
+→ 평가할 챗봇 답변
+```
+
+판정 우선순위는 다음과 같습니다.
+
+```text
+필수 답변의 범위 / 누락 여부
+→ REQUIRED_FACTS 기준
+
+자연어 의미 / 질문 맥락
+→ REFERENCE 보조
+
+추가 설명의 사실 여부
+→ SOURCE_EVIDENCE(reference_text) 보조
+
+검색 결과
+→ retrieved_contexts를 Answer Quality의 정답 기준으로 사용하지 않음
+```
+
+`required_facts`가 비어 있으면 하위 호환을 위해 `reference`를 자동으로 사용하지만,
+정밀 평가에서는 `required_facts`를 문항별로 명시하는 것이 좋습니다.
+
+## 18.2 PASS / PARTIAL / FAIL 핵심 기준
+
+```text
+PASS
+→ REQUIRED_FACTS의 핵심 사실과 결론이 모두 정확
+→ 잘못된 추가 설명이나 상충 조건 없음
+
+PARTIAL
+→ 올바른 핵심 사실이 하나 이상 존재
+→ 일부 누락 / 모호한 결론 / 잘못 연결된 대상·조건 / 틀린 추가 설명이 함께 존재
+
+FAIL
+→ 질문에 필요한 핵심 사실이 하나도 정확하지 않음
+→ 반대 결론만 제시
+→ 다른 대상·계층·주택형·일정의 사실만 답함
+→ 정답이 있는데 확인할 수 없다고만 답함
+```
+
+답변이 길거나 부가 설명이 있다는 이유만으로 감점하지 않습니다.
+추가 설명을 감점하려면 실제로 틀린 값, 잘못된 대상·조건 또는 핵심 정답과의 충돌이 확인되어야 합니다.
+
+## 18.3 V5.1 자동 Guardrail
+
+LLM Judge가 반환한 PASS/PARTIAL/FAIL 뒤에 `apply_answer_quality_guardrails()`가 **객관적으로 확인 가능한 일부 모순만 규칙 기반으로 보정**합니다.
+
+현재 자동 보정 대상은 다음과 같습니다.
+
+```text
+1. 명시적 답변 거절
+   - 일부 핵심 사실은 맞고 나머지만 확인 불가 → PARTIAL
+   - 핵심 정답을 확인 불가라고 답함 → FAIL
+
+2. 원 / 만원 환산
+   - 정규화한 금액은 같은데 Judge가 단위 변환 오류로 FAIL 판정
+   → 다른 오류 가능성을 보존하기 위해 PARTIAL까지만 복원
+
+3. 필수 시간 누락
+   - REQUIRED_FACTS에 있는 시간이 RESPONSE에 없는데 Judge가 PASS
+   → PARTIAL
+
+4. 신청 자격 과단정
+   - 다른 자격도 함께 충족해야 하는데 일부 조건만 보고 신청 가능을 단정
+   → PASS를 PARTIAL로 보정
+
+5. 금융인증서 / 공동인증서 안내 충돌
+   - 관련 질문에서 모바일 사용 설명과 공동인증서 복사 조건이 상충
+   → PARTIAL
+
+6. Judge 판정 사유와 PASS의 자기모순
+   - reason에 실제 누락·오류를 명시하면서 label은 PASS
+   → PARTIAL
+```
+
+자동 보정이 적용되면 `answer_quality_reason` 끝에 다음 형식이 추가됩니다.
+
+```text
+[AUTO_GUARDRAIL] ...
+```
+
+따라서 Answer Quality 오판을 분석할 때는 최종 label만 보지 말고 `answer_quality_reason`의 원래 Judge 사유와 `[AUTO_GUARDRAIL]` 내용을 함께 확인합니다.
+
+## 18.4 정규화 Answer Quality 점수
+
+실행 종료 시 PASS/PARTIAL/FAIL 개수와 함께 정규화 품질점수를 출력합니다.
+
+```text
+정규화 품질점수
+= (PASS 개수 + 0.5 × PARTIAL 개수) / 전체 Answer Quality 판정 개수
+```
+
+즉:
+
+```text
+PASS    = 1.0
+PARTIAL = 0.5
+FAIL    = 0.0
+```
+
+으로 환산한 평균입니다.
+
+또한 `human_score`가 존재하면:
+
+```text
+PASS    ↔ 2
+PARTIAL ↔ 1
+FAIL    ↔ 0
+```
+
+기준으로 `휴먼 판정 일치율`도 출력합니다.
+
+## 18.5 옵션 조합 제한
 
 다음 옵션 조합은 사용할 수 없습니다.
 
@@ -835,6 +1008,9 @@ FAIL    ↔ human_score 0
 --factual-only + Answer Quality 옵션
 --skip-ragas + Answer Quality 옵션
 ```
+
+`--answer-quality-only`여도 Recall@1/@3/@5는 기존 Metric 처리 흐름에 따라 다시 계산됩니다.
+Answerable에서는 Answer Quality를 계산하고, Unanswerable에서는 Answer Quality를 건너뛰고 Correct Rejection을 계산합니다.
 
 ---
 
@@ -1191,28 +1367,168 @@ ps -ef | grep evaluate_metrics.py | grep -v grep
 
 ---
 
-# 26. Resume / 실패 문항 재실행
+# 26. Resume / 기존 값 Skip / 강제 재계산
 
-현재 `evaluate_metrics.py`는 자동 Resume을 지원합니다.
+현재 `evaluate_metrics.py`는 **Metric 단위 자동 Resume**을 지원합니다.
+
+핵심 동작은 다음과 같습니다.
+
+```text
+--rerun-success 없음
+→ 이미 값이 있는 RAGAS Metric은 유지
+→ 비어 있는 RAGAS Metric만 계산
+→ 중단 후 다시 실행해도 완료된 Metric을 다시 Judge에 보내지 않음
+
+--rerun-success 있음
+→ 요청된 RAGAS Metric은 기존 값이 있어도 다시 계산
+→ 새 결과로 덮어씀
+```
+
+## 26.1 기존 값이 있을 때 실제 동작
+
+현재 코드에서 자동 Skip 대상은 다음 RAGAS 계열 Metric입니다.
+
+```text
+faithfulness
+factual_correctness
+answer_quality
+```
+
+예를 들어 한 문항이 다음 상태라면:
+
+```text
+faithfulness       = 0.92
+factual_correctness = 빈칸
+answer_quality      = PASS
+```
+
+`--rerun-success` 없이 일반 RAGAS 평가를 실행하면:
+
+```text
+faithfulness
+→ 기존 0.92 유지 / SKIP
+
+factual_correctness
+→ 비어 있으므로 새로 계산
+
+answer_quality
+→ --answer-quality 옵션을 사용했다면 기존 PASS 유지 / SKIP
+```
+
+즉 **기존에 정상 값이 있으면 그대로 두고 비어 있는 부분만 채우는 방식**입니다.
+
+다만 모든 열이 Skip되는 것은 아닙니다.
+
+```text
+Recall@1 / Recall@3 / Recall@5
+→ 선택되어 처리되는 문항에서는 항상 다시 계산
+
+Correct Rejection
+→ 선택되어 처리되는 문항에서는 항상 다시 판정
+
+response_relevancy
+→ 현재 최종 평가에서 사용하지 않으므로 처리된 문항은 빈칸으로 유지
+
+Faithfulness / Factual Correctness / Answer Quality
+→ 기존 값 존재 여부 + 실행 옵션에 따라 Resume/Skip
+```
+
+따라서 `--rerun-success`는 **Recall 재계산 여부를 제어하는 옵션이 아니라 RAGAS 성공 Metric을 강제로 다시 계산할지 결정하는 옵션**으로 이해하면 됩니다.
+
+## 26.2 출력 파일이 이미 있는 경우
 
 출력 파일이 이미 존재하고 `--rerun-success`를 사용하지 않으면:
 
 ```text
-기존 output.xlsx를 다시 읽음
-→ faithfulness 값이 있으면 유지
-→ factual_correctness 값이 있으면 유지
-→ 둘 중 비어 있는 Metric만 다시 계산
+기존 output.xlsx를 Resume Source로 다시 읽음
+→ 완료된 Metric 값 유지
+→ 비어 있는 Metric만 계산
+→ 문항마다 즉시 다시 저장
 ```
 
 로그 예:
 
 ```text
-[RESUME] Faithfulness/Factual Correctness 이미 존재 → RAGAS SKIP
+[RESUME] 기존 출력 파일에서 이어서 평가합니다.
 [RESUME] faithfulness 기존 값 유지
 [RESUME] factual_correctness 기존 값 유지
+[RESUME] 요청한 RAGAS metric이 이미 존재 → RAGAS SKIP
 ```
 
-실패 문항만 지정:
+중간에 평가가 끊겼다가 같은 명령을 다시 실행하는 경우 이 동작을 사용하면 됩니다.
+
+## 26.3 기존 값까지 새 값으로 덮어쓰기
+
+기존 성공값까지 강제로 새 기준으로 다시 계산하려면:
+
+```text
+--rerun-success
+```
+
+을 사용합니다.
+
+예:
+
+```bash
+nohup env PYTHONPATH=. \
+python -u evaluation/evaluate_metrics.py \
+  --dataset BD \
+  --xlsx evaluation/results/BD_FINAL_V1_ACTUAL_RUN_001_Final.xlsx \
+  --output evaluation/results/BD_FINAL_V1_ACTUAL_RUN_001_Final.xlsx \
+  --ragas-base-url http://127.0.0.1:8081/v1 \
+  --ragas-model "Qwen/Qwen3-14B-GGUF:Q4_K_M" \
+  --answer-quality-only \
+  --rerun-success \
+  > evaluation/results/BD_answer_quality_rerun.log 2>&1 &
+```
+
+이 경우:
+
+```text
+Answer Quality
+→ 기존 PASS/PARTIAL/FAIL 값이 있어도 새로 계산하여 덮어씀
+
+Faithfulness / Factual Correctness
+→ --answer-quality-only이므로 다시 계산하지 않음
+
+Recall@1/3/5
+→ 다시 계산
+
+Correct Rejection
+→ Unanswerable 문항에서 다시 판정
+```
+
+## 26.4 `--rerun-success` 사용 시 입력 파일 주의
+
+중요한 동작:
+
+```text
+--rerun-success 없음
+→ output이 이미 있으면 output을 Resume Source로 사용
+
+--rerun-success 있음
+→ 지정한 input(--xlsx)을 기준으로 다시 계산
+```
+
+따라서 **기존 output의 Human Score, Human Comment, 일부 수동 수정값 등을 그대로 유지하면서 일부 문항만 강제 재평가하려면 `--xlsx`와 `--output`을 같은 최신 파일로 지정하는 것이 가장 안전합니다.**
+
+예:
+
+```bash
+python evaluation/evaluate_metrics.py \
+  --dataset GC \
+  --xlsx evaluation/results/GC_ANSWER_QUALITY_V5_1_FULL.xlsx \
+  --output evaluation/results/GC_ANSWER_QUALITY_V5_1_FULL.xlsx \
+  --answer-quality-only \
+  --rerun-success \
+  --question-ids Q013,Q016
+```
+
+이렇게 하면 선택한 문항만 새 Answer Quality 값으로 덮어쓰고, 선택하지 않은 다른 문항과 Human Review 값은 그대로 유지됩니다.
+
+## 26.5 실패/누락 문항만 이어서 계산
+
+기존 성공값을 건드리지 않고 실패하거나 비어 있는 문항만 이어서 계산하려면 `--rerun-success`를 넣지 않습니다.
 
 ```bash
 nohup env PYTHONPATH=. \
@@ -1227,25 +1543,21 @@ python -u evaluation/evaluate_metrics.py \
   > evaluation/results/BD_FINAL_V1_ACTUAL_RUN_001_Final_retry.log 2>&1 &
 ```
 
-기존 성공값까지 강제로 다시 계산하려면:
+정리:
 
 ```text
---rerun-success
+기존 값 유지 + 빈칸만 채우기
+→ --rerun-success 사용 안 함
+
+기존 값 무시 + 새 기준으로 다시 계산
+→ --rerun-success 사용
+
+특정 문항만 처리
+→ --question-ids 사용
+
+기존 파일을 그대로 보존하며 일부만 강제 재계산
+→ --xlsx와 --output을 같은 최신 파일로 지정
 ```
-
-을 사용합니다.
-
-중요한 동작:
-
-```text
---rerun-success 없음
-→ output이 있으면 output을 resume source로 사용
-
---rerun-success 있음
-→ 지정한 input(--xlsx)을 기준으로 다시 계산
-```
-
-따라서 **기존 output의 다른 변경값을 유지하면서 일부 문항만 강제 재평가하려면 `--xlsx`와 `--output`을 같은 최신 파일로 지정하는 것이 안전합니다.**
 
 ---
 
@@ -1362,7 +1674,48 @@ python -u evaluation/evaluate_metrics.py \
   > evaluation/results/BD_answer_quality.log 2>&1 &
 ```
 
-Answer Quality는 최종 KPI가 아니라 Human Score와 Judge 판정 차이를 분석하기 위한 보조 실험입니다.
+Answer Quality는 현재 문서 기준으로 최종 KPI가 아니라 Human Score와 Judge 판정 차이를 분석하기 위한 보조 실험입니다.
+
+`--answer-quality-only --rerun-success`로 전체 문항을 실행하면:
+
+```text
+Recall@1 / Recall@3 / Recall@5
+→ 다시 계산
+
+Answer Quality
+→ Answerable 문항에서 기존 값이 있어도 다시 계산
+
+Faithfulness
+→ 계산하지 않음 / 기존 값 유지
+
+Factual Correctness
+→ 계산하지 않음 / 기존 값 유지
+
+Correct Rejection
+→ Unanswerable 문항에서 다시 판정
+```
+
+전체 문항을 V5.1 기준으로 다시 계산할 때는 `--question-ids`를 생략합니다.
+
+예:
+
+```bash
+nohup env PYTHONPATH=. python -u evaluation/evaluate_metrics.py   --dataset DH   --xlsx evaluation/results/DH_ANSWER_QUALITY_CALIBRATION_V3_FINAL.xlsx   --output evaluation/results/DH_ANSWER_QUALITY_V5_1_FULL.xlsx   --ragas-base-url http://127.0.0.1:8081/v1   --ragas-model "Qwen/Qwen3-14B-GGUF:Q4_K_M"   --answer-quality-only   --rerun-success   > evaluation/results/DH_ANSWER_QUALITY_V5_1_FULL.log 2>&1 &
+```
+
+로그 시작부에서 다음을 확인합니다.
+
+```text
+평가 모드       : Answer Quality only
+Answer Quality  : 실행
+선택 문항       : 전체
+```
+
+그리고 Judge 로그에는 다음 Prompt 버전이 보여야 합니다.
+
+```text
+[RAGAS] Answer Quality 프롬프트 적용: V5.1-AUTO-GUARDRAILS
+```
 
 ---
 
@@ -1680,13 +2033,57 @@ grep -n "normalize_dataset_name\|resolve_result_xlsx" \
 
 ---
 
+## 31.11 Answer Quality 판정이 Human Score와 다름
+
+먼저 다음 열을 같은 문항에서 함께 확인합니다.
+
+```text
+user_input
+required_facts
+reference
+reference_text
+response
+answer_quality
+answer_quality_reason
+human_score
+human_comment
+```
+
+확인 순서:
+
+```text
+1. required_facts가 질문이 요구한 필수 사실만 포함하는지 확인
+2. required_facts가 비어 reference로 폴백된 문항인지 확인
+3. response에 필수값이 실제로 존재하는지 확인
+4. answer_quality_reason의 원래 Judge 사유 확인
+5. [AUTO_GUARDRAIL]이 붙었다면 어떤 규칙이 label을 보정했는지 확인
+6. 마지막으로 human_score 자체가 일관된 기준으로 매겨졌는지 검토
+```
+
+코드의 현재 Prompt 버전 확인:
+
+```bash
+grep -n "ANSWER_QUALITY_PROMPT_VERSION"   evaluation/evaluate_metrics.py
+```
+
+현재 V5.1 기준:
+
+```text
+V5.1-AUTO-GUARDRAILS
+```
+
+최종 기준을 동결한 뒤에는 Prompt, Guardrail 로직 또는 `required_facts`를 변경하면
+기존 Answer Quality 결과와 직접 비교할 수 없으므로 해당 지표를 다시 계산해야 합니다.
+
+---
+
 # 32. 오답 원인 분석 순서
 
 권장 순서:
 
 ```text
 1. user_input
-2. reference / reference_text
+2. required_facts / reference / reference_text
 3. 실제 원본문서
 4. 01_parsed
 5. 02_normalized
@@ -1697,7 +2094,8 @@ grep -n "normalize_dataset_name\|resolve_result_xlsx" \
 10. Recall@3
 11. response
 12. Faithfulness / Factual Correctness / Correct Rejection
-13. RAGAS Judge Prompt / Judge 출력
+13. Answer Quality / answer_quality_reason / AUTO_GUARDRAIL
+14. RAGAS Judge Prompt / Judge 출력
 ```
 
 해석 예:
@@ -1743,6 +2141,9 @@ Factual Prompt
 Factual mode
 Factual atomicity
 Factual coverage
+Answer Quality Prompt Version
+Answer Quality Guardrail Version/코드
+required_facts 기준
 Recall 판정 기준
 Run ID
 ```
@@ -1761,6 +2162,20 @@ Prompt 비교에서는 여러 조건을 동시에 바꾸지 않는 것이 중요
 ```
 
 이렇게 해야 프로젝트 보완 Prompt 자체의 영향을 해석하기 쉽습니다.
+
+Answer Quality를 RUN 간 비교할 때도 같은 원칙을 적용합니다.
+
+```text
+동일하게 고정
+→ Judge Model
+→ ANSWER_QUALITY_PROMPT_VERSION
+→ AUTO_GUARDRAIL 로직
+→ required_facts
+→ Human Score 기준
+
+하나라도 변경
+→ 이전 Answer Quality와 동일 기준이 아니므로 재계산 필요
+```
 
 ---
 
@@ -1856,11 +2271,735 @@ grep -n "normalize_dataset_name\|resolve_result_xlsx" \
 
 현재 수정본에서는 `resolve_result_xlsx()`가 사용되고, GC/BD만 허용하는 `normalize_dataset_name()` alias 로직은 없어야 합니다.
 
+Answer Quality V5.1 적용 여부 확인:
+
+```bash
+grep -n "ANSWER_QUALITY_PROMPT_VERSION\|apply_answer_quality_guardrails\|required_facts"   evaluation/evaluate_metrics.py
+```
+
+현재 코드에서는 다음이 확인되어야 합니다.
+
+```text
+ANSWER_QUALITY_PROMPT_VERSION = "V5.1-AUTO-GUARDRAILS"
+apply_answer_quality_guardrails(...)
+required_facts
+```
+
 ---
 
-# 36. 최종 KPI 정리
+# 36. 최종 KPI 계산 방법
 
-최종 보고용 핵심 지표:
+최종 평가에서는 지표를 두 층으로 나눠 사용합니다.
+
+```text
+[최종 서비스 품질 KPI]
+1. 완전일치율
+2. 부분점수 반영 품질점수
+
+[원인 분석 / 기술 진단 지표]
+- Recall@3
+- Faithfulness
+- Factual Correctness
+- Correct Rejection Rate
+```
+
+즉 최종 Q&A 품질을 하나의 문항 단위 성공률로 볼 때는
+**Answerable 문항의 Answer Quality와 Unanswerable 문항의 Correct Rejection을 합쳐 계산**합니다.
+
+현재 코드에서는:
+
+```text
+Answerable
+→ Answer Quality로 PASS / PARTIAL / FAIL 평가
+
+Unanswerable
+→ Answer Quality는 실행하지 않음
+→ Correct Rejection으로 1 / 0 평가
+```
+
+하므로 두 유형을 하나의 최종 품질 KPI로 합치는 것이 가능합니다.
+
+`Response Relevancy`는 최종 평가에서 제외합니다.
+
+---
+
+## 36.1 최종 KPI 1 — 완전일치율
+
+완전일치율은 **완전히 정답으로 인정된 문항의 비율**입니다.
+
+Answerable 문항에서는:
+
+```text
+Answer Quality = PASS
+→ 1점
+
+Answer Quality = PARTIAL
+→ 0점
+
+Answer Quality = FAIL
+→ 0점
+```
+
+Unanswerable 문항에서는:
+
+```text
+Correct Rejection = 1
+→ 1점
+
+Correct Rejection = 0
+→ 0점
+```
+
+계산식:
+
+```text
+완전일치율
+= (Answer Quality PASS 수 + Correct Rejection 성공 수)
+  / 전체 문항 수
+× 100
+```
+
+여기서:
+
+```text
+전체 문항 수
+= Answerable 문항 수 + Unanswerable 문항 수
+```
+
+예:
+
+```text
+전체 문항        = 60
+Answerable       = 55
+Unanswerable     = 5
+
+PASS             = 43
+PARTIAL          = 8
+FAIL             = 4
+
+Correct Rejection 성공 = 4
+Correct Rejection 실패 = 1
+```
+
+완전일치율:
+
+```text
+(43 + 4) / 60 × 100
+= 78.33%
+```
+
+즉 60개 질문 가운데 **완전하게 성공한 질문이 47개**라는 의미입니다.
+
+이 지표는 가장 엄격한 최종 Q&A 성공률입니다.
+
+---
+
+## 36.2 최종 KPI 2 — 부분점수 반영 품질점수
+
+PARTIAL 문항을 완전 실패로 처리하면
+핵심 정답 일부를 맞춘 답변과 완전히 틀린 답변을 동일하게 0점 처리하게 됩니다.
+
+이를 보완하기 위해 PARTIAL에 0.5점을 주는
+**부분점수 반영 품질점수**를 함께 계산합니다.
+
+점수 규칙:
+
+```text
+Answerable
+
+PASS
+→ 1.0점
+
+PARTIAL
+→ 0.5점
+
+FAIL
+→ 0점
+
+
+Unanswerable
+
+Correct Rejection 성공
+→ 1.0점
+
+Correct Rejection 실패
+→ 0점
+```
+
+계산식:
+
+```text
+부분점수 반영 품질점수
+= (PASS 수
+   + 0.5 × PARTIAL 수
+   + Correct Rejection 성공 수)
+  / 전체 문항 수
+× 100
+```
+
+같은 예를 사용하면:
+
+```text
+PASS                   = 43
+PARTIAL                = 8
+FAIL                   = 4
+Correct Rejection 성공 = 4
+전체 문항              = 60
+```
+
+계산:
+
+```text
+(43 + 0.5 × 8 + 4) / 60 × 100
+
+= (43 + 4 + 4) / 60 × 100
+= 51 / 60 × 100
+= 85.0%
+```
+
+따라서 같은 평가 결과라도:
+
+```text
+완전일치율
+→ 78.33%
+
+부분점수 반영 품질점수
+→ 85.0%
+```
+
+처럼 나타날 수 있습니다.
+
+두 값의 차이는 **PARTIAL 답변이 얼마나 존재하는지**를 보여주는 참고 정보가 됩니다.
+
+---
+
+## 36.3 '부분일치율'이라는 표현 주의
+
+두 번째 계산식은 엄밀히 말하면 단순한 `PARTIAL 비율`이 아니라
+**PARTIAL에 0.5 가중치를 준 전체 품질점수**입니다.
+
+따라서 최종 보고에서는 다음 명칭을 권장합니다.
+
+```text
+완전일치율
+부분점수 반영 품질점수
+```
+
+단순 PARTIAL 비율이 필요한 경우에는 별도로:
+
+```text
+PARTIAL 비율
+= PARTIAL 수 / Answerable 문항 수 × 100
+```
+
+로 계산할 수 있지만,
+이 값 자체를 최종 KPI로 사용하지는 않습니다.
+
+---
+
+## 36.4 왜 Correct Rejection을 최종 KPI에 합치는가
+
+Unanswerable 문항은 정답 내용을 생성하는 것이 목표가 아니라
+**문서에 없는 내용을 답하지 않고 정상적으로 거절하는 것 자체가 정답**입니다.
+
+따라서 최종 Q&A 품질에서는:
+
+```text
+Answerable
+→ PASS가 완전 성공
+
+Unanswerable
+→ Correct Rejection 성공이 완전 성공
+```
+
+으로 동일하게 1점 처리합니다.
+
+이렇게 해야 전체 평가셋의 모든 문항이 최종 KPI의 분모에 포함됩니다.
+
+예를 들어:
+
+```text
+Answerable 55문항
+Unanswerable 5문항
+총 60문항
+```
+
+이면 최종 완전일치율과 부분점수 반영 품질점수의 분모는 모두 `60`입니다.
+
+---
+
+## 36.5 Answer Quality 정규화 점수와 최종 품질점수의 차이
+
+코드가 출력하는 기존 Answer Quality 정규화 점수는
+**Answer Quality가 실행된 Answerable 문항만** 대상으로 합니다.
+
+계산식:
+
+```text
+Answer Quality 정규화 점수
+= (PASS 수 + 0.5 × PARTIAL 수)
+  / (PASS + PARTIAL + FAIL)
+× 100
+```
+
+반면 최종 서비스 품질 KPI는 Unanswerable까지 포함합니다.
+
+```text
+부분점수 반영 품질점수
+= (PASS 수
+   + 0.5 × PARTIAL 수
+   + Correct Rejection 성공 수)
+  / 전체 문항 수
+× 100
+```
+
+따라서 두 값을 혼동하면 안 됩니다.
+
+예:
+
+```text
+Answerable = 55
+PASS       = 43
+PARTIAL    = 8
+FAIL       = 4
+
+Answer Quality 정규화 점수
+= (43 + 0.5 × 8) / 55
+= 47 / 55
+= 85.45%
+```
+
+Unanswerable까지 포함하면:
+
+```text
+Correct Rejection 성공 = 4
+전체 문항              = 60
+
+최종 부분점수 반영 품질점수
+= (43 + 0.5 × 8 + 4) / 60
+= 51 / 60
+= 85.0%
+```
+
+즉:
+
+```text
+Answer Quality 정규화 점수
+→ Answerable 답변 품질만 평가
+
+최종 부분점수 반영 품질점수
+→ Answerable + Unanswerable를 모두 포함한 전체 Q&A 품질 KPI
+```
+
+입니다.
+
+---
+
+## 36.6 Excel에서 최종 KPI 계산
+
+필요한 열:
+
+```text
+question_id
+expected_behavior
+answer_quality
+correct_rejection
+```
+
+현재 코드 구조에서는 보통:
+
+```text
+Answerable 문항
+→ answer_quality에 PASS / PARTIAL / FAIL
+→ correct_rejection은 N/A
+
+Unanswerable 문항
+→ answer_quality는 평가 Skip
+→ correct_rejection에 1 / 0
+```
+
+으로 저장됩니다.
+
+### 완전일치율
+
+개념식:
+
+```text
+(PASS 개수 + correct_rejection=1 개수)
+÷ 전체 question_id 개수
+× 100
+```
+
+Excel 개념식:
+
+```excel
+=(COUNTIF(answer_quality범위,"PASS")
+  +COUNTIF(correct_rejection범위,1))
+ /COUNTA(question_id범위)
+```
+
+셀에 `%` 서식을 적용하면 됩니다.
+
+### 부분점수 반영 품질점수
+
+개념식:
+
+```text
+(PASS 개수
+ + 0.5 × PARTIAL 개수
+ + correct_rejection=1 개수)
+÷ 전체 question_id 개수
+× 100
+```
+
+Excel 개념식:
+
+```excel
+=(COUNTIF(answer_quality범위,"PASS")
+  +0.5*COUNTIF(answer_quality범위,"PARTIAL")
+  +COUNTIF(correct_rejection범위,1))
+ /COUNTA(question_id범위)
+```
+
+역시 셀에 `%` 서식을 적용합니다.
+
+---
+
+## 36.7 더 안전한 Excel 계산 — expected_behavior까지 확인
+
+과거 결과 파일이나 수동 수정 파일에서는
+Unanswerable 행에 오래된 `answer_quality` 값이 남아 있을 가능성을 배제하기 어렵습니다.
+
+최종 발표 수치를 계산할 때는 `expected_behavior`까지 조건에 넣는 방식이 더 안전합니다.
+
+예:
+
+```text
+Answerable
+expected_behavior = answer
+
+Unanswerable
+expected_behavior = refuse 또는 unanswerable
+```
+
+완전일치율 개념:
+
+```text
+(
+  answer 문항 중 PASS 수
+  +
+  refuse/unanswerable 문항 중 correct_rejection=1 수
+)
+÷ 전체 문항 수
+```
+
+부분점수 반영 품질점수:
+
+```text
+(
+  answer 문항 중 PASS 수
+  +
+  0.5 × answer 문항 중 PARTIAL 수
+  +
+  refuse/unanswerable 문항 중 correct_rejection=1 수
+)
+÷ 전체 문항 수
+```
+
+이 방식이 최종 발표 수치 계산에는 가장 권장됩니다.
+
+---
+
+## 36.8 최종 KPI와 기술 진단 지표의 관계
+
+최종 서비스 품질 KPI:
+
+```text
+완전일치율
+부분점수 반영 품질점수
+```
+
+이 두 값은 최종 사용자의 관점에서
+**전체 질문 중 얼마나 제대로 처리했는지**를 보여줍니다.
+
+반면 다음 지표들은 원인 분석용입니다.
+
+```text
+Recall@3
+→ 필요한 검색 근거를 Top-3 안에 가져왔는가
+
+Faithfulness
+→ 생성 답변이 검색된 Context에 근거했는가
+
+Factual Correctness
+→ 생성 답변과 Reference의 사실이 얼마나 일치하는가
+
+Correct Rejection Rate
+→ Unanswerable만 따로 봤을 때 정상 거절 비율은 얼마인가
+```
+
+따라서 최종 발표에서는 다음처럼 구분해서 제시할 수 있습니다.
+
+```text
+[최종 Q&A 품질]
+완전일치율                  XX.X%
+부분점수 반영 품질점수     XX.X%
+
+[세부 진단]
+Recall@3                   XX.X%
+Faithfulness               XX.X%
+Factual Correctness        XX.X%
+Correct Rejection Rate     XX.X%
+```
+
+이렇게 하면 전체 품질과 실패 원인을 동시에 설명할 수 있습니다.
+
+---
+
+## 36.9 Recall@3 계산
+
+검색된 Top-3 Context 안에 정답 근거가 포함되었는지를 평가합니다.
+
+```text
+Recall@3
+= recall_at_3가 1인 Answerable 문항 수
+  / Recall 평가가 가능한 Answerable 문항 수
+× 100
+```
+
+현재 코드에서는 `Recall@1`, `Recall@3`, `Recall@5`를 모두 계산하지만
+최종 검색 KPI는 `Recall@3`을 사용합니다.
+
+---
+
+## 36.10 Faithfulness 계산
+
+```text
+Faithfulness
+= 유효한 faithfulness 값의 합
+  / 유효한 faithfulness 값 개수
+× 100
+```
+
+Unanswerable 문항은 제외합니다.
+
+Judge 실패 등으로 값이 비어 있는 문항은 평균에서 제외되므로
+최종 발표 수치 확정 전에 누락값이 없는지 확인해야 합니다.
+
+---
+
+## 36.11 Factual Correctness 계산
+
+```text
+Factual Correctness
+= 유효한 factual_correctness 값의 합
+  / 유효한 factual_correctness 값 개수
+× 100
+```
+
+Unanswerable 문항은 제외합니다.
+
+Factual Correctness는 Answer Quality와 평가 목적이 다릅니다.
+
+```text
+Factual Correctness
+→ RAGAS claim/NLI 기반 사실 일치 진단
+
+Answer Quality
+→ 질문이 실제로 요구한 필수 사실을 기준으로 PASS/PARTIAL/FAIL 판정
+```
+
+따라서 Human Score와의 정렬을 확인하는 데는 Answer Quality를 사용하고,
+Factual Correctness는 RAGAS 기반 진단 지표로 함께 기록합니다.
+
+---
+
+## 36.12 Correct Rejection Rate 계산
+
+```text
+Correct Rejection Rate
+= correct_rejection = 1인 문항 수
+  / 전체 Unanswerable 문항 수
+× 100
+```
+
+이 값은 최종 완전일치율/부분점수 반영 품질점수에도 포함되지만,
+Unanswerable 대응 성능 자체를 따로 확인하기 위해 별도 지표로도 기록합니다.
+
+예:
+
+```text
+Unanswerable 5문항
+정상 거절 4문항
+
+Correct Rejection Rate
+= 4 / 5
+= 80.0%
+```
+
+---
+
+## 36.13 여러 문서의 최종 종합 KPI
+
+GC / BD / DH / GP처럼 여러 문서를 평가할 때는
+**문서별 수치와 전체 통합 수치를 둘 다 기록**하는 것이 좋습니다.
+
+### 문서별
+
+각 문서에서:
+
+```text
+완전일치율
+부분점수 반영 품질점수
+Recall@3
+Faithfulness
+Factual Correctness
+Correct Rejection Rate
+```
+
+를 각각 계산합니다.
+
+### 전체 통합 Q&A KPI
+
+전체 평가 문항을 하나로 합쳐 최종 Q&A KPI를 계산할 수도 있습니다.
+
+예:
+
+```text
+전체 PASS 수
++ 전체 Correct Rejection 성공 수
+--------------------------------
+전체 문항 수
+```
+
+이 방식은 모든 문항을 직접 합산하므로 **Micro 방식**입니다.
+
+완전일치율:
+
+```text
+전체 완전일치율
+= (전체 PASS 수 + 전체 Correct Rejection 성공 수)
+  / 전체 문항 수
+× 100
+```
+
+부분점수 반영 품질점수:
+
+```text
+전체 부분점수 반영 품질점수
+= (전체 PASS 수
+   + 0.5 × 전체 PARTIAL 수
+   + 전체 Correct Rejection 성공 수)
+  / 전체 문항 수
+× 100
+```
+
+### 문서 평균
+
+문서별 성능을 같은 비중으로 비교하려면 Macro Average를 같이 사용할 수 있습니다.
+
+```text
+Macro
+→ 문서별 KPI를 동일 가중치로 평균
+
+Micro
+→ 모든 문항을 직접 합산
+```
+
+최종 Q&A KPI는 공식 자체가 **전체 문항 수를 분모로 정의**되어 있으므로
+전체 평가셋 통합 결과를 제시할 때는 **Micro 방식의 완전일치율과 부분점수 반영 품질점수를 우선값으로 사용**하는 것이 자연스럽습니다.
+
+문서 간 일반화 성능을 비교할 때는 Macro 평균을 함께 제시합니다.
+
+---
+
+## 36.14 최종 KPI 계산 전 필수 검증
+
+완전일치율과 부분점수 반영 품질점수는
+모든 문항이 정상적으로 판정되어 있어야 의미가 있습니다.
+
+최종 계산 전에 확인:
+
+```text
+Answerable 문항
+→ answer_quality가 PASS / PARTIAL / FAIL 중 하나인지
+
+Unanswerable 문항
+→ correct_rejection이 0 / 1인지
+
+누락 Answer Quality
+→ 없어야 함
+
+누락 Correct Rejection
+→ 없어야 함
+```
+
+중요:
+
+```text
+Judge 실패로 answer_quality가 빈칸
+→ 0점으로 간주하지 않음
+→ 먼저 재평가하여 값을 채운 뒤 KPI 계산
+
+Correct Rejection 미계산
+→ 0점으로 간주하지 않음
+→ 먼저 재계산 후 KPI 계산
+```
+
+즉 **평가 실패와 실제 품질 실패를 같은 0점으로 처리하지 않습니다.**
+
+누락값이 있으면 Resume 기능으로 빈칸을 먼저 채웁니다.
+
+---
+
+## 36.15 최종 기준 동결
+
+최종 KPI 비교에서는 다음 기준을 끝까지 동일하게 유지해야 합니다.
+
+```text
+Answer Quality Prompt Version
+→ V5.1-AUTO-GUARDRAILS
+
+AUTO_GUARDRAIL 로직
+→ 동일 코드
+
+required_facts
+→ 동일 기준
+
+PASS / PARTIAL / FAIL 정의
+→ 동일 기준
+
+PARTIAL 가중치
+→ 0.5 고정
+
+Correct Rejection 판정 기준
+→ 동일 REFUSAL_PATTERNS / 동일 코드
+
+Judge Model
+→ 동일 모델
+
+Judge context / thinking 설정
+→ 동일 설정
+```
+
+이 중 하나라도 바꾸면 이전 결과와 동일 기준의 KPI가 아니므로
+영향을 받는 문항 또는 전체 평가를 다시 계산해야 합니다.
+
+최종 발표에서는 다음 두 값을 **최종 Q&A 품질 KPI**로 사용합니다.
+
+```text
+완전일치율
+= (PASS + Correct Rejection 성공)
+  / 전체 문항
+× 100
+
+부분점수 반영 품질점수
+= (PASS + 0.5 × PARTIAL + Correct Rejection 성공)
+  / 전체 문항
+× 100
+```
+
+그리고 다음 값은 **기술 진단 지표**로 함께 제시합니다.
 
 ```text
 Recall@3
@@ -1869,23 +3008,15 @@ Factual Correctness
 Correct Rejection Rate
 ```
 
-제외:
-
-```text
-Response Relevancy
-```
-
 보조 분석:
 
 ```text
 Human Score / Human Comment
-Answer Quality(PASS/PARTIAL/FAIL)
+Human ↔ Answer Quality 일치율
 Recall@1 / Recall@5
 recall_match_method
 ragas_status
 ```
-
-Human Review는 자동 Metric을 대체하는 최종 지표라기보다 실패 원인 분석과 Judge 검증에 사용합니다.
 
 ---
 
@@ -1929,10 +3060,12 @@ RAGAS Judge
 → 평가용 Embedding 로딩 안 함
 → Dataset alias 하드코딩 없음
 → dataset_resolver.py로 GC / BD / DH / GP 및 새 Dataset 처리
-→ Resume 지원
-→ --rerun-success 지원
+→ Resume 지원: 기존 성공 RAGAS Metric 유지, 빈칸만 계산
+→ --rerun-success: 기존 성공 RAGAS Metric도 강제 재계산/덮어쓰기
 → --use-project-factual-prompt 지원
-→ Answer Quality 실험 지원
+→ Answer Quality V5.1 실험 지원
+→ REQUIRED_FACTS / SOURCE_EVIDENCE 기반 판정
+→ V5.1 AUTO_GUARDRAIL 적용
 ```
 
 현재 OneCycle 평가에서 가장 중요한 원칙:
@@ -1947,5 +3080,12 @@ RAGAS Judge
 8. Prompt 비교는 다른 조건을 동일하게 고정하고 필요한 문항만 재계산합니다.
 9. 새 Dataset은 평가 코드에 alias를 추가하지 않고 `<DATASET>_FINAL_V*`, `DOC_<DATASET>_*` 이름 규칙으로 관리합니다.
 10. `evaluate_rag.py`와 `evaluate_metrics.py`는 `dataset_resolver.py`의 Dataset 규칙을 공유합니다.
-11. 최종 KPI는 Recall@3, Faithfulness, Factual Correctness, Correct Rejection Rate입니다.
-12. Response Relevancy는 제외합니다.
+11. 최종 평가용 RAG 답변 생성에서는 일반 Backend로 잘못 연결되지 않도록 `--base-url http://127.0.0.1:19000`을 명시합니다.
+12. Answer Quality 비교에서는 Prompt Version, AUTO_GUARDRAIL, `required_facts`를 동일하게 고정합니다.
+13. 최종 Q&A 품질 KPI는 `완전일치율`과 `부분점수 반영 품질점수`입니다.
+14. 완전일치율은 `(PASS + Correct Rejection 성공) / 전체 문항`으로 계산합니다.
+15. 부분점수 반영 품질점수는 `(PASS + 0.5 × PARTIAL + Correct Rejection 성공) / 전체 문항`으로 계산합니다.
+16. 전체 평가셋 통합 Q&A KPI는 전체 문항을 직접 합산하는 Micro 값을 우선 사용하고, 문서 간 일반화 비교에는 Macro 평균을 함께 기록합니다.
+17. Recall@3, Faithfulness, Factual Correctness, Correct Rejection Rate는 기술 진단 지표로 함께 제시합니다.
+18. 최종 KPI 확정 전 Answer Quality와 Correct Rejection의 누락/실패값이 없는지 확인합니다.
+19. Response Relevancy는 제외합니다.
