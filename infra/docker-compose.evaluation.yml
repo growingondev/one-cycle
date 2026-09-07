@@ -49,7 +49,7 @@ services:
   eval-rag:
     build:
       context: ..
-      dockerfile: docker/rag/Dockerfile
+      dockerfile: infra/rag/Dockerfile
 
     image: one-cycle-rag:dev
     container_name: one-cycle-eval-rag

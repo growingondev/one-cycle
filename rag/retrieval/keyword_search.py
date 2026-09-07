@@ -5,6 +5,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from kiwipiepy import Kiwi
 from sqlalchemy import text
 
 from rag.db.session import SessionLocal
@@ -35,8 +36,92 @@ class BM25SearchConfig:
             raise ValueError("b는 0 이상 1 이하여야 합니다.")
 
 
+# ------------------------------------------------------------
+# Korean tokenizer
+# ------------------------------------------------------------
+
+# Kiwi는 모듈 로드 시 한 번만 생성한다.
+# 질문/문서마다 Kiwi 객체를 새로 만들지 않는다.
+_KIWI = Kiwi()
+
+# BM25 검색에 불필요한 문법적 형태소만 제외한다.
+#
+# J*: 조사
+# E*: 어미
+# S*: 문장부호/기호
+#
+# 명사(N*), 동사/형용사(V*), 숫자(SN), 외국어(SL) 등
+# 의미를 가진 형태소는 최대한 보존한다.
+_EXCLUDED_POS_PREFIXES = (
+    "J",
+    "E",
+)
+
+_EXCLUDED_POS = {
+    "SF",  # 종결 부호
+    "SP",  # 쉼표/가운뎃점/콜론/빗금 등
+    "SS",  # 따옴표/괄호
+    "SSO", # 여는 괄호류
+    "SSC", # 닫는 괄호류
+    "SE",  # 줄임표
+}
+
+
 def _normalize_text(value: str | None) -> str:
-    return re.sub(r"\s+", " ", (value or "").strip()).lower()
+    """
+    BM25 검색 전 공통 문자열 정규화.
+
+    - 앞뒤 공백 제거
+    - 연속된 공백을 하나로 통일
+    - 영문 소문자화
+
+    특정 공고나 질문 표현에 종속된 동의어 치환은 하지 않는다.
+    """
+    return re.sub(
+        r"\s+",
+        " ",
+        (value or "").strip(),
+    ).lower()
+
+
+def _should_keep_token(
+    form: str,
+    tag: str,
+    *,
+    min_token_length: int,
+) -> bool:
+    """
+    Kiwi가 분석한 형태소 중 BM25 검색에 사용할 토큰인지 결정한다.
+
+    특정 LH 공고 용어를 하드코딩하지 않고,
+    조사/어미/문장부호처럼 검색 의미가 낮은 형태소만 제거한다.
+    """
+    token = form.strip().lower()
+
+    if not token:
+        return False
+
+    # 조사와 어미 제거
+    if tag.startswith(_EXCLUDED_POS_PREFIXES):
+        return False
+
+    # 문장부호 제거
+    if tag in _EXCLUDED_POS:
+        return False
+
+    # 공백이나 기호만 있는 토큰 제거
+    if not re.search(r"[0-9a-z가-힣㎡%]", token):
+        return False
+
+    # 숫자는 한 자리여도 중요할 수 있다.
+    # 예: 1순위, 2인, 3호
+    if tag == "SN":
+        return True
+
+    if len(token) < min_token_length:
+        return False
+
+    return True
 
 
 def _tokenize(
@@ -45,25 +130,39 @@ def _tokenize(
     min_token_length: int,
 ) -> list[str]:
     """
-    공고문 검색용 최소 토큰화.
+    Kiwi 기반 한국어 BM25 토큰화.
 
-    별도 형태소 분석기 없이 숫자/영문/한글/단위 기호를 보존한다.
-    BM25 자체는 아래 토큰 결과를 기준으로 계산한다.
+    기존 방식:
+        정규식으로 문자열 덩어리를 그대로 토큰화
+
+    개선 방식:
+        Kiwi 형태소 분석
+        -> 조사/어미/문장부호 제거
+        -> 의미 형태소 보존
+
+    이 함수는 사용자 질문과 공고문 Chunk 양쪽에 동일하게 적용된다.
     """
     normalized = _normalize_text(value)
 
-    tokens = re.findall(
-        r"[0-9A-Za-z가-힣㎡%./-]+",
-        normalized,
-    )
+    if not normalized:
+        return []
+
+    analyzed = _KIWI.tokenize(normalized)
 
     result: list[str] = []
 
-    for token in tokens:
-        token = token.strip()
-        if len(token) < min_token_length:
+    for token in analyzed:
+        form = token.form
+        tag = token.tag
+
+        if not _should_keep_token(
+            form,
+            tag,
+            min_token_length=min_token_length,
+        ):
             continue
-        result.append(token)
+
+        result.append(form.strip().lower())
 
     return result
 
@@ -192,7 +291,8 @@ def search_bm25(
     config: BM25SearchConfig | None = None,
 ) -> list[SearchResult]:
     """
-    선택된 공고의 Active Chunk 전체를 가져와 BM25 lexical search를 수행한다.
+    선택된 공고의 Active Chunk 전체를 가져와
+    Kiwi 기반 BM25 lexical search를 수행한다.
 
     검색 corpus:
     - Chunk.search_text 우선
@@ -341,6 +441,7 @@ def search_bm25(
                 "bm25_score": float(score),
                 "bm25_k1": config.k1,
                 "bm25_b": config.b,
+                "tokenizer": "kiwi",
             },
         )
 
