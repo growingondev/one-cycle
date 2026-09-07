@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-// 💡 프로젝트 환경에 맞게 API_BASE_URL 또는 api helper를 import 하세요.
-// import { API_BASE_URL } from '../../config'; 
-const API_BASE_URL = '/api'; // 임시 설정 (실제 환경에 맞게 수정)
-
+import Pagination from '../components/Pagination';
+const API_BASE_URL = '/api';
 export interface GlossaryItem {
   id: number;
   term: string;
@@ -258,18 +256,12 @@ export default function GlossaryAdmin() {
             </tbody>
           </table>
         </div>
-        
-        {totalPages > 1 && (
-          <div className="pagination">
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
-              <button key={p} className={page === p ? "active" : ""} onClick={() => setPage(p)}>
-                {p}
-              </button>
-            ))}
-          </div>
-        )}
+        <Pagination
+         currentPage={page}
+         totalPages={totalPages}
+         onPageChange={setPage}
+        />
       </section>
-
       {/* 모달 유지 */}
       {isModalOpen && (
         <div className="mobile-overlay show" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
