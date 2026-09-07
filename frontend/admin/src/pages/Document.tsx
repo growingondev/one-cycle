@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DocumentDetail from './DocumentDetail';
+import Pagination from '../components/Pagination';
+
 
 export interface DocumentItem {
   id: number;
@@ -193,11 +195,11 @@ export default function Document() {
             </tbody>
           </table>
         </div>
-        <div className="pagination">
-          {Array.from({ length: totalPages }, (_, i) => (
-            <button key={i + 1} className={i + 1 === page ? "active" : ""} onClick={() => setPage(i + 1)}>{i + 1}</button>
-          ))}
-        </div>
+        <Pagination
+          currentPage={page}
+          totalPages={totalPages}
+          onPageChange={setPage}
+        />
       </section>
     </main>
   );
