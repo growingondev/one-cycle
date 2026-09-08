@@ -2185,6 +2185,8 @@ def _extract_eligibility_verification_groups(
         if not table_cells:
             continue
 
+        table_index += 1
+
         rows: dict[
             int,
             dict[int, str],
@@ -5496,21 +5498,38 @@ SUPPLY_TABLE_HEADER_RULES = (
         ),
     ),
     (
+        "construction_units",
+        (
+            "건설호수",
+            "건설 호수",
+            "건설세대수",
+            "건설 세대수",
+            "건설세대수(호)",
+            "건설 세대수(호)",
+        ),
+    ),
+    (
         "supply_units",
         (
             "공급호수",
             "공급 호수",
             "주택호수",
             "주택 호수",
-            "건설호수",
-            "건설 호수",
         ),
     ),
     (
         "recruitment_units",
         (
+            "금회모집호수",
+            "금회 모집호수",
+            "금회 모집 호수",
             "모집호수",
             "모집 호수",
+            "모집세대수",
+            "모집 세대수",
+            "금회모집세대수",
+            "금회 모집세대수",
+            "금회 모집 세대수",
         ),
     ),
     (
@@ -5562,6 +5581,7 @@ SUPPLY_TABLE_HEADER_RULES = (
 
 
 SUPPLY_TABLE_NUMERIC_FIELDS = {
+    "construction_units",
     "supply_units",
     "recruitment_units",
     "recruitment_waitlist",
@@ -5596,10 +5616,15 @@ def _supply_table_header_field(
 
 def _parse_supply_table_integer(
     value: Any,
+    *,
+    field: str | None = None,
 ) -> int | None:
     """
-    '58', '58호', '260명', '1,200' 형태의 숫자를 정수로 변환한다.
-    숫자가 없으면 None.
+    공급 표의 숫자 값을 정수로 변환한다.
+
+    ``건설호수``는 ``15개동 1,114호``처럼 동 수와 호 수가 한 셀에
+    함께 들어오는 경우가 있으므로 반드시 ``호`` 바로 앞 숫자를
+    우선 사용한다. 그 외 필드는 기존처럼 첫 번째 숫자를 사용한다.
     """
     text_value = _clean_text(
         value
@@ -5608,12 +5633,28 @@ def _parse_supply_table_integer(
     if not text_value:
         return None
 
-    found = re.search(
-        r"(?<!\d)"
-        r"(?P<number>\d[\d,]*)"
-        r"(?!\d)",
-        text_value,
-    )
+    found = None
+
+    if field == "construction_units":
+        construction_matches = list(
+            re.finditer(
+                r"(?<!\d)(?P<number>\d[\d,]*)\s*호",
+                text_value,
+            )
+        )
+
+        if construction_matches:
+            # 한 셀에 여러 숫자가 있더라도 '호' 단위의 마지막 값을
+            # 사용한다. 예: '15개동 1,114호' -> 1114
+            found = construction_matches[-1]
+
+    if found is None:
+        found = re.search(
+            r"(?<!\d)"
+            r"(?P<number>\d[\d,]*)"
+            r"(?!\d)",
+            text_value,
+        )
 
     if not found:
         return None
@@ -5656,6 +5697,7 @@ def _is_strong_supply_header_set(
     }
 
     count_fields = {
+        "construction_units",
         "supply_units",
         "recruitment_units",
         "recruitment_waitlist",
@@ -5702,6 +5744,7 @@ def _looks_like_supply_item(
     )
 
     count_fields = (
+        "construction_units",
         "supply_units",
         "recruitment_units",
         "recruitment_waitlist",
@@ -5766,6 +5809,8 @@ def _extract_supply_table_rows(
             ...
         ]
     ] = set()
+
+    table_index = 0
 
     for node in _iter_nested_dicts(
         structure
@@ -6007,7 +6052,8 @@ def _extract_supply_table_rows(
                 ):
                     numeric_value = (
                         _parse_supply_table_integer(
-                            raw_value
+                            raw_value,
+                            field=field,
                         )
                     )
 
@@ -6026,6 +6072,7 @@ def _extract_supply_table_rows(
                     # "모집인원", "예비입주자 모집인원" 같은
                     # 다음 단계 header 문자열을 data로 넣지 않는다.
                     if field in {
+                        "construction_units",
                         "supply_units",
                         "recruitment_units",
                     }:
@@ -6113,6 +6160,9 @@ def _extract_supply_table_rows(
                 "row": (
                     row_number
                 ),
+                "table_index": (
+                    table_index
+                ),
             }
 
             rows_result.append(
@@ -6122,311 +6172,339 @@ def _extract_supply_table_rows(
     return rows_result
 
 
+def _sum_unique_construction_units(
+    rows: list[dict[str, Any]],
+    structure: dict[str, Any] | None = None,
+) -> int | None:
+    """
+    문서의 공급 관련 표에서 ``건설호수`` 계열 열만 합산한다.
+
+    핵심 원칙:
+    - 예비자수, 모집호수, 주택형, 면적 등 다른 숫자는 절대 합산하지 않는다.
+    - ``15개동 1,114호``는 1,114호로 읽는다.
+    - ``건설세대수(호)``도 건설호수로 본다.
+    - 한 문서에 ``주택단지 개요`` 표와 ``모집대상 주택`` 표가 함께 있으면
+      표별 합계를 계산한 뒤 가장 큰 합계만 사용한다.
+      이렇게 해야 동일 단지의 건설호수를 서로 다른 표에서 중복합산하지 않는다.
+
+    가능하면 원본 structure table을 직접 읽는다.
+    rows는 이전 형식 호환용 fallback으로만 사용한다.
+    """
+
+    candidate_totals: list[int] = []
+
+    if isinstance(structure, dict):
+        seen_table_signatures: set[tuple[tuple[int, int, str], ...]] = set()
+
+        for node in _iter_nested_dicts(structure):
+            cells = node.get("cells")
+            if not isinstance(cells, list):
+                continue
+
+            table_cells = [
+                cell for cell in cells
+                if isinstance(cell, dict)
+                and isinstance(cell.get("row"), int)
+                and isinstance(cell.get("col"), int)
+            ]
+            if not table_cells:
+                continue
+
+            signature = tuple(sorted(
+                (
+                    int(cell["row"]),
+                    int(cell["col"]),
+                    _clean_text(cell.get("text")),
+                )
+                for cell in table_cells
+            ))
+            if signature in seen_table_signatures:
+                continue
+            seen_table_signatures.add(signature)
+
+            table_rows: dict[int, dict[int, str]] = {}
+            for cell in table_cells:
+                text_value = _clean_text(cell.get("text"))
+                if not text_value:
+                    continue
+                table_rows.setdefault(int(cell["row"]), {})[int(cell["col"])] = text_value
+
+            if not table_rows:
+                continue
+
+            row_numbers = sorted(table_rows)
+            construction_col: int | None = None
+            header_end_row: int | None = None
+
+            # LH 표는 헤더가 2~3행으로 나뉠 수 있으므로 최대 3개 연속 행을 합쳐 판정한다.
+            for row_pos, row_number in enumerate(row_numbers):
+                combined_by_col: dict[int, list[str]] = {}
+                max_window = min(row_pos + 3, len(row_numbers))
+
+                for window_pos in range(row_pos, max_window):
+                    current_row = row_numbers[window_pos]
+                    if current_row - row_number > 2:
+                        break
+
+                    for col, cell_text in table_rows[current_row].items():
+                        combined_by_col.setdefault(col, []).append(cell_text)
+
+                    for col, values in combined_by_col.items():
+                        combined = _normalized_match_text(" ".join(values))
+                        if (
+                            "건설호수" in combined
+                            or "건설세대수" in combined
+                        ):
+                            construction_col = col
+                            header_end_row = current_row
+                            break
+
+                    if construction_col is not None:
+                        break
+
+                if construction_col is not None:
+                    break
+
+            if construction_col is None or header_end_row is None:
+                continue
+
+            values: list[int] = []
+            seen_values_by_row: set[tuple[int, int]] = set()
+
+            for row_number in row_numbers:
+                if row_number <= header_end_row:
+                    continue
+
+                raw_value = _clean_text(
+                    table_rows[row_number].get(construction_col)
+                )
+                if not raw_value:
+                    continue
+
+                value = _parse_supply_table_integer(
+                    raw_value,
+                    field="construction_units",
+                )
+                if not isinstance(value, int) or value <= 0:
+                    continue
+
+                row_value_key = (row_number, value)
+                if row_value_key in seen_values_by_row:
+                    continue
+                seen_values_by_row.add(row_value_key)
+                values.append(value)
+
+            if values:
+                candidate_totals.append(sum(values))
+
+    # structure에서 못 찾은 경우에만 기존 housing_items 기반 값을 fallback으로 사용한다.
+    if not candidate_totals:
+        table_values: dict[int, list[int]] = {}
+        fallback_values: list[int] = []
+
+        for item in rows:
+            value = item.get("construction_units")
+            if not isinstance(value, int):
+                continue
+
+            source = item.get("source")
+            table_index = None
+            if isinstance(source, dict):
+                raw_table_index = source.get("table_index")
+                if isinstance(raw_table_index, int):
+                    table_index = raw_table_index
+
+            if table_index is None:
+                fallback_values.append(value)
+            else:
+                table_values.setdefault(table_index, []).append(value)
+
+        for values in table_values.values():
+            if values:
+                candidate_totals.append(sum(values))
+        if fallback_values:
+            candidate_totals.append(sum(fallback_values))
+
+    if not candidate_totals:
+        return None
+
+    return max(candidate_totals)
+
+
 def _summarize_supply_table_rows(
-    rows: list[
-        dict[str, Any]
-    ],
+    rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """
-    표에서 추출한 여러 행을 top-level 카드 값으로 요약한다.
+    공급 표의 수량 필드를 top-level 값으로 요약한다.
 
-    우선순위:
-    1. '소계' / '합계' / '총계' 행이 있으면 해당 값을 사용
-    2. 합계 행이 없을 때만 상세 행 값을 합산
+    문서 안에 같은 공급정보가 ``주택단지 개요``와 ``모집대상 주택`` 등
+    여러 표로 반복될 수 있으므로, 표별로 먼저 합계를 계산한 뒤 동일 metric의
+    최댓값을 선택한다. 이렇게 하면 서로 다른 표의 같은 숫자를 중복 합산하는
+    문제를 막을 수 있다.
 
-    이렇게 해야 아래와 같은 표에서
-    소계 58 / 260
-    + 상세 행들
-    을 모두 더해서 99 / 450으로 중복 집계하는 문제를 막을 수 있다.
+    각 표 내부에서는 ``소계/합계/총계/계`` 행이 있으면 그 행을 우선하고,
+    합계 행이 없을 때만 상세 행의 값을 합산한다.
     """
-
-    total_row_keywords = (
+    metric_fields = (
+        "supply_units",
+        "recruitment_units",
+        "recruitment_waitlist",
+        "waiting_waitlist",
+    )
+    total_row_keywords = {
         "소계",
         "합계",
         "총계",
         "계",
-    )
-
-    total_rows: list[
-        dict[str, Any]
-    ] = []
-
-    for item in rows:
-        labels = [
-            _clean_text(
-                item.get(key)
-            )
-            for key in (
-                "complex_name",
-                "housing_group",
-                "housing_type",
-                "location",
-            )
-            if _clean_text(
-                item.get(key)
-            )
-        ]
-
-        if any(
-            label in total_row_keywords
-            for label in labels
-        ):
-            total_rows.append(
-                item
-            )
-
-    # 표 안에 명시적인 소계/합계가 있으면 그 값을 최우선으로 사용
-    if total_rows:
-        supply_units = next(
-            (
-                item.get(
-                    "supply_units"
-                )
-                for item in total_rows
-                if isinstance(
-                    item.get(
-                        "supply_units"
-                    ),
-                    int,
-                )
-            ),
-            None,
-        )
-
-        recruitment_units = next(
-            (
-                item.get(
-                    "recruitment_units"
-                )
-                for item in total_rows
-                if isinstance(
-                    item.get(
-                        "recruitment_units"
-                    ),
-                    int,
-                )
-            ),
-            None,
-        )
-
-        recruitment_waitlist = next(
-            (
-                item.get(
-                    "recruitment_waitlist"
-                )
-                for item in total_rows
-                if isinstance(
-                    item.get(
-                        "recruitment_waitlist"
-                    ),
-                    int,
-                )
-            ),
-            None,
-        )
-
-        waiting_waitlist = next(
-            (
-                item.get(
-                    "waiting_waitlist"
-                )
-                for item in total_rows
-                if isinstance(
-                    item.get(
-                        "waiting_waitlist"
-                    ),
-                    int,
-                )
-            ),
-            None,
-        )
-
-        return {
-            "supply_units": (
-                supply_units
-            ),
-            "recruitment_waitlist": (
-                recruitment_waitlist
-            ),
-            "waiting_waitlist": (
-                waiting_waitlist
-            ),
-            "recruitment_units": (
-                recruitment_units
-            ),
-        }
-
-    # 합계 행이 없는 표만 상세 행을 합산
-    supply_values = [
-        item.get(
-            "supply_units"
-        )
-        for item in rows
-        if isinstance(
-            item.get(
-                "supply_units"
-            ),
-            int,
-        )
-    ]
-
-    waitlist_values = [
-        item.get(
-            "recruitment_waitlist"
-        )
-        for item in rows
-        if isinstance(
-            item.get(
-                "recruitment_waitlist"
-            ),
-            int,
-        )
-    ]
-
-    recruitment_unit_values = [
-        item.get(
-            "recruitment_units"
-        )
-        for item in rows
-        if isinstance(
-            item.get(
-                "recruitment_units"
-            ),
-            int,
-        )
-    ]
-
-    waiting_waitlist_values = [
-        item.get(
-            "waiting_waitlist"
-        )
-        for item in rows
-        if isinstance(
-            item.get(
-                "waiting_waitlist"
-            ),
-            int,
-        )
-    ]
-
-    return {
-        "supply_units": (
-            sum(
-                supply_values
-            )
-            if supply_values
-            else None
-        ),
-        "recruitment_waitlist": (
-            sum(
-                waitlist_values
-            )
-            if waitlist_values
-            else None
-        ),
-        "waiting_waitlist": (
-            sum(
-                waiting_waitlist_values
-            )
-            if waiting_waitlist_values
-            else None
-        ),
-        "recruitment_units": (
-            sum(
-                recruitment_unit_values
-            )
-            if recruitment_unit_values
-            else None
-        ),
     }
 
+    rows_by_table: dict[int, list[dict[str, Any]]] = {}
+    fallback_rows: list[dict[str, Any]] = []
+
+    for item in rows:
+        source = item.get("source")
+        table_index = None
+        if isinstance(source, dict):
+            raw_table_index = source.get("table_index")
+            if isinstance(raw_table_index, int):
+                table_index = raw_table_index
+
+        if table_index is None:
+            fallback_rows.append(item)
+        else:
+            rows_by_table.setdefault(table_index, []).append(item)
+
+    groups = list(rows_by_table.values())
+    if fallback_rows:
+        groups.append(fallback_rows)
+
+    metric_candidates: dict[str, list[int]] = {
+        field: []
+        for field in metric_fields
+    }
+
+    for group in groups:
+        total_rows: list[dict[str, Any]] = []
+        for item in group:
+            labels = [
+                _clean_text(item.get(key))
+                for key in (
+                    "complex_name",
+                    "housing_group",
+                    "housing_type",
+                    "location",
+                )
+                if _clean_text(item.get(key))
+            ]
+            if any(label in total_row_keywords for label in labels):
+                total_rows.append(item)
+
+        for field in metric_fields:
+            candidate: int | None = None
+
+            if total_rows:
+                total_values = [
+                    item.get(field)
+                    for item in total_rows
+                    if isinstance(item.get(field), int)
+                ]
+                if total_values:
+                    # 합계행이 여러 개면 가장 큰 값을 대표값으로 사용한다.
+                    candidate = max(total_values)
+
+            if candidate is None:
+                detail_values = [
+                    item.get(field)
+                    for item in group
+                    if isinstance(item.get(field), int)
+                ]
+                if detail_values:
+                    candidate = sum(detail_values)
+
+            if isinstance(candidate, int):
+                metric_candidates[field].append(candidate)
+
+    return {
+        field: (max(values) if values else None)
+        for field, values in metric_candidates.items()
+    }
+
+
+def _select_supply_summary(
+    *,
+    recruitment_waitlist: int | None,
+    recruitment_units: int | None,
+    supply_units: int | None,
+    construction_units: int | None,
+) -> tuple[str, int | None, str | None]:
+    """
+    사용자 카드에 표시할 공급 규모를 선택한다.
+
+    서비스 관점에서 전체 단지 규모보다 이번 공고의 실제 모집 규모를 우선한다.
+    우선순위는 ``모집 예비자 -> 금회 모집호수 -> 공급호수 -> 건설호수``이다.
+    """
+    candidates = (
+        (
+            "recruitment_waitlist",
+            recruitment_waitlist,
+            "금회 모집 예비자",
+            "명",
+        ),
+        (
+            "recruitment_units",
+            recruitment_units,
+            "금회 모집 호수",
+            "호",
+        ),
+        (
+            "supply_units",
+            supply_units,
+            "공급 호수",
+            "호",
+        ),
+        (
+            "construction_units",
+            construction_units,
+            "공급대상 주택",
+            "호",
+        ),
+    )
+
+    for metric, value, label, unit in candidates:
+        if isinstance(value, int) and value >= 0:
+            return (
+                f"{label} : 총 {value}{unit}",
+                value,
+                metric,
+            )
+
+    return (
+        "공급대상 주택은 공고문 참조",
+        None,
+        None,
+    )
 
 def _extract_supply_from_structure(
     structure: dict[str, Any],
 ) -> dict[str, Any]:
-    texts = _collect_structure_texts(
-        structure
-    )
+    """
+    Structure 전체 텍스트에서 표 수량 이외의 보조 공급정보만 찾는다.
 
-    total_units: int | None = None
-    total_units_text = ""
+    수량 요약은 ``_extract_supply_table_rows`` 결과만 사용한다. 과거처럼 본문
+    텍스트의 ``총 N호``를 다시 읽으면 표에서 계산한 모집 규모와 충돌하거나
+    임대조건의 숫자를 오인할 수 있어 여기서는 수량을 추출하지 않는다.
+    """
+    texts = _collect_structure_texts(structure)
     details_reference = ""
     rental_condition_summary = ""
 
-    total_pattern = re.compile(
-        r"공급대상\s*주택"
-        r"\s*[:：]?\s*"
-        r"총\s*"
-        r"(?P<count>\d[\d,]*)"
-        r"\s*호"
-    )
-
-    supply_count_pattern = re.compile(
-        r"(?:공급|모집)\s*호수"
-        r"\s*[:：]?\s*"
-        r"(?P<count>\d[\d,]*)"
-        r"\s*호?"
-    )
-
     for text_value in texts:
-        found = total_pattern.search(
-            text_value
-        )
-
-        if found:
-            total_units = int(
-                found.group(
-                    "count"
-                ).replace(
-                    ",",
-                    "",
-                )
-            )
-            total_units_text = (
-                _clean_text(
-                    found.group(0)
-                )
-            )
-            break
-
-    if total_units is None:
-        for text_value in texts:
-            found = (
-                supply_count_pattern.search(
-                    text_value
-                )
-            )
-
-            if not found:
-                continue
-
-            total_units = int(
-                found.group(
-                    "count"
-                ).replace(
-                    ",",
-                    "",
-                )
-            )
-            total_units_text = (
-                _clean_text(
-                    found.group(0)
-                )
-            )
-            break
-
-    for text_value in texts:
-        for line in (
-            text_value.splitlines()
-        ):
-            cleaned = _clean_text(
-                line
-            )
+        for line in text_value.splitlines():
+            cleaned = _clean_text(line)
 
             if (
                 not details_reference
-                and "주택내역"
-                in cleaned
+                and "주택내역" in cleaned
                 and any(
                     keyword in cleaned
                     for keyword in (
@@ -6438,110 +6516,22 @@ def _extract_supply_from_structure(
                     )
                 )
             ):
-                details_reference = (
-                    cleaned
-                )
+                details_reference = cleaned
 
             if (
                 not rental_condition_summary
-                and "시중 시세"
-                in cleaned
+                and "시중 시세" in cleaned
                 and (
-                    "임대료"
-                    in cleaned
-                    or "임대보증금"
-                    in cleaned
+                    "임대료" in cleaned
+                    or "임대보증금" in cleaned
                 )
             ):
-                rental_condition_summary = (
-                    cleaned
-                )
+                rental_condition_summary = cleaned
 
     return {
-        "total_units": total_units,
-        "total_units_text": (
-            total_units_text
-        ),
-        "details_reference": (
-            details_reference
-        ),
-        "rental_condition_summary": (
-            rental_condition_summary
-        ),
+        "details_reference": details_reference,
+        "rental_condition_summary": rental_condition_summary,
     }
-
-
-def _extract_total_supply_units(
-    matches: list[
-        dict[str, Any]
-    ],
-) -> int | None:
-    priority_patterns = (
-        re.compile(
-            r"공급대상\s*주택"
-            r"\s*[:：]?\s*"
-            r"총\s*"
-            r"(?P<count>\d[\d,]*)"
-            r"\s*호"
-        ),
-        re.compile(
-            r"(?:공급|모집)"
-            r"\s*호수"
-            r"\s*[:：]?\s*"
-            r"(?P<count>\d[\d,]*)"
-            r"\s*호?"
-        ),
-    )
-
-    fallback_pattern = re.compile(
-        r"총\s*"
-        r"(?P<count>\d[\d,]*)"
-        r"\s*호"
-    )
-
-    for item in matches:
-        text_value = _clean_text(
-            item.get("text")
-        )
-
-        for pattern in (
-            priority_patterns
-        ):
-            found = pattern.search(
-                text_value
-            )
-
-            if found:
-                return int(
-                    found.group(
-                        "count"
-                    ).replace(
-                        ",",
-                        "",
-                    )
-                )
-
-    for item in matches:
-        text_value = _clean_text(
-            item.get("text")
-        )
-
-        found = fallback_pattern.search(
-            text_value
-        )
-
-        if found:
-            return int(
-                found.group(
-                    "count"
-                ).replace(
-                    ",",
-                    "",
-                )
-            )
-
-    return None
-
 
 def _extract_supply_details_reference(
     matches: list[
@@ -6634,18 +6624,20 @@ def _extract_supply_rental_condition_summary(
 
 
 def _build_supply_information(
-    matches: list[
-        dict[str, Any]
-    ],
+    matches: list[dict[str, Any]],
     *,
     structure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """
+    공급정보를 생성한다.
+
+    카드의 ``summary``는 구조화된 공급표의 실제 모집 규모를 최우선으로 한다.
+    본문에서 임의의 ``총 N호``를 다시 추출하지 않아 중복·오탐 집계를 방지한다.
+    """
     valid_matches = [
         match
         for match in matches
-        if _is_valid_supply_section(
-            match["_section"]
-        )
+        if _is_valid_supply_section(match["_section"])
     ]
 
     result = _build_generic_field(
@@ -6653,184 +6645,68 @@ def _build_supply_information(
         valid_matches,
     )
 
-    total_units = (
-        _extract_total_supply_units(
-            valid_matches
-        )
+    details_reference = _extract_supply_details_reference(valid_matches)
+    rental_condition_summary = _extract_supply_rental_condition_summary(
+        valid_matches
     )
 
-    details_reference = (
-        _extract_supply_details_reference(
-            valid_matches
-        )
-    )
-
-    rental_condition_summary = (
-        _extract_supply_rental_condition_summary(
-            valid_matches
-        )
-    )
-
-    summary = (
-        _build_supply_summary(
-            valid_matches
-        )
-    )
-
-    housing_items: list[
-        dict[str, Any]
-    ] = []
-
+    housing_items: list[dict[str, Any]] = []
+    construction_units: int | None = None
     supply_units: int | None = None
-    recruitment_units: (
-        int | None
-    ) = None
-    recruitment_waitlist: (
-        int | None
-    ) = None
+    recruitment_units: int | None = None
+    recruitment_waitlist: int | None = None
+    waiting_waitlist: int | None = None
 
     if structure is not None:
-        fallback = (
-            _extract_supply_from_structure(
-                structure
-            )
-        )
-
-        if total_units is None:
-            total_units = (
-                fallback.get(
-                    "total_units"
-                )
-            )
+        auxiliary = _extract_supply_from_structure(structure)
 
         if not details_reference:
-            details_reference = (
-                fallback.get(
-                    "details_reference"
-                )
-                or ""
-            )
-
+            details_reference = auxiliary.get("details_reference") or ""
         if not rental_condition_summary:
             rental_condition_summary = (
-                fallback.get(
-                    "rental_condition_summary"
-                )
-                or ""
+                auxiliary.get("rental_condition_summary") or ""
             )
 
-        if not summary:
-            summary = (
-                fallback.get(
-                    "total_units_text"
-                )
-                or ""
-            )
-
-        # ----------------------------------------------------
-        # 공급 표 구조화
-        #
-        # 예:
-        # 공급호수 58
-        # 모집예비자 260
-        #
-        # 또는 여러 단지/주택형별 행
-        # ----------------------------------------------------
-        housing_items = (
-            _extract_supply_table_rows(
-                structure
-            )
+        housing_items = _extract_supply_table_rows(structure)
+        construction_units = _sum_unique_construction_units(
+            housing_items,
+            structure,
         )
 
-        table_summary = (
-            _summarize_supply_table_rows(
-                housing_items
-            )
-        )
+        table_summary = _summarize_supply_table_rows(housing_items)
+        supply_units = table_summary.get("supply_units")
+        recruitment_units = table_summary.get("recruitment_units")
+        recruitment_waitlist = table_summary.get("recruitment_waitlist")
+        waiting_waitlist = table_summary.get("waiting_waitlist")
 
-        supply_units = (
-            table_summary.get(
-                "supply_units"
-            )
-        )
-        recruitment_units = (
-            table_summary.get(
-                "recruitment_units"
-            )
-        )
-        recruitment_waitlist = (
-            table_summary.get(
-                "recruitment_waitlist"
-            )
-        )
+    summary, total_units, summary_metric = _select_supply_summary(
+        recruitment_waitlist=recruitment_waitlist,
+        recruitment_units=recruitment_units,
+        supply_units=supply_units,
+        construction_units=construction_units,
+    )
 
-        # 본문에 '총 N호'가 없고 표에만 공급호수가 있는 경우
-        # 표의 공급호수 합계를 total_units fallback으로 사용한다.
-        if (
-            total_units is None
-            and isinstance(
-                supply_units,
-                int,
-            )
-        ):
-            total_units = (
-                supply_units
-            )
-
-        # 공급 카드에는 임대조건 문장 대신 공급대상 주택 요약을 보여준다.
-        # 총 공급호수를 확보한 경우에는 기존 후보가 무엇이든 일관된 형식으로
-        # 정규화한다. 임대조건은 rental_condition_summary에 별도로 유지된다.
-        if isinstance(
-            total_units,
-            int,
-        ):
-            summary = (
-                "공급대상 주택 : "
-                f"총 {total_units}호"
-            )
-        elif (
-            housing_items
-            and (
-                not summary
-                or any(
-                    keyword in _normalized_match_text(summary)
-                    for keyword in (
-                        _normalized_match_text("임대보증금"),
-                        _normalized_match_text("월임대료"),
-                        _normalized_match_text("전환이율"),
-                        _normalized_match_text("상호전환"),
-                    )
-                )
-            )
-        ):
-            # 표에서 주택행은 찾았지만 총 호수 계산이 불가능한 공고는
-            # 잘못된 임대조건 문장을 공급 요약으로 노출하지 않는다.
-            summary = "공급대상 주택은 공고문 주택내역 참조"
+    # 구조화 표에서 수량을 찾지 못한 문서는 기존 텍스트 요약을 fallback으로 사용한다.
+    # 단, 임대보증금/월임대료/전환이율만 설명하는 문장은 _build_supply_summary에서
+    # 제외되므로 공급 카드에 임대조건 문장이 들어가는 문제를 막는다.
+    if summary_metric is None:
+        fallback_summary = _build_supply_summary(valid_matches)
+        if fallback_summary:
+            summary = fallback_summary
 
     result.update(
         {
             "summary": summary,
-            "total_units": (
-                total_units
-            ),
-            "supply_units": (
-                supply_units
-            ),
-            "recruitment_units": (
-                recruitment_units
-            ),
-            "recruitment_waitlist": (
-                recruitment_waitlist
-            ),
-            "housing_items": (
-                housing_items
-            ),
-            "details_reference": (
-                details_reference
-            ),
-            "rental_condition_summary": (
-                rental_condition_summary
-            ),
+            "summary_metric": summary_metric,
+            "total_units": total_units,
+            "construction_units": construction_units,
+            "supply_units": supply_units,
+            "recruitment_units": recruitment_units,
+            "recruitment_waitlist": recruitment_waitlist,
+            "waiting_waitlist": waiting_waitlist,
+            "housing_items": housing_items,
+            "details_reference": details_reference,
+            "rental_condition_summary": rental_condition_summary,
         }
     )
 
@@ -6839,18 +6715,14 @@ def _build_supply_information(
         or supply_units is not None
         or recruitment_units is not None
         or recruitment_waitlist is not None
-        or bool(
-            housing_items
-        )
+        or waiting_waitlist is not None
+        or bool(housing_items)
         or details_reference
         or rental_condition_summary
     ):
-        result["status"] = (
-            "extracted"
-        )
+        result["status"] = "extracted"
 
     return result
-
 
 def _build_income_asset_criteria(
     matches: list[
