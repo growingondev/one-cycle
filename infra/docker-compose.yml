@@ -12,6 +12,22 @@ services:
 
     ports:
       - "80:80"
+      - "443:443"
+
+    volumes:
+      - type: bind
+        source: "${NGINX_TLS_CERT_PATH:-./nginx/certs/origin.pem}"
+        target: /etc/nginx/certs/origin.pem
+        read_only: true
+        bind:
+          create_host_path: false
+
+      - type: bind
+        source: "${NGINX_TLS_KEY_PATH:-./nginx/certs/origin.key}"
+        target: /etc/nginx/certs/origin.key
+        read_only: true
+        bind:
+          create_host_path: false
 
     depends_on:
       backend:
