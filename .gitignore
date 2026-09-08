@@ -17,6 +17,8 @@ venvs/
 .env.*
 !.env.example
 
+# Local TLS certificates
+infra/nginx/certs/
 # AI / Model files
 /models/
 *.gguf
