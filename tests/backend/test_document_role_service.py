@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from backend.app.services.collection_service import (
+    _resolve_document_role,
     persist_collection_result,
 )
 from backend.app.services.document_role_service import (
@@ -133,6 +134,46 @@ class DocumentRoleServiceTest(unittest.TestCase):
             ),
             DOCUMENT_ROLE_UNKNOWN,
         )
+
+
+class CrawlerDocumentRoleContractTest(unittest.TestCase):
+
+    def test_crawler_role_overrides_contradictory_filename(self):
+        self.assertEqual(
+            _resolve_document_role(
+                {"document_role": "supporting"},
+                file_name="입주자모집공고문.hwpx",
+            ),
+            DOCUMENT_ROLE_SUPPORTING,
+        )
+
+    def test_explicit_unknown_is_not_reclassified_by_filename(self):
+        self.assertEqual(
+            _resolve_document_role(
+                {"document_role": "unknown"},
+                file_name="입주자모집공고문.hwpx",
+            ),
+            DOCUMENT_ROLE_UNKNOWN,
+        )
+
+    def test_missing_role_uses_legacy_filename_fallback(self):
+        self.assertEqual(
+            _resolve_document_role(
+                {},
+                file_name="입주자모집공고문.hwpx",
+            ),
+            DOCUMENT_ROLE_PRIMARY,
+        )
+
+    def test_invalid_crawler_role_is_rejected(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "지원하지 않는 document_role",
+        ):
+            _resolve_document_role(
+                {"document_role": "main"},
+                file_name="입주자모집공고문.hwpx",
+            )
 
 
 class CollectionDocumentRolePersistenceTest(

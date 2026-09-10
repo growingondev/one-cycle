@@ -37,7 +37,16 @@ def storage_db(tmp_path, monkeypatch):
     engine.dispose()
 
 
-def add_old(sessions, root, *, source="A", missing=False, legacy=False, content=b"old"):
+def add_old(
+    sessions,
+    root,
+    *,
+    source="A",
+    missing=False,
+    legacy=False,
+    content=b"old",
+    document_role="primary",
+):
     path = (
         root
         / ("notices/A/versions/legacy" if legacy else f"execution_old/{source}")
@@ -54,7 +63,7 @@ def add_old(sessions, root, *, source="A", missing=False, legacy=False, content=
             announcement_id=announcement.id,
             original_filename=path.name,
             document_format="hwpx",
-            document_role="primary",
+            document_role=document_role,
             storage_path=str(path),
             checksum_sha256=hashlib.sha256(content).hexdigest(),
             download_status="completed",
@@ -109,6 +118,76 @@ def test_identical_recollection_deletes_only_new_duplicate(storage_db, legacy):
     with sessions() as db:
         assert db.get(Document, document_id).storage_path == str(old)
         assert db.scalar(select(func.count(Document.id))) == 1
+
+
+def test_identical_recollection_updates_existing_document_role(storage_db):
+    sessions, root = storage_db
+    announcement_id, document_id, _ = add_old(
+        sessions,
+        root,
+        document_role="unknown",
+    )
+    _, response = new_result(root)
+    response["data"]["documents"][0][
+        "document_role"
+    ] = "supporting"
+
+    with patch.object(
+        collection_service.crawler_client,
+        "recollect_announcement",
+        return_value=response,
+    ):
+        result = collection_service.recollect_and_persist(
+            announcement_id=announcement_id
+        )
+
+    assert result["reused_document_ids"] == [document_id]
+    assert result["recovered_analysis_document_ids"] == []
+    with sessions() as db:
+        assert (
+            db.get(Document, document_id).document_role
+            == "supporting"
+        )
+
+
+def test_recollection_promotes_existing_primary_for_processing(storage_db):
+    sessions, root = storage_db
+    announcement_id, document_id, _ = add_old(
+        sessions,
+        root,
+        document_role="unknown",
+    )
+    _, response = new_result(root)
+    response["data"]["documents"][0][
+        "document_role"
+    ] = "primary"
+
+    with (
+        patch.object(
+            collection_service.crawler_client,
+            "recollect_announcement",
+            return_value=response,
+        ),
+        patch.object(
+            integration_service,
+            "process_document_ids",
+            return_value={"failed_count": 0},
+        ) as process,
+    ):
+        result = integration_service.recollect_persist_and_process(
+            announcement_id=announcement_id
+        )
+
+    assert result["reused_document_ids"] == [document_id]
+    assert result["recovered_analysis_document_ids"] == [
+        document_id
+    ]
+    process.assert_called_once_with([document_id])
+    with sessions() as db:
+        assert (
+            db.get(Document, document_id).document_role
+            == "primary"
+        )
 
 
 def test_missing_original_restores_path_and_reprocesses_primary(storage_db):

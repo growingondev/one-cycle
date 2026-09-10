@@ -14,6 +14,7 @@ from backend.app.models.collection_run import CollectionRun
 from backend.app.models.document import Document
 from backend.app.services.document_role_service import (
     DOCUMENT_ROLE_PRIMARY,
+    VALID_DOCUMENT_ROLES,
     classify_document_role,
 )
 from backend.app.services.error_log_service import record_error
@@ -44,6 +45,28 @@ VALID_RECOLLECT_STATUSES = {
     "partial",
     "failed",
 }
+
+
+def _resolve_document_role(
+    raw_document: dict[str, Any],
+    *,
+    file_name: str,
+) -> str:
+    """Crawler 역할을 우선 사용하고, 구버전 응답만 파일명으로 분류한다."""
+    if "document_role" not in raw_document:
+        return classify_document_role(file_name)
+
+    crawler_role = str(
+        raw_document.get("document_role") or ""
+    ).strip().lower()
+
+    if crawler_role not in VALID_DOCUMENT_ROLES:
+        raise ValueError(
+            "지원하지 않는 document_role입니다: "
+            f"{crawler_role or raw_document.get('document_role')!r}"
+        )
+
+    return crawler_role
 
 
 def _parse_date(value: Any) -> date | None:
@@ -316,8 +339,9 @@ def persist_collection_result(
                         "수집 문서의 file_name이 없습니다."
                     )
 
-                document_role = classify_document_role(
-                    file_name
+                document_role = _resolve_document_role(
+                    raw_document,
+                    file_name=file_name,
                 )
 
                 document = Document(
@@ -562,8 +586,9 @@ def recollect_and_persist(
                     f"{download_status}"
                 )
 
-            document_role = classify_document_role(
-                file_name
+            document_role = _resolve_document_role(
+                raw_document,
+                file_name=file_name,
             )
 
             checksum = (
@@ -591,6 +616,16 @@ def recollect_and_persist(
                 )
 
             if existing_document is not None:
+                role_changed_to_primary = (
+                    existing_document.document_role
+                    != DOCUMENT_ROLE_PRIMARY
+                    and document_role
+                    == DOCUMENT_ROLE_PRIMARY
+                )
+                existing_document.document_role = (
+                    document_role
+                )
+
                 if download_status == "completed":
                     downloaded = validated_recollection_file(
                         storage_path=str(raw_document.get("storage_path") or ""),
@@ -606,6 +641,10 @@ def recollect_and_persist(
                     if old_path is not None and file_matches(old_path, checksum):
                         if old_path != downloaded:
                             duplicate_files.append((downloaded, old_path, checksum))
+                        if role_changed_to_primary:
+                            recovered_analysis_document_ids.append(
+                                existing_document.id
+                            )
                     else:
                         # Keep existing processing references, but repair the missing original.
                         existing_document.storage_path = str(downloaded)
