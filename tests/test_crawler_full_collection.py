@@ -49,7 +49,11 @@ def test_first_page_is_fully_processed_and_only_temp_is_cleaned(
         return {
             **kwargs["meta_override"],
             "source_announcement_id": source,
-            "documents": [],
+            "documents": [
+                {
+                    "document_role": "primary",
+                }
+            ],
             "errors": [],
             "is_success": not (partial and source == "NOTICE-1"),
         }
@@ -74,6 +78,10 @@ def test_first_page_is_fully_processed_and_only_temp_is_cleaned(
     assert driver.back.call_count == 3
     assert all(call.kwargs["expected_total"] == 3 for call in restored.call_args_list)
     assert all(path.is_file() for path in paths)
+    assert all(
+        item["documents"][0]["document_role"] == "primary"
+        for item in result["data"]
+    )
     assert all(
         path.parent.parent == tmp_path / result["execution_id"] for path in paths
     )
@@ -120,7 +128,6 @@ def test_same_attachment_name_on_different_notices_has_separate_paths(
     driver = Mock()
     driver.current_url = "https://example.test"
     attachment = SimpleNamespace(text="공고문.hwpx")
-    driver.find_elements.return_value = [attachment]
     payload = [b"A-file", b"B-file"]
 
     def download(*args, **kwargs):
@@ -132,13 +139,29 @@ def test_same_attachment_name_on_different_notices_has_separate_paths(
         patch.object(crawler, "click_allow_popup"),
         patch.object(crawler.time, "sleep"),
         patch.object(crawler, "wait_for_download_start", side_effect=download),
+        patch.object(
+            crawler,
+            "_find_attachment_candidates",
+            return_value=[
+                (
+                    attachment,
+                    crawler.DOCUMENT_ROLE_PRIMARY,
+                )
+            ],
+        ),
     ):
-        wait.return_value.until.return_value = [attachment]
+        wait.return_value.until.return_value = [
+            (
+                attachment,
+                crawler.DOCUMENT_ROLE_PRIMARY,
+            )
+        ]
         for source in ("A", "B"):
             result = crawler._process_single_notice(
                 driver, temp, execution, source_announcement_id_override=source
             )
             assert result["is_success"]
+            assert result["documents"][0]["document_role"] == "primary"
             assert result["documents"][0]["storage_path"] == str(
                 execution / source / attachment.text
             )

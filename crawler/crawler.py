@@ -28,6 +28,18 @@ NOTICE_LINK_SELECTOR = (
     "a.wrtancInfoBtn"
 )
 
+ATTACHMENT_BLOCK_SELECTOR = (
+    ".bbsV_link.file"
+)
+
+ATTACHMENT_DOWNLOAD_LINK_SELECTOR = (
+    'li > a[href^="javascript:fileDownLoad("]'
+)
+
+DOCUMENT_ROLE_PRIMARY = "primary"
+DOCUMENT_ROLE_SUPPORTING = "supporting"
+DOCUMENT_ROLE_UNKNOWN = "unknown"
+
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
@@ -169,6 +181,76 @@ def click_allow_popup(
             continue
 
     return False
+
+
+def _document_role_from_area_label(
+    label_text: str | None,
+) -> str:
+    """LH 첨부파일 영역 제목을 문서 역할로 변환한다."""
+    normalized = re.sub(
+        r"\s+",
+        "",
+        str(label_text or ""),
+    ).strip("•·-:：")
+
+    if normalized == "공고문":
+        return DOCUMENT_ROLE_PRIMARY
+
+    if normalized == "다운로드":
+        return DOCUMENT_ROLE_SUPPORTING
+
+    return DOCUMENT_ROLE_UNKNOWN
+
+
+def _document_role_for_attachment_block(
+    attachment_block,
+) -> str:
+    """
+    실제 LH DOM의 ``dl > dt + dd`` 구조에서 영역 제목을 읽는다.
+
+    역할은 파일명이 아니라 첨부파일이 속한 영역으로만 판정한다.
+    """
+    try:
+        area_label = attachment_block.find_element(
+            By.XPATH,
+            "./ancestor::dl[1]/dt[1]",
+        )
+        label_text = area_label.text
+    except Exception:
+        return DOCUMENT_ROLE_UNKNOWN
+
+    return _document_role_from_area_label(
+        label_text,
+    )
+
+
+def _find_attachment_candidates(driver) -> list[tuple[object, str]]:
+    """첨부 영역별 다운로드 링크와 역할을 DOM 순서대로 반환한다."""
+    candidates: list[tuple[object, str]] = []
+
+    attachment_blocks = driver.find_elements(
+        By.CSS_SELECTOR,
+        ATTACHMENT_BLOCK_SELECTOR,
+    )
+
+    for attachment_block in attachment_blocks:
+        document_role = (
+            _document_role_for_attachment_block(
+                attachment_block
+            )
+        )
+
+        download_links = attachment_block.find_elements(
+            By.CSS_SELECTOR,
+            ATTACHMENT_DOWNLOAD_LINK_SELECTOR,
+        )
+
+        candidates.extend(
+            (download_link, document_role)
+            for download_link in download_links
+        )
+
+    return candidates
 
 
 def close_main_popup(driver) -> None:
@@ -472,31 +554,39 @@ def _process_single_notice(
     target_file_found = False
 
     try:
-        attachments = WebDriverWait(
+        attachment_candidates = WebDriverWait(
             driver,
             5,
         ).until(
-            EC.presence_of_all_elements_located(
-                (
-                    By.CSS_SELECTOR,
-                    ".bbsV_link.file a",
+            lambda current_driver: (
+                _find_attachment_candidates(
+                    current_driver
                 )
+                or False
             )
         )
 
-        file_count = len(attachments)
+        file_count = len(
+            attachment_candidates
+        )
 
         for index in range(file_count):
-            current_attachments = (
-                driver.find_elements(
-                    By.CSS_SELECTOR,
-                    ".bbsV_link.file a",
+            current_candidates = (
+                _find_attachment_candidates(
+                    driver
                 )
             )
 
-            file_link = current_attachments[
-                index
-            ]
+            if index >= len(current_candidates):
+                raise RuntimeError(
+                    "첨부파일 목록이 다운로드 중 "
+                    "변경되었습니다."
+                )
+
+            (
+                file_link,
+                document_role,
+            ) = current_candidates[index]
 
             file_name = _safe_download_filename(file_link.text)
             if normalized_target_file_name is not None and file_name != normalized_target_file_name:
@@ -700,6 +790,8 @@ def _process_single_notice(
                         "completed",
                     "error_message":
                         None,
+                    "document_role":
+                        document_role,
                 }
             )
 
