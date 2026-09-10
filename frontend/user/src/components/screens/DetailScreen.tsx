@@ -165,6 +165,34 @@ function compactCardValue(
   return `${text.slice(0, maxLength).trim()}…`;
 }
 
+function hasDisplayValue(value: unknown): boolean {
+  return !(
+    value === null ||
+    value === undefined ||
+    (typeof value === "string" && value.trim() === "")
+  );
+}
+
+function formatHousingValue(value: unknown, unit?: "호" | "명"): string {
+  if (!hasDisplayValue(value)) {
+    return "";
+  }
+
+  const text =
+    typeof value === "number"
+      ? value.toLocaleString("ko-KR")
+      : toDisplayText(value, "").trim();
+
+  if (!text || !unit || text.endsWith(unit)) {
+    return text;
+  }
+
+  const isNumericValue =
+    typeof value === "number" || /^-?\d+(?:\.\d+)?$/.test(text.replace(/,/g, ""));
+
+  return isNumericValue ? `${text}${unit}` : text;
+}
+
 
 /* =========================
    근거 모달
@@ -214,10 +242,14 @@ function SummaryCard({
   icon,
   title,
   rows,
+  action,
+  children,
 }: {
   icon: string;
   title: string;
   rows: [string, string][];
+  action?: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   const iconNode =
     icon === "calendar" ? (
@@ -234,10 +266,13 @@ function SummaryCard({
 
   return (
     <div className="border border-slate-200 rounded-lg p-4 mb-3">
-      <h3 className="flex items-center gap-2 text-blue-600 text-[16px] lg:text-[17px] font-bold mb-3">
-        <span>{iconNode}</span>
-        {title}
-      </h3>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="flex items-center gap-2 text-blue-600 text-[16px] lg:text-[17px] font-bold">
+          <span>{iconNode}</span>
+          {title}
+        </h3>
+        {action}
+      </div>
 
       {rows.map(([key, value], index) => (
         <div
@@ -253,6 +288,8 @@ function SummaryCard({
           </span>
         </div>
       ))}
+
+      {children}
     </div>
   );
 }
@@ -276,6 +313,131 @@ type ChatMessage = {
   evidence?: EvidenceItem[];
 };
 
+type HousingItem = {
+  complex_name?: unknown;
+  housing_type?: unknown;
+  construction_units?: unknown;
+  supply_units?: unknown;
+  recruitment_units?: unknown;
+  waiting_waitlist?: unknown;
+  recruitment_waitlist?: unknown;
+};
+
+const HOUSING_ITEM_FIELDS: {
+  key: keyof HousingItem;
+  label: string;
+  unit?: "호" | "명";
+}[] = [
+  { key: "complex_name", label: "단지명" },
+  { key: "housing_type", label: "주택형" },
+  { key: "construction_units", label: "건설호수", unit: "호" },
+  { key: "supply_units", label: "공급호수", unit: "호" },
+  { key: "recruitment_units", label: "모집호수", unit: "호" },
+  { key: "waiting_waitlist", label: "대기 중인 예비자수", unit: "명" },
+  { key: "recruitment_waitlist", label: "모집할 예비자수", unit: "명" },
+];
+
+function HousingItemsDetails({ items }: { items: HousingItem[] }) {
+  return (
+    <div className="mt-4 pt-4 border-t border-slate-200 space-y-3">
+      {items.map((item, index) => {
+        const rows = HOUSING_ITEM_FIELDS.map(({ key, label, unit }) => ({
+          key,
+          label,
+          value: formatHousingValue(item[key], unit),
+        })).filter(({ value }) => value !== "");
+
+        return (
+          <section
+            key={`housing-item-${index}`}
+            className="rounded-lg border border-blue-100 bg-blue-50/50 p-3"
+          >
+            <h4 className="mb-2 text-[13px] font-bold text-blue-700">
+              상세 공급정보 {index + 1}
+            </h4>
+            <dl className="space-y-1.5">
+              {rows.map(({ key, label, value }) => (
+                <div
+                  key={key}
+                  className="grid grid-cols-[110px_minmax(0,1fr)] gap-2 text-[13px] leading-relaxed"
+                >
+                  <dt className="font-semibold text-slate-500">{label}</dt>
+                  <dd className="min-w-0 break-words font-medium text-slate-800">
+                    {value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function EligibilityDetailsContent({
+  commonConditions,
+  targetGroups,
+}: {
+  commonConditions: string[];
+  targetGroups: any[];
+}) {
+  return (
+    <>
+      {commonConditions.length > 0 && (
+        <div className="mb-5">
+          <h4 className="text-[14px] font-bold text-slate-800 mb-2">
+            ■ 공통 신청조건
+          </h4>
+          <ul className="list-disc pl-5 text-[13.5px] text-slate-700 space-y-1">
+            {commonConditions.map((condition, index) => (
+              <li key={`common-${index}`}>{condition}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {targetGroups.length > 0 && (
+        <div>
+          <h4 className="text-[14px] font-bold text-slate-800 mb-3">
+            ■ 계층별 상세조건
+          </h4>
+          <div className="space-y-3">
+            {targetGroups.map((group: any, index: number) => {
+              const label = group.label || "상세 자격";
+              let details = Array.isArray(group.details) ? group.details : [];
+
+              if (
+                details.length > 0 &&
+                typeof details[0] === "string" &&
+                details[0]
+                  .replace(/\s/g, "")
+                  .includes(label.replace(/\s/g, ""))
+              ) {
+                details = details.slice(1);
+              }
+
+              return (
+                <div
+                  key={group.code || index}
+                  className="bg-white border border-slate-200 p-3.5 rounded-lg shadow-sm text-[13.5px]"
+                >
+                  <b className="text-blue-700 block mb-2">{label}</b>
+                  <ul className="list-disc pl-4 text-slate-600 space-y-1.5 break-keep">
+                    {details.map((description: string, detailIndex: number) => (
+                      <li key={`desc-${detailIndex}`}>{description}</li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 
 /* =========================
    상세 화면
@@ -298,10 +460,17 @@ export function DetailScreen({
   const [isDownloading, setIsDownloading] = useState(false);
 
   // 💡 제출서류 근거 확인 토글을 위한 상태
-const [showDocsEvidence, setShowDocsEvidence] = useState(false);
-const [showEligibilityDetails, setShowEligibilityDetails] = useState(false);
-const chatContainerRef = useRef<HTMLDivElement>(null);
-const [glossary, setGlossary] = useState<Record<string, string>>({});
+  const [showDocsEvidence, setShowDocsEvidence] = useState(false);
+  const [showEligibilityDetails, setShowEligibilityDetails] = useState(false);
+  const [showSupplyDetails, setShowSupplyDetails] = useState(false);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const eligibilityToggleRef = useRef<HTMLButtonElement>(null);
+  const [glossary, setGlossary] = useState<Record<string, string>>({});
+
+  const closeEligibilityDetails = () => {
+    setShowEligibilityDetails(false);
+    window.requestAnimationFrame(() => eligibilityToggleRef.current?.focus());
+  };
 
   useEffect(() => {
     // 마운트 시 API를 한 번 호출하여 용어 사전을 메모리에 올려둡니다.
@@ -339,6 +508,12 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
       setCurrentNotice(notice);
     }
   }, [notice]);
+
+  useEffect(() => {
+    setShowDocsEvidence(false);
+    setShowEligibilityDetails(false);
+    setShowSupplyDetails(false);
+  }, [notice?.id]);
 
 
   /* =========================
@@ -512,6 +687,22 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
   const requiredDocuments = keyInformation.requiredDocuments ?? keyInformation.required_documents ?? {};
   const winnerAnnouncement = keyInformation.winnerAnnouncement ?? keyInformation.winner_announcement ?? {};
 
+  const rawHousingItems =
+    supplyInformation.housing_items ?? supplyInformation.housingItems;
+  const housingItems: HousingItem[] = Array.isArray(rawHousingItems)
+    ? rawHousingItems.filter((item: unknown): item is HousingItem => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) {
+          return false;
+        }
+
+        const housingItem = item as HousingItem;
+        return HOUSING_ITEM_FIELDS.some(({ key }) =>
+          hasDisplayValue(housingItem[key])
+        );
+      })
+    : [];
+  const hasSupplyDetails = housingItems.length > 0;
+
   // 데이터 보정 (크롤러의 새 데이터 적용)
   const displayAnnouncementDate = toDisplayText(
     currentNotice.post_date ??
@@ -593,8 +784,16 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
   const eligStatus = eligibility.status ?? "not_found";
   
   // 1. 요약 텍스트
-  const eligSummary = eligibility.summary ?? compactCardValue(eligibility.summary, "공고문 세부 자격 요건을 확인하세요.", 230);
-  const incomeSummary = incomeAssetCriteria.summary ?? compactCardValue(incomeAssetCriteria.summary, "공고문 소득·자산 기준을 확인하세요.", 230);
+  const eligSummary = compactCardValue(
+    eligibility.summary,
+    "공고문 세부 자격 요건을 확인하세요.",
+    230
+  );
+  const incomeSummary = compactCardValue(
+    incomeAssetCriteria.summary,
+    "공고문 소득·자산 기준을 확인하세요.",
+    230
+  );
   
   // 2. 공통 조건 & 계층별 조건 (snake_case, camelCase 호환)
   const commonConditions = eligibility.common_conditions ?? eligibility.commonConditions ?? [];
@@ -683,7 +882,7 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
       {/* =====================
           메인 영역
       ====================== */}
-      <div className="grid grid-cols-1 xl:grid-cols-[380px_minmax(0,1fr)] items-start gap-4 lg:gap-5">
+      <div className="grid grid-cols-1 items-start gap-4 lg:gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
 
         {/* =====================
             핵심정보
@@ -696,7 +895,35 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
 
           <div className={`${isSummaryOpen ? "block mt-4" : "hidden"} xl:block xl:mt-4`}>
             <SummaryCard icon="calendar" title="신청 일정" rows={scheduleData} />
-            <SummaryCard icon="home" title="공급 정보" rows={supplyData} />
+            <SummaryCard
+              icon="home"
+              title="공급 정보"
+              rows={supplyData}
+              action={
+                hasSupplyDetails ? (
+                  <button
+                    type="button"
+                    aria-expanded={showSupplyDetails}
+                    aria-controls="supply-information-details"
+                    onClick={() => setShowSupplyDetails(!showSupplyDetails)}
+                    className="flex items-center gap-1 rounded bg-blue-50 px-2 py-1 text-[13px] text-blue-600 transition-colors hover:bg-blue-100"
+                  >
+                    {showSupplyDetails ? (
+                      <ChevronUp size={14} />
+                    ) : (
+                      <ChevronDown size={14} />
+                    )}
+                    {showSupplyDetails ? "상세 닫기" : "자세히 보기"}
+                  </button>
+                ) : undefined
+              }
+            >
+              {showSupplyDetails && (
+                <div id="supply-information-details">
+                  <HousingItemsDetails items={housingItems} />
+                </div>
+              )}
+            </SummaryCard>
             <div className="relative border border-slate-200 rounded-lg p-4 mb-3">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="flex items-center gap-2 text-blue-600 text-[16px] lg:text-[17px] font-bold">
@@ -706,10 +933,19 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
                 {/* 🟢 API에서 상세 조건 배열을 넘겨주었을 때만 버튼 노출 */}
                 {hasEligibilityDetails && (
                   <button
+                    ref={eligibilityToggleRef}
+                    type="button"
+                    aria-expanded={showEligibilityDetails}
+                    aria-controls="eligibility-details-inline eligibility-details-panel"
                     onClick={() => setShowEligibilityDetails(!showEligibilityDetails)}
                     className="flex items-center gap-1 text-[13px] bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100 transition-colors"
                   >
-                    <BadgeCheck size={14} /> {showEligibilityDetails ? "상세 닫기" : "상세 자격"}
+                    {showEligibilityDetails ? (
+                      <ChevronUp size={14} />
+                    ) : (
+                      <ChevronDown size={14} />
+                    )}
+                    {showEligibilityDetails ? "상세 닫기" : "자세히 보기"}
                   </button>
                 )}
               </div>
@@ -728,51 +964,16 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
                 </span>
               </div>
 
-              {/* 🟢 상세 보기 영역 (버튼 클릭 시 펼쳐짐) */}
+              {/* 넓은 화면에서는 오른쪽 패널, 그보다 좁은 화면에서는 카드 아래에 표시 */}
               {showEligibilityDetails && (
-                <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg mt-4 max-h-96 overflow-auto">
-                  
-                  {/* 공통 조건 */}
-                  {commonConditions.length > 0 && (
-                    <div className="mb-5">
-                      <h4 className="text-[14px] font-bold text-slate-800 mb-2">■ 공통 신청조건</h4>
-                      <ul className="list-disc pl-5 text-[13.5px] text-slate-700 space-y-1">
-                        {commonConditions.map((cond: string, idx: number) => (
-                          <li key={`common-${idx}`}>{cond}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* 계층별 상세조건 (동적 렌더링) */}
-                  {targetGroups.length > 0 && (
-                    <div>
-                      <h4 className="text-[14px] font-bold text-slate-800 mb-3">■ 계층별 상세조건</h4>
-                      <div className="space-y-3">
-                        {targetGroups.map((group: any, idx: number) => {
-                          const label = group.label || "상세 자격";
-                          let details = group.details || [];
-                          
-                          // 💡 팀원 요청사항: details[0]이 label과 의미상 중복되면 숨김 처리
-                          if (details.length > 0 && details[0].replace(/\s/g, '').includes(label.replace(/\s/g, ''))) {
-                            details = details.slice(1);
-                          }
-
-                          return (
-                            <div key={group.code || idx} className="bg-white border border-slate-200 p-3.5 rounded-lg shadow-sm text-[13.5px]">
-                              <b className="text-blue-700 block mb-2">{label}</b>
-                              <ul className="list-disc pl-4 text-slate-600 space-y-1.5 break-keep">
-                                {details.map((desc: string, i: number) => (
-                                  <li key={`desc-${i}`}>{desc}</li>
-                                ))}
-                              </ul>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  
+                <div
+                  id="eligibility-details-inline"
+                  className="mt-4 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4 xl:hidden"
+                >
+                  <EligibilityDetailsContent
+                    commonConditions={commonConditions}
+                    targetGroups={targetGroups}
+                  />
                 </div>
               )}
             </div>
@@ -808,10 +1009,42 @@ const [glossary, setGlossary] = useState<Record<string, string>>({});
           </div>
         </div>
 
+        {showEligibilityDetails && (
+          <aside
+            id="eligibility-details-panel"
+            aria-labelledby="eligibility-details-title"
+            className="sticky top-8 hidden max-h-[calc(100vh-64px)] min-w-0 overflow-auto rounded-xl border border-slate-200 bg-white p-5 shadow-lg xl:block"
+          >
+            <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
+              <h3
+                id="eligibility-details-title"
+                className="flex items-center gap-2 text-[17px] font-bold text-blue-600"
+              >
+                <BadgeCheck size={20} /> 신청 자격 상세
+              </h3>
+              <button
+                type="button"
+                onClick={closeEligibilityDetails}
+                className="flex items-center gap-1 rounded bg-blue-50 px-2 py-1 text-[13px] text-blue-600 transition-colors hover:bg-blue-100"
+              >
+                <ChevronUp size={14} /> 상세 닫기
+              </button>
+            </div>
+            <EligibilityDetailsContent
+              commonConditions={commonConditions}
+              targetGroups={targetGroups}
+            />
+          </aside>
+        )}
+
         {/* =====================
             AI 채팅
         ====================== */}
-        <div className="min-w-0 bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm flex flex-col h-[600px] lg:h-[700px]">
+        <div
+          className={`min-w-0 bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm flex flex-col h-[600px] lg:h-[700px] ${
+            showEligibilityDetails ? "xl:col-start-2" : ""
+          }`}
+        >
           <h2 className="text-[17px] lg:text-[19px] font-bold text-slate-900 mb-1">AI에게 무엇이든 물어보세요</h2>
           <p className="text-[13px] lg:text-[14px] text-slate-500 mb-4">공고에 대해 궁금한 내용을 질문하면 AI가 답변해 드립니다.</p>
 
