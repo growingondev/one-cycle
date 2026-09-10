@@ -23,15 +23,30 @@ class CrawlerTargetRetryTest(unittest.TestCase):
         skipped = SimpleNamespace(text="other.hwp")
         target = SimpleNamespace(text="failed.hwpx")
         web_driver_wait.return_value.until.return_value = [
-            skipped,
-            target,
+            (skipped, crawler.DOCUMENT_ROLE_PRIMARY),
+            (target, crawler.DOCUMENT_ROLE_SUPPORTING),
         ]
 
         driver = Mock()
         driver.current_url = "https://example.com/notice?panId=NOTICE-1"
-        driver.find_elements.return_value = [skipped, target]
 
-        with tempfile.TemporaryDirectory() as directory:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(
+                crawler,
+                "_find_attachment_candidates",
+                return_value=[
+                    (
+                        skipped,
+                        crawler.DOCUMENT_ROLE_PRIMARY,
+                    ),
+                    (
+                        target,
+                        crawler.DOCUMENT_ROLE_SUPPORTING,
+                    ),
+                ],
+            ),
+        ):
             result = crawler._process_single_notice(
                 driver,
                 Path(directory),
