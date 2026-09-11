@@ -60,3 +60,6 @@ evaluation/results/*
 evaluation/outputs/*
 !evaluation/outputs/.gitkeep
 /runtime/
+
+# vercel
+.vercel
