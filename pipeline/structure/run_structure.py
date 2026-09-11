@@ -7,7 +7,6 @@ import os
 import traceback
 from typing import Any
 from pathlib import Path
-from tkinter import Tk, filedialog, messagebox
 
 try:
     from .build_document_step1 import process as process_step1
@@ -322,9 +321,12 @@ def run_structure_pipeline(
 
 
 def _select_input_file() -> Path | None:
+    from tkinter import Tk, filedialog
+
     root = Tk()
     root.withdraw()
     root.attributes("-topmost", True)
+
     try:
         selected = filedialog.askopenfilename(
             parent=root,
@@ -334,25 +336,45 @@ def _select_input_file() -> Path | None:
                 ("모든 파일", "*.*"),
             ],
         )
-        return Path(selected).resolve() if selected else None
+
+        return (
+            Path(selected).resolve()
+            if selected
+            else None
+        )
+
     finally:
         root.destroy()
 
 
-def _select_output_directory(initial: Path | None = None) -> Path | None:
+def _select_output_directory(
+    initial: Path | None = None,
+) -> Path | None:
+    from tkinter import Tk, filedialog
+
     root = Tk()
     root.withdraw()
     root.attributes("-topmost", True)
+
     try:
         selected = filedialog.askdirectory(
             parent=root,
             title="Structure 결과 저장 폴더 선택",
-            initialdir=str(initial) if initial else None,
+            initialdir=(
+                str(initial)
+                if initial
+                else None
+            ),
         )
-        return Path(selected).resolve() if selected else None
+
+        return (
+            Path(selected).resolve()
+            if selected
+            else None
+        )
+
     finally:
         root.destroy()
-
 
 def _default_output_dir(input_path: Path) -> Path:
     # outputs/<document_id>/02_normalized/hwp.json
@@ -454,6 +476,7 @@ def main() -> None:
         )
 
         try:
+            from tkinter import Tk, messagebox
             root = Tk()
             root.withdraw()
             try:
@@ -469,8 +492,9 @@ def main() -> None:
             finally:
                 root.destroy()
         except Exception:
-            # GUI를 사용할 수 없는 서버/WSL 환경에서도 실행 결과는 유지한다.
-            pass
+            print("문서 처리 완료")
+            print(f"최종 입력 파일: {final_output}")
+            print(f"출력 폴더: {output_dir}")
 
     except Exception as error:
         print()
@@ -479,16 +503,23 @@ def main() -> None:
         traceback.print_exc()
 
         try:
+            from tkinter import Tk, messagebox
+
             root = Tk()
             root.withdraw()
-            messagebox.showerror(
-                "Structure 오류",
-                str(error),
-                parent=root,
-            )
-            root.destroy()
+
+            try:
+                messagebox.showerror(
+                    "Structure 오류",
+                    str(error),
+                    parent=root,
+                )
+            finally:
+                root.destroy()
+
         except Exception:
             pass
+
         raise SystemExit(1) from error
 
 

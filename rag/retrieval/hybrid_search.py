@@ -1,0 +1,243 @@
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, replace
+
+from rag.db_pipeline import DBRAGPipeline
+from rag.retrieval.keyword_search import (
+    BM25SearchConfig,
+    search_bm25,
+)
+from rag.retrieval.models import SearchResult
+
+
+logger = logging.getLogger(__name__)
+
+
+class HybridSearchError(RuntimeError):
+    """Hybrid Search 중 발생하는 오류."""
+
+
+@dataclass(frozen=True)
+class HybridSearchConfig:
+    vector_top_k: int = 20
+    bm25_top_k: int = 20
+    hybrid_top_k: int = 20
+    rrf_k: int = 60
+
+    def validate(self) -> None:
+        if self.vector_top_k <= 0:
+            raise ValueError(
+                "vector_top_k는 1 이상이어야 합니다."
+            )
+        if self.bm25_top_k <= 0:
+            raise ValueError(
+                "bm25_top_k는 1 이상이어야 합니다."
+            )
+        if self.hybrid_top_k <= 0:
+            raise ValueError(
+                "hybrid_top_k는 1 이상이어야 합니다."
+            )
+        if self.rrf_k <= 0:
+            raise ValueError(
+                "rrf_k는 1 이상이어야 합니다."
+            )
+
+
+def _rrf_score(rank: int, rrf_k: int) -> float:
+    """
+    Reciprocal Rank Fusion:
+        score = 1 / (rrf_k + rank)
+
+    Vector와 BM25의 원점수 스케일이 서로 다르므로
+    원점수를 직접 더하지 않고 각 검색기의 순위를 결합한다.
+    """
+    if rank <= 0:
+        raise HybridSearchError(
+            f"rank는 1 이상이어야 합니다: {rank}"
+        )
+
+    return 1.0 / (rrf_k + rank)
+
+
+def _hybrid_search_impl(
+    *,
+    pipeline: DBRAGPipeline,
+    announcement_id: int,
+    query: str,
+    config: HybridSearchConfig | None = None,
+) -> list[SearchResult]:
+    """
+    Vector Search + BM25 Search 결과를 RRF로 결합한다.
+
+    announcement_id는 호출자가 전달하며,
+    Vector/BM25 양쪽 모두 동일한 공고 범위에서 검색한다.
+    """
+    if not isinstance(announcement_id, int) or announcement_id <= 0:
+        raise HybridSearchError(
+            "announcement_id는 1 이상의 정수여야 합니다."
+        )
+
+    query = query.strip()
+
+    if not query:
+        raise HybridSearchError(
+            "검색 질문이 비어 있습니다."
+        )
+
+    config = config or HybridSearchConfig()
+    config.validate()
+
+    original_top_k = pipeline.top_k
+
+    try:
+        pipeline.top_k = config.vector_top_k
+
+        vector_results = pipeline.retrieve(
+            announcement_id=announcement_id,
+            query=query,
+        )
+    finally:
+        pipeline.top_k = original_top_k
+
+    bm25_results = search_bm25(
+        announcement_id=announcement_id,
+        query=query,
+        config=BM25SearchConfig(
+            top_k=config.bm25_top_k,
+        ),
+    )
+
+    fused: dict[str, dict] = {}
+
+    for vector_rank, result in enumerate(
+        vector_results,
+        start=1,
+    ):
+        chunk_id = result.search_result.chunk_id
+        search_result = result.search_result
+
+        fused[chunk_id] = {
+            "item": search_result.item,
+            "vector_score": result.score,
+            "vector_rank": vector_rank,
+            "bm25_rank": None,
+            "matched_by": {"pgvector"},
+            "fusion_score": _rrf_score(
+                vector_rank,
+                config.rrf_k,
+            ),
+        }
+
+    for bm25_rank, result in enumerate(
+        bm25_results,
+        start=1,
+    ):
+        chunk_id = result.chunk_id
+
+        if chunk_id not in fused:
+            fused[chunk_id] = {
+                "item": result.item,
+                "vector_score": None,
+                "vector_rank": None,
+                "bm25_rank": bm25_rank,
+                "matched_by": {"bm25"},
+                "fusion_score": _rrf_score(
+                    bm25_rank,
+                    config.rrf_k,
+                ),
+            }
+        else:
+            fused[chunk_id]["bm25_rank"] = bm25_rank
+            fused[chunk_id]["matched_by"].add("bm25")
+            fused[chunk_id]["fusion_score"] += (
+                _rrf_score(
+                    bm25_rank,
+                    config.rrf_k,
+                )
+            )
+
+    ordered = sorted(
+        fused.items(),
+        key=lambda pair: (
+            -pair[1]["fusion_score"],
+            pair[1]["vector_rank"]
+            if pair[1]["vector_rank"] is not None
+            else 10**9,
+            pair[1]["bm25_rank"]
+            if pair[1]["bm25_rank"] is not None
+            else 10**9,
+            pair[0],
+        ),
+    )
+
+    results: list[SearchResult] = []
+
+    for fusion_rank, (chunk_id, data) in enumerate(
+        ordered[: config.hybrid_top_k],
+        start=1,
+    ):
+        original_item = data["item"]
+
+        raw_metadata = dict(
+            original_item.raw_metadata or {}
+        )
+
+        raw_metadata["hybrid"] = {
+            "vector_rank": data["vector_rank"],
+            "bm25_rank": data["bm25_rank"],
+            "rrf_k": config.rrf_k,
+        }
+
+        item = replace(
+            original_item,
+            raw_metadata=raw_metadata,
+        )
+
+        results.append(
+            SearchResult(
+                vector_index=item.vector_index,
+                chunk_id=chunk_id,
+                item=item,
+                vector_score=data["vector_score"],
+                vector_rank=data["vector_rank"],
+                fusion_score=float(
+                    data["fusion_score"]
+                ),
+                fusion_rank=fusion_rank,
+                matched_by=set(
+                    data["matched_by"]
+                ),
+            )
+        )
+
+    return results
+
+
+def hybrid_search(
+    *,
+    pipeline: DBRAGPipeline,
+    announcement_id: int,
+    query: str,
+    config: HybridSearchConfig | None = None,
+) -> list[SearchResult]:
+    """
+    Hybrid Retrieval의 외부 진입점.
+
+    실제 Retrieval 오류는 이 경계에서
+    RAG 자체 로그에 기록한 뒤 원래 예외를 다시 올린다.
+    """
+    try:
+        return _hybrid_search_impl(
+            pipeline=pipeline,
+            announcement_id=announcement_id,
+            query=query,
+            config=config,
+        )
+
+    except Exception:
+        logger.exception(
+            "Hybrid Retrieval 실패: announcement_id=%s",
+            announcement_id,
+        )
+        raise

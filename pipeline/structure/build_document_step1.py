@@ -19,8 +19,6 @@ import os
 import re
 from collections import Counter, defaultdict
 from typing import Any, Iterable
-from tkinter import Tk, messagebox
-from tkinter.filedialog import askopenfilename
 
 ROMAN = "ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ"
 
@@ -862,6 +860,9 @@ def process(input_path: str, output_dir: str) -> tuple[str, str, str]:
 
 def select_input_json() -> str | None:
     """파일 선택 창을 열어 정규화 JSON 경로를 반환한다."""
+    from tkinter import Tk
+    from tkinter.filedialog import askopenfilename
+
     root = Tk()
     root.withdraw()
     root.attributes("-topmost", True)
@@ -869,7 +870,10 @@ def select_input_json() -> str | None:
     selected = askopenfilename(
         parent=root,
         title="정규화 JSON 파일 선택",
-        filetypes=[("JSON 파일", "*.json"), ("모든 파일", "*.*")],
+        filetypes=[
+            ("JSON 파일", "*.json"),
+            ("모든 파일", "*.*"),
+        ],
     )
 
     root.destroy()
@@ -877,6 +881,7 @@ def select_input_json() -> str | None:
 
 
 def main() -> None:
+    from tkinter import messagebox
     input_path = select_input_json()
     if not input_path:
         print("JSON 파일을 선택하지 않아 실행을 종료합니다.")

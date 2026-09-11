@@ -238,11 +238,20 @@ def chunk_pipeline_outputs(
                 announcement_id=announcement_id,
             )
             success_count += 1
+            
         except Exception as error:
             failures.append((input_path, str(error)))
+
             print()
-            print(f"[ERROR] 청킹 실패: {input_path}", file=sys.stderr)
-            print(str(error), file=sys.stderr)
+            print(
+                f"[ERROR] 청킹 실패: {input_path}",
+                file=sys.stderr,
+            )
+            print(
+                str(error),
+                file=sys.stderr,
+            )
+
             if fail_fast:
                 break
 
@@ -453,9 +462,17 @@ def chunk_directory(
             success_count += 1
         except Exception as error:
             failures.append((input_file, str(error)))
+
             print()
-            print(f"[ERROR] 청킹 실패: {input_file}", file=sys.stderr)
-            print(str(error), file=sys.stderr)
+            print(
+                f"[ERROR] 청킹 실패: {input_file}",
+                file=sys.stderr,
+            )
+            print(
+                str(error),
+                file=sys.stderr,
+            )
+
             if fail_fast:
                 break
 
@@ -518,8 +535,14 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     except Exception as error:
         print()
-        print("[ERROR] 청킹 파이프라인 실행 실패", file=sys.stderr)
-        print(str(error), file=sys.stderr)
+        print(
+            "[ERROR] 청킹 파이프라인 실행 실패",
+            file=sys.stderr,
+        )
+        print(
+            str(error),
+            file=sys.stderr,
+        )
         return 1
 
 

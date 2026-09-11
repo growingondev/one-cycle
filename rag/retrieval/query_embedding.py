@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from pipeline.embedding.model_loader import LoadedEmbeddingModel
+if TYPE_CHECKING:
+    from pipeline.embedding.model_loader import LoadedEmbeddingModel
 
 
 class QueryEmbeddingError(RuntimeError):
@@ -38,7 +39,7 @@ def _extract_query_vector(output: Any) -> np.ndarray:
 
 
 def embed_query(
-    loaded_model: LoadedEmbeddingModel,
+    loaded_model: "LoadedEmbeddingModel",
     query: str,
     *,
     max_length: int,

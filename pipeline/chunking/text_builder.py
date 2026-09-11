@@ -6,6 +6,42 @@ from typing import Any
 
 
 _SPACE_RE = re.compile(r"[ \t]+")
+_UNIT_DECLARATION_RE = re.compile(
+    r"(?:^|[\[\(【〈《<]\s*)단위\s*[:：]\s*([^\s\]\)】〉》>,;；]+)",
+    re.IGNORECASE,
+)
+_STANDALONE_UNIT_DECLARATION_RE = re.compile(
+    r"^\s*[\[\(【〈《<]?\s*단위\s*[:：]\s*([^\s\]\)】〉》>,;；]+)\s*[\]\)】〉》>]?\s*$",
+    re.IGNORECASE,
+)
+_KNOWN_PAREN_UNITS = {
+    "원",
+    "천원",
+    "만원",
+    "억원",
+    "㎡",
+    "m²",
+    "m2",
+    "%",
+    "kg",
+    "g",
+    "km",
+    "m",
+    "cm",
+    "mm",
+    "세대",
+    "호",
+    "명",
+    "개",
+    "건",
+    "년",
+    "개월",
+    "일",
+    "시간",
+    "분",
+}
+_PAREN_CONTENT_RE = re.compile(r"[\(\[]\s*([^\)\]]+?)\s*[\)\]]")
+_NUMERIC_ONLY_RE = re.compile(r"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
 
 
 def clean_text(value: Any) -> str:
@@ -96,3 +132,85 @@ def collect_entities(normalized_values: Iterable[Any]) -> list[dict[str, Any]]:
                 seen.add(fingerprint)
                 entities.append(entity)
     return entities
+
+
+def extract_declared_unit(text: Any) -> str | None:
+    """Return an explicitly declared unit such as '[단위: 천원]'.
+
+    This function only trusts explicit unit declarations. It does not infer a unit
+    from the numeric value itself.
+    """
+    value = clean_text(text)
+    if not value:
+        return None
+    match = _UNIT_DECLARATION_RE.search(value)
+    if not match:
+        return None
+    unit = clean_text(match.group(1)).strip(" .,:;：")
+    return unit or None
+
+
+
+def extract_standalone_declared_unit(text: Any) -> str | None:
+    """Return a unit only when the whole paragraph is a unit declaration."""
+    value = clean_text(text)
+    if not value:
+        return None
+    match = _STANDALONE_UNIT_DECLARATION_RE.fullmatch(value)
+    if not match:
+        return None
+    unit = clean_text(match.group(1)).strip(" .,:;：")
+    return unit or None
+
+
+def extract_header_unit(text: Any) -> str | None:
+    """Extract a unit explicitly present in a header/title.
+
+    Priority:
+    1) '(단위: X)' / '[단위: X]' style declarations
+    2) parenthesized tokens that are known measurement/currency units
+    """
+    value = clean_text(text)
+    if not value:
+        return None
+
+    declared = extract_declared_unit(value)
+    if declared:
+        return declared
+
+    for match in _PAREN_CONTENT_RE.finditer(value):
+        candidate = clean_text(match.group(1))
+        if candidate in _KNOWN_PAREN_UNITS:
+            return candidate
+    return None
+
+
+def normalized_unit(normalized: Any) -> str | None:
+    """Return one unambiguous unit from normalized entities, if available."""
+    if not isinstance(normalized, dict):
+        return None
+    units: list[str] = []
+    for entity in normalized.get("entities") or []:
+        if not isinstance(entity, dict):
+            continue
+        unit = clean_text(entity.get("unit"))
+        if unit and unit not in units:
+            units.append(unit)
+    return units[0] if len(units) == 1 else None
+
+
+def is_plain_numeric_value(value: Any) -> bool:
+    """True only for a bare numeric value, not text that already contains a unit."""
+    return bool(_NUMERIC_ONLY_RE.fullmatch(clean_text(value)))
+
+
+def append_unit_if_applicable(value: Any, unit: str | None) -> str:
+    """Attach a trusted unit only to a bare numeric value.
+
+    This keeps raw structured values unchanged and only changes the display/search
+    representation used by chunking.
+    """
+    text = clean_text(value)
+    if not text or not unit or not is_plain_numeric_value(text):
+        return text
+    return f"{text}{unit}"

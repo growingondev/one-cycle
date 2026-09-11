@@ -19,11 +19,10 @@ export function UserLayout({ screen, go, showToast, children }: { screen: Screen
       {/* 1. 데스크톱 좌측 사이드바 */}
       <aside className="hidden lg:flex fixed left-0 top-0 bottom-0 w-[270px] xl:w-[280px] border-r border-slate-200 bg-white flex-col z-10 px-4 py-10">
         <Logo />
-      <nav className="mt-8 flex flex-col gap-3">
+        <nav className="mt-8 flex flex-col gap-3">
           {[
             { id: "list", icon: "list", label: "공고 목록" },
-            { id: "guide", icon: "guide", label: "이용 안내" },
-            { id: "glossary", icon: "glossary", label: "용어 설명" }
+            { id: "guide", icon: "guide", label: "이용 안내" }
           ].map((item) => (
             <button
               key={item.id}
@@ -39,12 +38,12 @@ export function UserLayout({ screen, go, showToast, children }: { screen: Screen
         
         {/* 사이드바 하단 안내 박스 */}
         <div className="mt-auto border border-slate-200 rounded-xl p-5 bg-slate-50">
-          <b className="text-[15px] text-slate-800">안내</b>
-          <p className="text-sm text-slate-500 mt-3 leading-relaxed">
-            LH 청약플러스의 분양주택 공고를 AI가 쉽게 이해할 수 있도록 도와드립니다.
+          <b className="text-[18px] text-slate-800">안내</b>
+          <p className="text-sm text-slate-700 mt-3 leading-relaxed">
+            LH 청약플러스의 임대주택 공고를 AI가 쉽게 이해할 수 있도록 도와드립니다.
           </p>
-          <button onClick={() => { showToast("새 창을 엽니다."); openLH(); }} className="w-full mt-4 bg-blue-100 text-blue-600 font-bold text-sm py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-blue-200 transition-colors">
-            LH 청약플러스 바로가기 <Icon name="ext" size={16} />
+          <button onClick={() => { showToast("새 창을 엽니다."); openLH(); }} className="w-full mt-3 bg-blue-100 text-blue-700 font-bold text-sm py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-blue-200 transition-colors">
+            LH 청약플러스 바로가기 <Icon name="ext" size={25} />
           </button>
         </div>
       </aside>
@@ -63,11 +62,10 @@ export function UserLayout({ screen, go, showToast, children }: { screen: Screen
       </main>
 
       {/* 4. 모바일 하단 네비게이션 */}
-      <nav className="lg:hidden fixed bottom-0 w-full h-[70px] bg-white border-t border-slate-200 shadow-[0_-4px_14px_rgba(0,0,0,0.03)] grid grid-cols-3 z-50">
+      <nav className="lg:hidden fixed bottom-0 w-full h-[70px] bg-white border-t border-slate-200 shadow-[0_-4px_14px_rgba(0,0,0,0.03)] grid grid-cols-2 z-50">
         {[
           { id: "list", icon: "list", label: "공고 목록" },
-          { id: "guide", icon: "guide", label: "이용 안내" },
-          { id: "glossary", icon: "glossary", label: "용어 설명" }
+          { id: "guide", icon: "guide", label: "이용 안내" }
         ].map((item) => (
           <button
             key={item.id}

@@ -6,8 +6,18 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import get_current_admin
+from backend.app.clients.crawler_client import (
+    CrawlerJobFailedError,
+)
+from backend.app.clients.http_json import (
+    InternalServiceConfigurationError,
+    InternalServiceHTTPError,
+    InternalServiceResponseError,
+    InternalServiceUnavailableError,
+)
 from backend.app.db.session import get_db
 from backend.app.schemas.admin import (
+    ActionAcceptedResponse,
     AdminAnnouncementDetail,
     AdminAnnouncementListResponse,
     AdminDocumentDetail,
@@ -15,11 +25,9 @@ from backend.app.schemas.admin import (
     AdminErrorDetail,
     AdminErrorListResponse,
     AdminProcessingRunListResponse,
-    ActionAcceptedResponse,
     ErrorStatusUpdateRequest,
 )
 from backend.app.services.admin_service import (
-    ErrorStatusPersistenceUnavailable,
     get_admin_announcement,
     get_admin_document,
     get_admin_error,
@@ -31,11 +39,17 @@ from backend.app.services.admin_service import (
     update_error_status,
 )
 from backend.app.services.pipeline_gateway import (
+    CollectionAlreadyRunningError,
     PipelineUnavailableError,
     collect_announcements,
     recollect_announcement,
     reprocess_document,
     retry_error,
+)
+from backend.app.services.error_retry_service import (
+    ErrorRetryConflictError,
+    ErrorRetryExecutionError,
+    ErrorRetryNotSupportedError,
 )
 
 router = APIRouter(
@@ -43,6 +57,45 @@ router = APIRouter(
     tags=["Admin"],
     dependencies=[Depends(get_current_admin)],
 )
+
+
+def _raise_crawler_api_error(error: Exception) -> None:
+    if isinstance(error, InternalServiceHTTPError):
+        status_code = (
+            status.HTTP_409_CONFLICT
+            if error.status_code == 409
+            else status.HTTP_502_BAD_GATEWAY
+        )
+        error_code = error.error_code
+        message = error.message
+    elif isinstance(error, CrawlerJobFailedError):
+        status_code = status.HTTP_502_BAD_GATEWAY
+        error_code = error.error_code
+        message = error.message
+    elif isinstance(
+        error,
+        (
+            InternalServiceConfigurationError,
+            InternalServiceUnavailableError,
+        ),
+    ):
+        status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        error_code = "CRAWLER_SERVICE_UNAVAILABLE"
+        message = str(error)
+    elif isinstance(error, InternalServiceResponseError):
+        status_code = status.HTTP_502_BAD_GATEWAY
+        error_code = "CRAWLER_RESPONSE_INVALID"
+        message = str(error)
+    else:
+        raise error
+
+    raise HTTPException(
+        status_code=status_code,
+        detail={
+            "error_code": error_code,
+            "message": message,
+        },
+    ) from error
 
 
 @router.get(
@@ -108,8 +161,25 @@ def admin_announcement_detail(
 def run_collection():
     try:
         result = collect_announcements()
+    except CollectionAlreadyRunningError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except PipelineUnavailableError as exc:
         raise HTTPException(503, str(exc)) from exc
+    except (
+        CrawlerJobFailedError,
+        InternalServiceConfigurationError,
+        InternalServiceHTTPError,
+        InternalServiceResponseError,
+        InternalServiceUnavailableError,
+    ) as exc:
+        _raise_crawler_api_error(exc)
+
+    if result.get("status") == "failed":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="공고 수집에 실패했습니다.",
+        )
+
     return ActionAcceptedResponse(
         accepted=True,
         message="공고 수집 실행 요청을 전달했습니다.",
@@ -127,6 +197,14 @@ def run_recollection(announcement_id: int):
         result = recollect_announcement(announcement_id)
     except PipelineUnavailableError as exc:
         raise HTTPException(503, str(exc)) from exc
+    except (
+        CrawlerJobFailedError,
+        InternalServiceConfigurationError,
+        InternalServiceHTTPError,
+        InternalServiceResponseError,
+        InternalServiceUnavailableError,
+    ) as exc:
+        _raise_crawler_api_error(exc)
     return ActionAcceptedResponse(
         accepted=True,
         message="공고 재수집 요청을 전달했습니다.",
@@ -275,7 +353,7 @@ def admin_errors(
     response_model=AdminErrorDetail,
 )
 def admin_error_detail(
-    error_id: str,
+    error_id: int,
     db: Session = Depends(get_db),
 ):
     try:
@@ -293,22 +371,27 @@ def admin_error_detail(
     response_model=AdminErrorDetail,
 )
 def change_error_status(
-    error_id: str,
+    error_id: int,
     payload: ErrorStatusUpdateRequest,
     db: Session = Depends(get_db),
 ):
     try:
-        return update_error_status(
+        result = update_error_status(
             db=db,
             error_id=error_id,
             status_value=payload.status,
             resolution=payload.resolution,
         )
-    except ErrorStatusPersistenceUnavailable as exc:
+    except SQLAlchemyError as exc:
+        db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=str(exc),
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="오류 상태를 변경하지 못했습니다.",
         ) from exc
+
+    if result is None:
+        raise HTTPException(404, "오류를 찾을 수 없습니다.")
+    return result
 
 
 @router.post(
@@ -317,7 +400,7 @@ def change_error_status(
     status_code=status.HTTP_201_CREATED,
 )
 def run_error_retry(
-    error_id: str,
+    error_id: int,
     db: Session = Depends(get_db),
 ):
     try:
@@ -329,16 +412,35 @@ def run_error_retry(
         raise HTTPException(404, "오류를 찾을 수 없습니다.")
 
     try:
-        result = retry_error(
-            error_id=error_id,
-            document_id=error.document_id,
-            stage=error.stage,
-        )
+        result = retry_error(error_id=error_id)
+    except ErrorRetryConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ErrorRetryNotSupportedError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ErrorRetryExecutionError as exc:
+        raise HTTPException(
+            502,
+            {
+                "message": str(exc),
+                "result": exc.result,
+            },
+        ) from exc
     except PipelineUnavailableError as exc:
         raise HTTPException(503, str(exc)) from exc
+    except (
+        CrawlerJobFailedError,
+        InternalServiceConfigurationError,
+        InternalServiceHTTPError,
+        InternalServiceResponseError,
+        InternalServiceUnavailableError,
+    ) as exc:
+        _raise_crawler_api_error(exc)
 
     return ActionAcceptedResponse(
         accepted=True,
-        message=f"{error.stage or '처음'} 단계부터 재처리 요청을 전달했습니다.",
+        message=(
+            f"해당 공고의 {error.stage or '처음'} 단계 "
+            "재시도를 완료했습니다."
+        ),
         reference=result,
     )

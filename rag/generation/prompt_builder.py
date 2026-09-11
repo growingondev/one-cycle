@@ -1,42 +1,135 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import Any
+
 from .context_builder import render_context_block
+from .intent_router import classify_intents
 from .models import PromptPayload, SourceContext
 
 
-LH_SYSTEM_PROMPT = """
-당신은 한국토지주택공사(LH)의 입주자모집공고 및 주택공급 관련 문서를
-안내하는 공고문 기반 질의응답 도우미입니다.
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
-반드시 아래 규칙을 지키세요.
 
-1. 답변은 제공된 선택 공고의 근거만 사용합니다.
-2. LH 일반 제도, 다른 공고, 인터넷 정보, 상식 또는 추측으로 내용을 보완하지 않습니다.
-3. 제공된 근거만으로 답할 수 없으면
-   "제공된 LH 공고문에서 확인할 수 없습니다."라고 답합니다.
-4. 금액, 날짜, 시간, 주택형, 면적, 공급 세대수, 비율, 자격 기준,
-   소득·자산 기준, 계약 조건을 임의로 바꾸거나 생략하지 않습니다.
-5. 신청 자격, 공급 유형, 주택형 또는 대상자별 조건이 다르면 구분하여 설명합니다.
-6. 표에서 가져온 정보는 행과 열의 대응 관계를 유지하며,
-   다른 주택형이나 공급 유형의 값을 섞지 않습니다.
-7. 공고문 안에서 조건이나 수치가 서로 충돌하는 경우
-   임의로 하나를 선택하지 말고 해당 사실을 설명합니다.
-8. 법률·정책 해석이나 최종 자격 판정을 임의로 하지 않습니다.
-9. 질문과 직접 관련된 내용을 우선하여 자연스럽고 간결한 한국어로 답합니다.
-9-1. 답변은 반드시 한국어로만 작성합니다.
-9-2. 중국어, 일본어 또는 다른 언어의 문장이나 설명을 포함하지 않습니다.
-9-3. 원문에 외국어 표현이 있더라도 필요한 정보는 자연스러운 한국어로 설명합니다.
+def _load_json(path: Path) -> dict[str, Any]:
+    """
+    JSON 프롬프트 파일을 읽는다.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"프롬프트 파일을 찾을 수 없습니다: {path}")
 
-10. 답변 본문에는 근거 번호나 출처 번호를 절대 표시하지 않습니다.
-11. "[근거 1]", "[근거 2]", "근거 1", "근거 2", "[출처 1]" 등의
-    표기를 답변에 포함하지 않습니다.
-12. 근거는 시스템 내부에서 답변 생성에만 활용하며,
-    사용자가 읽는 답변 문장에는 노출하지 않습니다.
-13. 청크 ID, 검색 점수, Reranker 점수, 문서 내부 ID 등
-    내부 검색 정보도 답변에 포함하지 않습니다.
-14. 답변 뒤에 별도의 "근거", "출처", "참고자료" 영역을 작성하지 않습니다.
-15. 답변 내용만 출력합니다.
-""".strip()
+    with path.open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def _render_rules(
+    title: str,
+    rules: list[str],
+) -> str:
+    """
+    JSON의 rules 배열을 LLM이 읽을 수 있는 프롬프트 문자열로 변환한다.
+    """
+    lines = [f"[{title}]"]
+
+    for index, rule in enumerate(rules, start=1):
+        lines.append(f"{index}. {rule}")
+
+    return "\n".join(lines)
+
+
+def _build_core_prompt(core_config: dict[str, Any]) -> str:
+    """
+    core.json의 grounding / accuracy / output 규칙을 문자열로 조립한다.
+    """
+    rules = core_config.get("rules", {})
+
+    sections = [
+        _render_rules(
+            "근거 사용",
+            rules.get("grounding", []),
+        ),
+        _render_rules(
+            "정보 정확성",
+            rules.get("accuracy", []),
+        ),
+        _render_rules(
+            "출력 제한",
+            rules.get("output", []),
+        ),
+    ]
+
+    return "\n\n".join(sections)
+
+
+def _build_domain_prompt(domain_config: dict[str, Any]) -> str:
+    """
+    현재 서비스 도메인 규칙을 문자열로 조립한다.
+    """
+    organization = domain_config.get("organization", "")
+    document_scope = domain_config.get("document_scope", [])
+    rules = domain_config.get("rules", [])
+
+    scope_text = ", ".join(document_scope)
+
+    sections = [
+        "[도메인]",
+        f"기관: {organization}",
+        f"대상 문서: {scope_text}",
+    ]
+
+    if rules:
+        sections.append("")
+        sections.append(_render_rules("도메인 규칙", rules))
+
+    return "\n".join(sections)
+
+
+def _build_persona_prompt(persona_config: dict[str, Any]) -> str:
+    """
+    사용자 Persona에 따른 답변 방식을 문자열로 조립한다.
+    """
+    description = persona_config.get("description", "")
+    rules = persona_config.get("rules", [])
+
+    sections = [
+        "[역할 및 답변 방식]",
+        f"당신은 {description}를 대상으로 문서 내용을 안내하는 질의응답 도우미입니다.",
+    ]
+
+    if rules:
+        sections.append("")
+        sections.append(_render_rules("답변 방식", rules))
+
+    return "\n".join(sections)
+
+
+def _build_intent_prompt(intents: list[str]) -> str:
+    """
+    분류된 Intent에 해당하는 JSON 파일을 읽어
+    질문 유형별 지침을 조립한다.
+    """
+    sections: list[str] = []
+
+    for intent in intents:
+        intent_path = PROMPTS_DIR / "intents" / f"{intent}.json"
+        intent_config = _load_json(intent_path)
+
+        description = intent_config.get("description", "")
+        rules = intent_config.get("rules", [])
+
+        intent_lines = [
+            f"[질문 유형: {intent}]",
+            description,
+        ]
+
+        if rules:
+            intent_lines.append("")
+            intent_lines.append(_render_rules("질문 유형별 규칙", rules))
+
+        sections.append("\n".join(intent_lines))
+
+    return "\n\n".join(sections)
 
 
 def build_prompt(
@@ -51,9 +144,42 @@ def build_prompt(
     if not query:
         raise ValueError("사용자 질문이 비어 있습니다.")
 
+    # 1. 질문 Intent 분류
+    intents = classify_intents(query)
+
+    # 2. JSON 프롬프트 로드
+    core_config = _load_json(
+        PROMPTS_DIR / "core.json"
+    )
+
+    domain_config = _load_json(
+        PROMPTS_DIR / "domains" / "lh.json"
+    )
+
+    persona_config = _load_json(
+        PROMPTS_DIR / "personas" / "public_user.json"
+    )
+
+    # 3. System Prompt 조립
+    system_prompt = "\n\n".join(
+        [
+            _build_domain_prompt(domain_config),
+            _build_persona_prompt(persona_config),
+            _build_core_prompt(core_config),
+        ]
+    ).strip()
+
+    # 4. Intent Prompt 조립
+    intent_prompt = _build_intent_prompt(intents)
+
+    # 5. Retrieval Context 생성
     context_block = render_context_block(sources)
 
+    # 6. User Prompt 조립
     user_prompt = f"""
+[질문 유형별 지침]
+{intent_prompt}
+
 [선택한 LH 공고]
 {announcement_directory}
 
@@ -65,20 +191,10 @@ def build_prompt(
 
 [LH 공고문 근거]
 {context_block}
-
-위 LH 공고문 근거만 사용하여 질문에 답하세요.
-근거에서 확인할 수 없는 내용은 추측하지 마세요.
-
-사용자에게 보여줄 답변에는 근거 번호를 표시하지 마세요.
-"[근거 1]", "[근거 2]", "근거 1:", "출처 1" 등의 문구를
-답변에 절대 포함하지 마세요.
-
-근거 정보는 시스템에서 별도로 처리하므로,
-여기서는 사용자의 질문에 대한 자연스러운 답변 내용만 출력하세요.
 """.strip()
 
     return PromptPayload(
-        system_prompt=LH_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         user_prompt=user_prompt,
         query=query,
         announcement_directory=announcement_directory,

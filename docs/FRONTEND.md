@@ -1,1603 +1,2057 @@
-# DDOKBOT Frontend
+# Frontend 개발 문서
 
-> 이 문서는 DDOKBOT의 사용자 Frontend와 관리자 Frontend 구조를 설명합니다.
->
-> 새로운 개발자 또는 AI가 다음 내용을 이해할 수 있도록 작성되었습니다.
->
-> - 사용자 Frontend가 어디에 있는지
-> - React/Vite가 어떻게 실행되는지
-> - `/api` 요청이 Backend로 어떻게 전달되는지
-> - 공고 목록/상세/채팅 화면이 어느 파일에 있는지
-> - 관리자 Frontend는 어떤 방식으로 실행되는지
-> - Frontend 문제가 발생했을 때 어느 계층부터 확인해야 하는지
-> - AWS 서버의 Frontend를 로컬 Browser에서 어떻게 확인하는지
+이 문서는 프로젝트의 Frontend 담당자가 구현한 기능과 화면 구조,
+Backend와의 연결 방식, 데이터 흐름, 현재 구현 상태 및 향후 분리 시
+고려사항을 정리한 문서입니다.
 
----
+이 문서의 목적은 특정 개발자만 프로젝트를 이해할 수 있는 상태를
+방지하고, 새로운 팀원이 프로젝트에 합류했을 때 "이 화면이 왜 존재하고,
+어떤 데이터를 받아서, 어떤 방식으로 화면에 표시하는지"를 빠르게 이해할
+수 있도록 하는 것입니다.
 
-# 1. Frontend 전체 구조
+## 1. 담당 파트 개요
 
-DDOKBOT Frontend는 두 개의 UI로 나뉩니다.
+### 1.1 Frontend의 역할
 
-```text
-frontend/
-├── user/
-└── admin/
+이 프로젝트의 Frontend는 사용자가 공공임대주택 및 청약 관련 정보를 쉽고
+직관적으로 확인할 수 있도록 사용자 화면과 관리자 화면을 제공하는 역할을
+담당한다.
+
+Frontend에서 담당하는 주요 영역은 다음과 같다.
+
+-   공고 목록 화면
+-   공고 상세 화면
+-   AI 챗봇 화면
+-   챗봇 답변 및 근거 정보 표시
+-   핵심 정보 요약 카드 표시
+-   청약 용어 사전 화면
+-   관리자 용어 사전 관리 화면
+-   Backend API와의 데이터 통신
+-   사용자 입력 및 화면 상태 관리
+-   API 응답 데이터의 화면 표시
+-   로딩 / 오류 / 검색 결과 없음 등의 UI 상태 처리
+-   반응형 UI 및 화면 레이아웃 관리
+
+Frontend는 문서 원본을 직접 파싱하거나 AI 답변을 생성하지 않는다.
+
+전체적으로 다음과 같은 역할 분리를 전제로 한다.
+
+``` text
+Frontend
+    │
+    │ HTTP API
+    ▼
+Backend
+    │
+    ├── 공고 데이터
+    ├── 핵심정보
+    ├── 챗봇/RAG
+    ├── 용어사전
+    └── 기타 데이터 처리
 ```
 
-역할:
+즉 Frontend의 기본 책임은 Backend가 제공하는 데이터를 사용자에게
+이해하기 쉬운 형태로 표현하는 것이다.
 
-```text
-frontend/user/
-→ 일반 사용자 서비스
+## 2. 프로젝트에서 Frontend가 담당하는 기능
 
-frontend/admin/
-→ 관리자 서비스
-```
+### 2.1 사용자 서비스
 
-두 Frontend는 구현 방식이 서로 다릅니다.
+현재 사용자 서비스에서 Frontend가 담당하는 주요 기능은 다음과 같다.
 
----
+**공고 목록**
 
-# 2. User Frontend Stack
+사용자가 등록된 공공주택/청약 공고를 목록 형태로 확인할 수 있다.
 
-경로:
+**주요 표시 정보 예:**
 
-```text
-frontend/user/
-```
+-   공고명
+-   공고 유형
+-   지역
+-   신청기간
+-   마감일
+-   기타 공고 메타데이터
 
-현재 기술:
+**최근 수정 사항:**
 
-```text
-React
-TypeScript
-Vite
-Tailwind CSS
-```
+공고 목록 데이터가 한 칸씩 밀리는 현상 수정
 
-Package 관리:
+공고 마감일의 T10:00과 같은 ISO datetime 문자열이 사용자 화면에 그대로
+표시되지 않도록 수정
 
-```text
-frontend/user/package.json
-frontend/user/package-lock.json
-```
+공고문 원본 파일 다운로드 기능 추가
 
----
+**관련 작업 커밋:**
 
-# 3. User Frontend 기본 구조
+-   `f33632a`
+    -   fix: 공고 목록 메타데이터 한칸씩 밀림현상 수정
 
-```text
-frontend/user/
-├── index.html
-├── package.json
-├── package-lock.json
-├── postcss.config.js
-├── tailwind.config.js
-├── tsconfig.json
-├── vite.config.ts
+fix: 공고목록 밀림현상 재수정
+
+-   `b25706e`
+    -   feat: 공고문 원본 파일 다운로드 기능 추가,
+    -   공고 마감일 시간(T10:00)텍스트 제거,
+    -   사용자페이지 좌측 '용어 설명' 메뉴 삭제 및 네비게이션 비율 조정
+        \## 3. 공고 상세 화면
+
+공고 목록에서 특정 공고를 선택하면 상세 화면으로 이동한다.
+
+상세 화면에서는 Backend에서 제공하는 공고 데이터를 기반으로 다음과 같은
+정보를 표시한다.
+
+``` text
+공고 상세
 │
-├── public/
-│   └── image.png
+├── 공고 기본 정보
+├── 핵심 정보 요약
+│   ├── 신청 일정
+│   ├── 공급 위치
+│   ├── 공급 내용
+│   ├── 신청 자격
+│   ├── 소득/자산
+│   ├── 제출 서류
+│   └── 당첨자 발표
 │
-└── src/
-    ├── App.tsx
-    ├── config.ts
-    ├── index.css
-    ├── main.tsx
-    └── components/
-        └── screens/
+├── 상세 공고 내용
+│
+├── 원문 근거 보기
+│
+└── 공고문 원본 파일 다운로드
 ```
 
-실제 화면별 Component는:
+중요한 점은 Frontend가 핵심 정보를 직접 추출하는 것이 아니라 Backend가
+제공한 데이터를 표시한다는 것이다.
 
-```text
-frontend/user/src/components/screens/
+## 4. 핵심 정보 카드
+
+### 4.1 기능 목적
+
+공고문은 일반적으로 내용이 길고 복잡하다.
+
+따라서 사용자가 공고문 전체를 읽지 않아도 가장 먼저 확인해야 할 정보를
+빠르게 파악할 수 있도록 핵심 정보 카드를 제공한다.
+
+**예:**
+
+핵심 정보 요약
+
+신청 일정
+
+2026-09-14 \~ 2026-09-18
+
+공급 위치
+
+전남광주통합특별시 순천시
+
+공급 내용
+
+...
+
+신청 자격
+
+...
+
+소득/자산
+
+...
+
+제출 서류
+
+...
+
+당첨자 발표
+
+2027-02-19
+
+## 5. 핵심 정보 데이터 흐름
+
+핵심 정보는 Frontend에서 문서를 분석하여 생성하지 않는다.
+
+전체적인 데이터 흐름은 다음과 같다.
+
+``` text
+LH 공고문
+   │
+   ▼
+문서 파싱
+   │
+   ▼
+Structure 생성
+   │
+   ▼
 ```
 
-에 위치합니다.
+핵심정보 추출
 
----
+key_information_extractor.py
 
-# 4. User Frontend Entry
-
-React Entry:
-
-```text
-frontend/user/src/main.tsx
+``` text
+   │
+   ▼
+Backend / DB
+   │
+   ▼
+상세 공고 API
+   │
+   ▼
 ```
-
-Application Root Component:
-
-```text
-frontend/user/src/App.tsx
-```
-
-개념:
-
-```text
-index.html
-   ↓
-main.tsx
-   ↓
-App.tsx
-   ↓
-각 Screen Component
-```
-
----
-
-# 5. App.tsx
-
-파일:
-
-```text
-frontend/user/src/App.tsx
-```
-
-역할:
-
-```text
-전체 Screen 전환
-선택된 공고 상태 관리
-Toast 관리
-상위 UI Flow 관리
-```
-
-현재 주요 Screen 개념:
-
-```text
-intro
-list
-detail
-guide
-glossary
-```
-
-Admin UI는 별도 `frontend/admin/` 프로젝트이므로
-사용자 React UI에 관리자 기능을 다시 구현하지 않습니다.
-
----
-
-# 6. Frontend API 설정
-
-User Frontend의 API Base 설정:
-
-```text
-frontend/user/src/config.ts
-```
-
-현재:
-
-```typescript
-export const API_BASE_URL = "/api";
-```
-
-이 파일을 API Base URL의 단일 Source of Truth로 사용합니다.
-
-즉 다른 Component에 다음처럼 Backend 주소를 직접 하드코딩하지 않습니다.
-
-```text
-http://127.0.0.1:8000
-```
-
-또는:
-
-```text
-http://AWS_PUBLIC_IP:8000
-```
-
-대신:
-
-```text
-/api
-```
-
-를 사용합니다.
-
----
-
-# 7. API Base를 하나로 관리하는 이유
-
-잘못된 구조:
-
-```text
-ListScreen.tsx
-→ http://127.0.0.1:8000/api
 
 DetailScreen.tsx
-→ http://52.xxx.xxx.xxx:8000/api
 
-다른 Component
-→ /api
+``` text
+   │
+   ▼
 ```
 
-이런 식으로 분산되면 환경이 바뀔 때 전체 코드를 수정해야 합니다.
+핵심 정보 카드
 
-현재 권장 구조:
+현재 확인된 key_information_extractor.py에서는 다음 7개 필드를
+추출하도록 되어 있다.
 
-```text
-src/config.ts
+-   `application_period`
+-   `eligibility`
+-   `supply_information`
+-   `income_asset_criteria`
+-   `required_documents`
+-   `winner_announcement`
+-   `contact_information`
+
+따라서 Frontend에서 핵심 정보 카드의 정확도를 높이기 위해서는 화면에서
+문자열을 임의로 잘라내는 방식보다 Backend/문서 구조화 단계에서 올바른
+데이터가 만들어지는 것이 우선이다.
+
+## 6. 핵심 정보 오류 사례
+
+현재 발견된 대표적인 문제는 공급 내용에 공급 정보가 아닌 다음과 같은
+내용이 들어오는 현상이다.
+
+민감정보 수집 및 이용 동의 거부의 권리...
+
+이 데이터는 Frontend에서 생성한 것이 아니다.
+
+따라서 단순히 Frontend 코드를 수정해서 해결하는 것은 근본적인 해결
+방법이 아니다.
+
+현재 구조상 다음과 같이 접근해야 한다.
+
+``` text
+문서 원문
+ ↓
+문서 파싱
+ ↓
+Structure
+ ↓
+```
+
+Section 분류
+
+``` text
+ ↓
+Key Information Extraction
+ ↓
+DB
+ ↓
+Backend API
+ ↓
+Frontend
+```
+
+잘못된 정보가 DB/API까지 잘못 들어온다면 Frontend는 그것을 그대로
+표시하게 된다.
+
+## 7. 핵심 정보 정확도 개선 방향
+
+현재 key_information_extractor.py는 Structure의 domain.category,
+domain.topic을 우선 사용하고 이후 keyword를 fallback으로 사용하는
+구조이다.
+
+즉 다음과 같은 우선순위이다.
+
+1순위
+
+Structure domain.topic
+
+``` text
+        ↓ 실패
+```
+
+2순위
+
+Structure domain.category
+
+``` text
+        ↓ 부족
+```
+
+3순위
+
+Section title / 본문 keyword
+
+이 구조는 방향 자체는 적절하다.
+
+다만 단순 keyword 매칭만으로는 다음과 같은 문제가 발생할 수 있다.
+
+-   공급 대상
+-   공급 내용
+-   신청 자격
+-   소득 기준
+-   개인정보 동의
+-   제출 서류
+
+처럼 서로 다른 Section이 비슷한 단어를 가지고 있기 때문이다.
+
+따라서 정확도를 높일 때는 Frontend가 아니라 Structure 및 Extraction
+단계의 Section 범위와 분류 정확도를 개선하는 것이 우선이다.
+
+## 8. Frontend에서 해야 할 핵심 정보 관련 작업
+
+Frontend에서는 Backend에서 전달받는 데이터가 정확하다는 전제하에 다음을
+담당한다.
+
+-   해야 하는 것
+-   API 응답을 정확하게 화면에 매핑
+-   값이 없는 경우 적절한 fallback
+-   너무 긴 데이터의 UI 표시 방식 결정
+-   핵심 정보 카드의 가독성 개선
+-   데이터 타입에 맞는 UI 표시
+-   날짜 표시 형식 정리
+-   긴 텍스트의 줄바꿈 및 말줄임
+-   잘못된 데이터가 들어왔을 때 UI가 깨지지 않도록 방어
+-   하지 말아야 하는 것
+
+Frontend에서 다음과 같은 방식으로 공고문을 다시 분석하는 것은 지양한다.
+
+-   "개인정보"가 들어있으면 삭제
+-   "공급"이라는 단어가 있으면 공급정보로 판단
+-   문자열 길이가 길면 잘라서 사용
+
+이런 처리는 데이터의 근본적인 문제를 숨기는 임시방편이 될 수 있다.
+
+## 9. 원문 근거 보기
+
+### 9.1 기능 목적
+
+AI 챗봇이 답변을 생성했을 때 사용자가
+
+"이 답변을 어디에서 가져온 거지?"
+
+라는 의문을 가질 수 있다.
+
+이를 해결하기 위해 챗봇 답변 하단에
+
+원문 근거 보기
+
+버튼을 제공한다.
+
+사용자가 버튼을 누르면 AI 답변을 생성하는 데 사용된 근거 데이터를 확인할
+수 있다.
+
+## 10. 현재 원문 근거 보기의 구조
+
+현재는 실제 PDF/HWP 원문을 그대로 화면에 표시하는 방식이 아니라 문서
+파싱 과정에서 생성된 텍스트 청크를 근거로 표시하는 방식이다.
+
+**현재 구조:**
+
+``` text
+사용자 질문
       ↓
-API_BASE_URL
+Backend / RAG
       ↓
-모든 API Component
-```
-
----
-
-# 8. Vite Proxy
-
-파일:
-
-```text
-frontend/user/vite.config.ts
-```
-
-User Frontend Browser는 Backend에 직접 연결하지 않고
-Vite 개발 서버의 `/api`를 사용합니다.
-
-개념:
-
-```text
-Browser
-   ↓
-http://127.0.0.1:5173
-   ↓
-/api/*
-   ↓
-Vite Proxy
-   ↓
-http://127.0.0.1:8000/api/*
-   ↓
-FastAPI
-```
-
-따라서 개발 환경에서는 Browser 입장에서 Frontend와 API가 같은 Origin처럼 보이게 할 수 있습니다.
-
-실제 Proxy 설정 값의 최종 기준은:
-
-```text
-frontend/user/vite.config.ts
-```
-
-입니다.
-
----
-
-# 9. User Frontend 실행
-
-AWS 서버에서:
-
-```bash
-cd /home/ubuntu/ddokbot/one-cycle/frontend/user
-
-npm run dev
-```
-
-`package.json`의 현재 개발 Script:
-
-```text
-vite --host 0.0.0.0
-```
-
-일반적인 Vite 개발 Port:
-
-```text
-5173
-```
-
-실제 실행 시 Terminal에 출력되는 URL을 최종 기준으로 확인합니다.
-
----
-
-# 10. User Frontend Production Build
-
-Frontend 코드 변경 후 반드시 Build를 확인합니다.
-
-```bash
-cd /home/ubuntu/ddokbot/one-cycle/frontend/user
-
-npm run build
-```
-
-정상 예:
-
-```text
-vite building...
-modules transformed
-dist/index.html
-dist/assets/...
-✓ built
-```
-
-현재 프로젝트 정리 후 User Frontend Production Build 성공이 확인되었습니다.
-
----
-
-# 11. Build Output
-
-Production Build 결과:
-
-```text
-frontend/user/dist/
-```
-
-이 디렉터리는 Source Code가 아니라 Build Artifact입니다.
-
-Source of Truth:
-
-```text
-frontend/user/src/
-```
-
-입니다.
-
----
-
-# 12. 공고 목록 화면
-
-파일:
-
-```text
-frontend/user/src/components/screens/ListScreen.tsx
-```
-
-역할:
-
-```text
-공고 목록 조회
 검색
-지역 필터
-상태 필터
-정렬
-Pagination
-공고 선택
+      ↓
+관련 Chunk
+      ↓
+LLM
+      ↓
+AI 답변
+      ↓
+근거 Chunk
+      ↓
+Frontend
+      ↓
 ```
 
-Backend API:
+원문 근거 보기
 
-```text
-GET /api/announcements
+따라서 현재의 "원문 근거"는 엄밀히 말하면 원본 문서 그 자체가 아니라
+파싱된 텍스트 데이터의 근거 영역이다.
+
+## 11. 원문 근거 보기 개선 방향
+
+멘토링에서 지적된 주요 개선사항은 다음과 같다.
+
+**현재:**
+
+**\[원문 근거 보기\]**
+
+공고문에서 파싱된 긴 텍스트 청크 전체
+
+...
+
+...
+
+...
+
+...
+
+**개선 방향:**
+
+**\[원문 근거 보기\]**
+
+신청기간
+
+2026.09.14 \~ 2026.09.18
+
+신청대상
+
+공고일 현재 무주택세대구성원...
+
+소득기준
+
+가구원수에 따른 월평균소득 기준...
+
+즉 근거 데이터 전체를 그대로 보여주는 것이 아니라 답변과 직접 관련된
+핵심 부분을 보여주는 방향이 적절하다.
+
+## 12. 향후 원문 근거 개선 시 중요한 부분
+
+단순히 Chunk를 짧게 자르는 것보다 다음 구조가 더 좋다.
+
+``` text
+사용자 질문
+      ↓
+검색된 Chunk
+      ↓
+답변에 실제 사용된 정보
+      ↓
+Evidence
+      ├── source
+      ├── section
+      ├── text
+      └── relevance
+      ↓
+Frontend
 ```
 
-호출 구조:
+가능하다면 Backend에서 다음과 같은 형태의 데이터를 제공하는 것이 좋다.
 
-```text
-ListScreen.tsx
-       ↓
-API_BASE_URL
-       ↓
-/api/announcements
-       ↓
-Vite Proxy
-       ↓
-FastAPI
-```
-
----
-
-# 13. ListScreen API 코드 구조
-
-개념:
-
-```typescript
-fetch(`${API_BASE_URL}/announcements`)
-```
-
-응답 성공 후:
-
-```text
-data.items
-```
-
-를 공고 목록으로 사용합니다.
-
-따라서 목록이 안 보일 때:
-
-```text
-Frontend Rendering 문제
-```
-
-라고 바로 판단하지 않습니다.
-
-먼저 API Response를 확인합니다.
-
----
-
-# 14. 공고 목록 문제 진단
-
-순서:
-
-```text
-1. Backend가 실행 중인가?
-2. GET /api/announcements가 curl에서 정상인가?
-3. Vite Proxy가 정상인가?
-4. Browser Network에서 요청이 성공하는가?
-5. data.items가 존재하는가?
-6. ListScreen 렌더링이 정상인가?
-```
-
-Backend 직접 확인:
-
-```bash
-curl -i \
-http://127.0.0.1:8000/api/announcements
-```
-
----
-
-# 15. ListScreen 관련 주의사항
-
-이전에 다음 오타가 존재했습니다.
-
-```text
-API_BASE_UR
-```
-
-정상 값:
-
-```text
-API_BASE_URL
-```
-
-현재 수정 후 Frontend Build 성공이 확인되었습니다.
-
-API 관련 변수명을 변경할 경우 TypeScript Build를 반드시 실행합니다.
-
----
-
-# 16. 공고 상세 화면
-
-파일:
-
-```text
-frontend/user/src/components/screens/DetailScreen.tsx
-```
-
-역할:
-
-```text
-선택 공고 상세 조회
-공고 정보 표시
-Chat UI
-Evidence 표시
-입력 관리
-사용자/AI 메시지 관리
-```
-
----
-
-# 17. 공고 상세 API
-
-DetailScreen에서:
-
-```text
-GET /api/announcements/{id}
-```
-
-를 호출합니다.
-
-개념:
-
-```typescript
-fetch(
-  `${API_BASE_URL}/announcements/${notice.id}`
-)
-```
-
-전체 흐름:
-
-```text
-ListScreen
-    ↓
-사용자가 공고 선택
-    ↓
-App
-    ↓
-DetailScreen
-    ↓
-GET /api/announcements/{id}
-    ↓
-FastAPI
-```
-
----
-
-# 18. Chat UI
-
-Chat 역시:
-
-```text
-DetailScreen.tsx
-```
-
-에서 처리합니다.
-
-사용자가 질문 입력:
-
-```text
-신청 일정은 언제인가?
-```
-
-전송:
-
-```text
-POST /api/chat
-```
-
-Request:
-
-```json
+``` json
 {
-  "announcementId": 1,
-  "question": "신청 일정은 언제인가?"
+"text": "신청기간은 2026년 9월 14일부터 9월 18일까지입니다.",
+"source": {
+"section": "신청일정"
+}
 }
 ```
 
----
+Frontend는 이 데이터를 받아서 UI로 표현한다.
 
-# 19. Chat Frontend Flow
+## 13. 챗봇
 
-```text
-사용자 입력
+챗봇은 사용자가 공공임대/청약 공고에 대해 질문하면 Backend의 AI/RAG
+시스템에서 생성한 답변을 화면에 표시하는 기능이다.
+
+Frontend의 책임은 다음과 같다.
+
+``` text
+사용자 질문 입력
+        ↓
+Backend API 요청
+        ↓
+```
+
+응답 대기
+
+``` text
+        ↓
+AI 답변 표시
+        ↓
+```
+
+근거 정보 표시
+
+**Frontend가 직접 담당하지 않는 영역:**
+
+-   문서 파싱
+-   Chunking
+-   Embedding
+-   Vector Search
+-   Retrieval
+-   LLM 추론
+
+이 부분들은 Backend/AI 파트의 책임이다.
+
+## 14. 청약 용어 설명 기능
+
+### 14.1 기존 기능
+
+기존에는 좌측 메뉴에 별도의
+
+용어 설명
+
+메뉴가 존재했고, 사용자가 해당 메뉴로 들어가면 청약 관련 용어를
+카테고리별로 확인할 수 있었다.
+
+현재 UI에서는 해당 좌측 메뉴를 제거하고, 향후 챗봇 답변 내부에서 어려운
+용어를 바로 설명하는 방향으로 개선 중이다.
+
+## 15. 용어 설명 기능 개선 방향
+
+멘토링에서 제안된 기능은 다음과 같다.
+
+**AI 답변:**
+
+신청자는 무주택세대구성원이어야 합니다.
+
+여기서
+
+무주택세대구성원
+
+이라는 단어를 파란색 또는 밑줄 등으로 표시하고 마우스를 올리면 간단한
+설명을 표시한다.
+
+**예:**
+
+무주택세대구성원
+
+``` text
+────────────────
+```
+
+세대원 전원이 주택을 소유하지 않은
+
+세대의 구성원을 의미합니다.
+
+목표는 사용자가 챗봇 답변을 읽다가 모르는 용어가 나왔을 때 별도의
+검색이나 메뉴 이동 없이 바로 이해할 수 있도록 하는 것이다.
+
+## 16. 용어사전 데이터 흐름
+
+현재 용어사전 데이터는 Backend에서 관리하는 방향으로 진행 중이다.
+
+**전체 구조:**
+
+관리자
+
+``` text
+ ↓
+관리자 용어사전 화면
+ ↓
+Backend API
+ ↓
+용어사전 DB
+```
+
+사용자에게 제공되는 용어 설명은 향후 다음과 같이 연결된다.
+
+``` text
+용어사전 DB
+      ↓
+Backend API
+      ↓
+```
+
+Chatbot Response
+
+``` text
+      ↓
+용어 인식
+      ↓
+Tooltip
+      ↓
+사용자
+```
+
+## 17. 현재 용어사전 Frontend 상태
+
+현재 공유된 GlossaryScreen.tsx에서는 임시 데이터가 사용되고 있다.
+
+**예:**
+
+``` tsx
+const glossaryDummyData = [
+  {
+    category: "청약/자격",
+    term: "무주택 세대구성원",
+    desc: "..."
+  }
+```
+
+\]
+
+따라서 현재 코드의 용어사전 화면은 UI 및 검색/카테고리 인터랙션을
+확인하기 위한 Dummy Data 기반 구현으로 볼 수 있다.
+
+**현재 구현된 상태 관리:**
+
+``` tsx
+const [query, setQuery] = useState("");
+const [activeTab, setActiveTab] = useState("전체");
+```
+
+검색은 용어명과 설명을 대상으로 수행하며 카테고리 필터도 함께 적용한다.
+
+## 18. 용어사전 화면 구성
+
+**현재 화면 구조:**
+
+UserLayout
+
+``` text
+│
+├── 목록으로 돌아가기
+│
+├── 청약 용어 사전
+│
+├── 검색창
+│
+├── 카테고리
+│   ├── 전체
+│   ├── 청약/자격
+│   ├── 주택/유형
+│   ├── 소득/자산
+│   └── 기타
+│
+└── 용어 카드
+    ├── 카테고리
+    ├── 용어
+    └── 설명
+```
+
+카테고리 선택 시 activeTab이 변경되고 해당 카테고리의 데이터만
+필터링한다.
+
+## 19. 관리자 용어사전
+
+최근 작업에서는 관리자 페이지의 용어사전 기능도 Backend API와 연결하는
+작업을 진행했다.
+
+**관련 커밋:**
+
+-   `a2b24c6`
+    -   feat: 관리자 용어 사전 페이지 고도화 및 문서화 업데이트
+-   `399c3ab`
+    -   fix: 관리자 페이지 용어설명 데이터 라우트 재설정
+-   `f28309e`
+    -   fix: 관리자페이지 - 용어사전집DB api연동
+-   `f98fcc2`
+    -   fix: 관리자페이지 용어사전 목록 CRUD기능 작동수정
+-   `0000edc`
+    -   feat: 관리자 용어 사전 api통신 연동
+
+현재 구조의 핵심은 다음과 같다.
+
+``` text
+관리자 Frontend
+       ↓
+HTTP API
+       ↓
+Backend
+       ↓
+용어사전 DB
+```
+
+관리자는 용어 데이터를 생성/조회/수정/삭제할 수 있도록 API 연동을
+진행했다.
+
+## 20. 공고문 원본 파일 다운로드
+
+최근 Frontend에 공고문 원본 파일 다운로드 기능이 추가되었다.
+
+**관련 커밋:**
+
+-   `b25706e`
+    -   feat: 공고문 원본 파일 다운로드 기능 추가
+
+기본적인 목적은 사용자가 화면에 표시되는 요약 정보나 AI 답변만 확인하는
+것이 아니라 필요한 경우 실제 공고문 파일을 직접 확인할 수 있도록 하는
+것이다.
+
+서비스 신뢰성 측면에서도 중요한 기능이다.
+
+## 21. Frontend와 Backend 연결 관계
+
+Frontend와 Backend는 기본적으로 HTTP API를 통해 통신하는 구조이다.
+
+**기본적인 구조:**
+
+**Frontend**
+
+React / TypeScript
+
+``` text
+      │
+      │ HTTP Request
+      ▼
+Backend
+      │
+      ├── DB
+      ├── RAG
+      ├── 문서 데이터
+      └── 용어사전
+```
+
+Frontend에서 Backend의 Python 함수를 직접 import해서 사용하는 구조와는
+구분해야 한다.
+
+## 22. 연결 방식 구분
+
+프로젝트에서 다른 파트와 연결될 때 반드시 다음을 구분한다.
+
+``` text
+HTTP API
+Frontend → Backend
+```
+
+화면에서 필요한 데이터를 요청하거나 사용자의 질문을 전달할 때 사용한다.
+
+**Python import**
+
+``` text
+Backend 내부
+A.py → B.py
+```
+
+같은 Python 애플리케이션 내부 모듈 간 연결이다.
+
+Frontend에서 직접 사용하는 방식이 아니다.
+
+``` text
+DB
+Backend → DB
+```
+
+Frontend가 DB에 직접 접근하지 않고 Backend API를 통해 데이터를 받는 것을
+기본 원칙으로 한다.
+
+**파일**
+
+``` text
+Backend
+ ↓
+파일 경로 / 파일 URL
+ ↓
+Frontend
+```
+
+공고문 원본 다운로드 같은 기능에서 파일 위치와 접근 방식이 중요하다.
+
+## 23. Frontend 데이터 흐름의 기본 원칙
+
+Frontend에서는 다음 구조를 유지하는 것이 좋다.
+
+``` text
+사용자 행동
+    ↓
+```
+
+화면 컴포넌트
+
+``` text
+    ↓
+API 요청
+    ↓
+Backend
+    ↓
+```
+
+JSON 응답
+
+``` text
+    ↓
+State
+    ↓
+```
+
+Component Rendering
+
+반대로 다음 구조는 지양한다.
+
+``` text
+Frontend
+ ↓
+DB 직접 접근
+```
+
+또는
+
+``` text
+Frontend
+ ↓
+문서 원본 직접 파싱
+```
+
+또는
+
+``` text
+Frontend
+ ↓
+Backend 내부 Python 함수 직접 import
+```
+
+## 24. 주요 Frontend 구성 요소
+
+현재 공유된 코드 기준으로 확인되는 주요 구성 요소는 다음과 같다.
+
+``` text
+Frontend
+│
+├── layout
+│   └── UserLayout
+│
+├── common
+│   └── Icons
+│
+├── screens
+│   ├── DetailScreen
+│   └── GlossaryScreen
+│
+└── API / Backend 통신 영역
+```
+
+실제 프로젝트의 전체 디렉터리 구조가 변경되었을 경우 이 부분은 실제 폴더
+구조에 맞춰 갱신해야 한다.
+
+## 25. UserLayout
+
+UserLayout은 사용자 페이지에서 공통으로 사용하는 레이아웃 역할을 한다.
+
+현재 GlossaryScreen에서도 다음과 같이 사용된다.
+
+``` tsx
+<UserLayout
+  screen="glossary"
+  go={go}
+  showToast={showToast}
+>
+```
+
+따라서 각 화면이 페이지 전체 레이아웃을 중복해서 구현하지 않고 공통
+레이아웃을 사용할 수 있도록 구성되어 있다.
+
+## 26. GlossaryScreen
+
+GlossaryScreen은 청약 용어 사전을 표시하는 화면이다.
+
+**주요 역할:**
+
+``` text
+용어사전 화면 생성
+        ↓
+검색어 State 관리
+        ↓
+카테고리 State 관리
+        ↓
+```
+
+데이터 필터링
+
+``` text
+        ↓
+용어 카드 렌더링
+```
+
+검색어는 query State에서 관리하고 카테고리는 activeTab State에서
+관리한다.
+
+## 27. 용어 검색 로직
+
+현재 검색 로직은 다음과 같다.
+
+``` text
+사용자가 검색어 입력
+        ↓
+```
+
+query 변경
+
+``` text
+        ↓
+```
+
+glossaryDummyData.filter()
+
+``` text
+        ↓
+용어명 또는 설명에 검색어가 있는지 확인
+        ↓
+```
+
+카테고리 조건 확인
+
+``` text
+        ↓
+```
+
+filteredData 생성
+
+``` text
+        ↓
+```
+
+화면 출력
+
+코드상으로는 다음 조건을 사용한다.
+
+``` tsx
+const matchCategory =
+  activeTab === "전체" ||
+```
+
+item.category === activeTab;
+
+``` tsx
+const matchQuery =
+  item.term.includes(query) ||
+```
+
+item.desc.includes(query);
+
+## 28. 용어사전 검색 결과 없음 처리
+
+검색 결과가 없는 경우 별도의 Empty State를 표시한다.
+
+검색된 용어가 없습니다
+
+다른 검색어를 입력하거나
+
+카테고리를 변경해 보세요.
+
+이는 실제 API 데이터로 전환된 이후에도 유지할 수 있는 UI 패턴이다.
+
+## 29. 현재 Frontend 개발 원칙
+
+원칙 1. 화면과 데이터 처리를 분리
+
+Frontend는 화면을 담당하고 Backend는 데이터 처리와 비즈니스 로직을
+담당한다.
+
+원칙 2. API 응답 구조를 기준으로 화면을 만든다
+
+Backend에서 제공하는 JSON 구조를 기준으로 컴포넌트를 구성한다.
+
+Frontend에서 임의로 데이터 구조를 만들어 Backend 데이터와 다른 형태로
+관리하지 않는다.
+
+원칙 3. 데이터 오류와 UI 오류를 구분한다
+
+**예를 들어:**
+
+공급 내용에 개인정보 문구가 들어옴
+
+이것은 기본적으로 데이터 추출 문제이다.
+
+**반면:**
+
+공급 내용이 너무 길어서 카드가 깨짐
+
+은 Frontend UI 문제이다.
+
+문제 발생 위치를 먼저 구분해야 한다.
+
+## 30. 현재 주요 작업 상태
+
+  기능                       현재 상태
+  -------------------------- ---------------------------
+  공고 목록                  구현
+  공고 상세                  구현
+  핵심 정보 카드             구현 / 정확도 개선 진행
+  AI 챗봇                    구현
+  챗봇 근거 보기             구현 / 고도화 예정
+  공고문 원본 다운로드       구현
+  용어사전 UI                구현
+  관리자 용어사전 API 연동   진행/구현
+  챗봇 용어 Tooltip          개발 예정/진행
+  핵심 정보 추출 정확도      문서파싱 담당과 개선 진행
+  근거 정보 최소화           고도화 예정
+
+## 31. 현재 진행 중인 고도화 우선순위
+
+현재 프로젝트에서는 단순히 기능을 많이 추가하기보다 사용자가 실제
+서비스를 사용할 때 느끼는 신뢰성과 편의성을 높이는 방향을 우선한다.
+
+우선순위는 다음과 같다.
+
+### ★★★ 1. 핵심 정보 정확도
+
+``` text
+공고문
+ ↓
+Structure
+ ↓
+Key Information
+ ↓
+API
+ ↓
+Frontend
+```
+
+이 데이터 흐름에서 잘못된 정보가 생성되지 않도록 개선한다.
+
+### ★★★ 2. 챗봇 근거 보기 개선
+
+현재 긴 Chunk 전체를 보여주는 방식에서 벗어나
+
+질문
+
+``` text
+ ↓
+검색 근거
+ ↓
+답변에 실제 사용된 핵심 부분
+ ↓
+짧은 Evidence
+```
+
+형태로 개선한다.
+
+### ★★★ 3. 챗봇 용어 Tooltip
+
+AI 답변 중 중요한 청약 용어를 사용자가 별도 검색하지 않아도 바로 이해할
+수 있도록 한다.
+
+``` text
+AI 답변
    ↓
-DetailScreen.send()
+용어 인식
    ↓
-User Message 추가
+용어사전 조회
    ↓
-POST /api/chat
+Tooltip
+```
+
+## 32. 용어 Tooltip 개발 시 고려사항
+
+Tooltip을 구현할 때 Frontend에서 모든 용어를 직접 하드코딩하는 방식은
+피하는 것이 좋다.
+
+**나쁜 예:**
+
+``` tsx
+if (text.includes("무주택세대구성원")) {
+   ...
+}
+```
+
+이 방식은 용어가 40개, 100개로 늘어날수록 유지보수가 어려워진다.
+
+대신 Backend에서 용어사전 데이터를 제공하고 Frontend가 해당 데이터를
+활용하는 방향이 적절하다.
+
+**Backend**
+
+``` json
+{
+term: "무주택세대구성원",
+description: "..."
+}
+```
+
+``` text
+↓
+```
+
+**Frontend**
+
+``` text
+↓
+```
+
+AI 답변의 해당 용어
+
+``` text
+↓
+```
+
+Tooltip 표시
+
+## 33. Tooltip과 AI 답변의 연결
+
+**최종적으로 기대하는 형태:**
+
+사용자
+
+"제가 신청할 수 있나요?"
+
+``` text
+        ↓
+```
+
+Backend / RAG
+
+``` text
+        ↓
+```
+
+AI
+
+"공고일 현재 무주택세대구성원이라면
+
+신청할 수 있습니다."
+
+``` text
+        ↓
+```
+
+**Frontend**
+
+무주택세대구성원
+
+``` text
+     ↑
+```
+
+hover
+
+``` text
+        ↓
+```
+
+Tooltip
+
+"세대원 전원이 주택을 소유하지 않은
+
+세대의 구성원을 의미합니다."
+
+이렇게 구현하면 기존 용어사전 페이지로 이동하지 않고도 챗봇 안에서 바로
+용어를 이해할 수 있다.
+
+## 34. 향후 챗봇 UI 개선 시 고려할 부분
+
+챗봇은 단순히 답변 텍스트만 보여주는 것보다 다음 구조를 갖는 것이 좋다.
+
+``` text
+AI 답변
+│
+├── 답변 내용
+│
+├── 어려운 용어 Tooltip
+│
+└── 원문 근거 보기
+        │
+        └── 핵심 Evidence
+```
+
+사용자 입장에서는
+
+``` text
+답변
+ ↓
+모르는 용어 → 바로 설명
+ ↓
+답변이 맞는지 궁금함 → 근거 확인
+ ↓
+더 자세히 보고 싶음 → 원본 다운로드
+```
+
+라는 자연스러운 흐름이 만들어진다.
+
+## 35. 공고 상세 화면의 데이터 신뢰성
+
+공고 상세 화면에서 가장 중요한 부분은 Backend 데이터와 화면의 매핑이
+정확한지 확인하는 것이다.
+
+예를 들어 Backend가
+
+``` json
+{
+"application_period": "...",
+"eligibility": "...",
+"supply_information": "..."
+}
+```
+
+를 반환한다면 Frontend는 각각의 필드를 정확히 대응시켜야 한다.
+
+application_period
+
+``` text
+       ↓
+```
+
+신청 일정
+
+eligibility
+
+``` text
+       ↓
+```
+
+신청 자격
+
+supply_information
+
+``` text
+       ↓
+```
+
+공급 내용
+
+필드 순서에 의존해서 데이터를 표시하면 안 된다.
+
+최근 공고 목록에서 발생했던 한 칸씩 밀림 현상도 이런 데이터 매핑 문제를
+점검할 때 반드시 확인해야 하는 사례이다.
+
+## 36. 날짜 데이터 처리
+
+Backend에서 날짜가 다음과 같이 전달될 수 있다.
+
+2026-09-18T10:00
+
+사용자 화면에서는 내부 데이터 형식을 그대로 노출하지 않고 서비스 UI에
+적합한 형태로 표시해야 한다.
+
+**예:**
+
+2026-09-18 10:00
+
+또는
+
+2026년 9월 18일 오전 10시
+
+현재 작업에서는 공고 마감일의 T10:00과 같은 불필요한 텍스트가 화면에
+그대로 표시되는 문제를 수정했다.
+
+## 37. 오류 처리
+
+Frontend는 API 요청이 항상 성공한다고 가정하면 안 된다.
+
+최소한 다음 상태를 고려한다.
+
+Loading
+
+``` text
+   ↓
+```
+
+Success
+
+``` text
+   ↓
+```
+
+Empty
+
+``` text
+   ↓
+```
+
+Error
+
+**예:**
+
+공고 데이터 로딩 중...
+
+공고가 없습니다.
+
+공고 데이터를 불러오지 못했습니다.
+
+잠시 후 다시 시도해주세요.
+
+## 38. 실행 시 Frontend 확인 순서
+
+개발자가 프로젝트를 실행할 때는 다음 순서로 확인하는 것을 권장한다.
+
+## 1. Frontend 실행
+
+``` text
+        ↓
+```
+
+## 2. Backend 실행 여부 확인
+
+``` text
+        ↓
+```
+
+## 3. API 요청 확인
+
+``` text
+        ↓
+```
+
+## 4. 공고 목록 확인
+
+``` text
+        ↓
+```
+
+## 5. 공고 상세 확인
+
+``` text
+        ↓
+```
+
+## 6. 핵심 정보 확인
+
+``` text
+        ↓
+```
+
+## 7. 챗봇 질문
+
+``` text
+        ↓
+```
+
+## 8. 답변 확인
+
+``` text
+        ↓
+```
+
+## 9. 원문 근거 보기 확인
+
+``` text
+        ↓
+```
+
+## 10. 용어사전/관리자 기능 확인
+
+## 39. API 문제와 Frontend 문제 구분
+
+화면에 데이터가 나오지 않을 경우 바로 React 코드부터 수정하지 않는다.
+
+다음 순서로 확인한다.
+
+## 1. API 요청이 발생했는가?
+
+``` text
+        ↓
+```
+
+## 2. HTTP Status가 정상인가?
+
+``` text
+        ↓
+```
+
+## 3. Response JSON이 정상인가?
+
+``` text
+        ↓
+```
+
+## 4. 원하는 필드가 존재하는가?
+
+``` text
+        ↓
+```
+
+## 5. Frontend State에 들어왔는가?
+
+``` text
+        ↓
+```
+
+## 6. Component에서 올바른 필드를 사용하고 있는가?
+
+이 과정을 거치면 문제 위치를 빠르게 찾을 수 있다.
+
+## 40. 핵심 정보 문제 발생 시 확인 순서
+
+현재 프로젝트에서 특히 중요한 부분이다.
+
+**예를 들어:**
+
+공급 내용
+
+``` text
+→ 개인정보 동의 문구가 출력됨
+```
+
+이라면 다음 순서로 확인한다.
+
+``` text
+① DB 값 확인
+        ↓
+② Backend API Response 확인
+        ↓
+③ Frontend에서 받은 값 확인
+        ↓
+```
+
+④ key_information 데이터 확인
+
+``` text
+        ↓
+```
+
+⑤ key_information_extractor.py 확인
+
+``` text
+        ↓
+⑥ Structure JSON 확인
+        ↓
+```
+
+⑦ 해당 Section의 domain/category/topic 확인
+
+``` text
+        ↓
+⑧ 원본 문서 확인
+```
+
+만약 DB/API 단계부터 잘못되어 있다면 Frontend 수정 대상이 아니다.
+
+## 41. 현재 문서 파싱 파트와의 연결
+
+Frontend에서 핵심 정보 데이터를 직접 생성하지 않는다.
+
+문서 파싱 담당 파트에서
+
+HWP / HWPX / PDF
+
+``` text
+        ↓
+Parsing
+        ↓
+Structure
+        ↓
+Normalization
+        ↓
+Verification
+        ↓
+Key Information Extraction
+```
+
+을 수행하고 결과가 Backend 데이터로 전달된다.
+
+Frontend는 최종 결과를 받아 사용자에게 표시한다.
+
+따라서 핵심 정보 오류를 수정할 때 Frontend 담당자와 문서 파싱 담당자가
+함께 데이터 흐름을 확인해야 한다.
+
+## 42. key_information_extractor.py와 Frontend의 관계
+
+현재 공유된 Extractor는 Structure의 Section을 순회하면서 각 필드에
+적합한 Section을 점수화한다.
+
+**개념적으로:**
+
+``` text
+Structure Section
+       ↓
+```
+
+FIELD_RULES
+
+``` text
+       ↓
+```
+
+-   `category`
+-   `topic`
+-   `keyword`
+
+``` text
+       ↓
+```
+
+score
+
+``` text
+       ↓
+```
+
+field별 match
+
+``` text
+       ↓
+```
+
+key_information
+
+그리고 최종적으로 다음 데이터를 만든다.
+
+-   `application_period`
+-   `eligibility`
+-   `supply_information`
+-   `income_asset_criteria`
+-   `required_documents`
+-   `winner_announcement`
+-   `contact_information`
+
+따라서 Frontend에서 핵심 정보의 정확도를 높이는 작업은 다음과 같이
+역할을 구분해야 한다.
+
+``` text
+문서 파싱/Extraction
+→ "어떤 데이터를 추출할 것인가"
+```
+
+``` text
+Backend
+→ "어떤 데이터를 저장하고 어떻게 제공할 것인가"
+```
+
+``` text
+Frontend
+→ "받은 데이터를 어떻게 정확하고 읽기 좋게 보여줄 것인가"
+```
+
+## 43. 현재 프로젝트의 책임 범위
+
+``` text
+┌────────────────────────────┐
+│ Crawler                    │
+│ 공고 수집 / 파일 다운로드   │
+└──────────────┬─────────────┘
+               ↓
+┌────────────────────────────┐
+│ Document Parsing           │
+│ HWP/HWPX/PDF 파싱          │
+│ Structure 생성             │
+└──────────────┬─────────────┘
+               ↓
+┌────────────────────────────┐
+│ Key Information Extraction │
+│ 핵심정보 추출              │
+└──────────────┬─────────────┘
+               ↓
+┌────────────────────────────┐
+│ Backend / DB               │
+│ 저장 / API 제공            │
+└──────────────┬─────────────┘
+               ↓
+┌────────────────────────────┐
+│ Frontend                   │
+│ 화면 표시                  │
+└────────────────────────────┘
+```
+
+## 44. Docker 분리 전 확인할 부분
+
+향후 Frontend / Backend / AI / DB 등을 Docker로 분리할 경우 현재 개발
+환경에서 사용하고 있는 연결 방식을 확인해야 한다.
+
+특히 다음을 점검한다.
+
+localhost 의존
+
+현재 개발환경에서
+
+localhost
+
+127.0.0.1
+
+을 사용하고 있다면 Docker 환경에서는 의미가 달라질 수 있다.
+
+**예:**
+
+``` text
+Frontend container
+      ↓
+```
+
+localhost:8000
+
+이라고 하면 Frontend 컨테이너 자신을 의미할 수 있다.
+
+Docker Compose에서는 Backend 서비스 이름 등을 통해 통신하도록 변경할
+가능성이 있다.
+
+## 45. API 주소 관리
+
+API Base URL은 코드 곳곳에 직접 작성하지 않고 하나의 설정값으로 관리하는
+것이 좋다.
+
+**개발:**
+
+http://localhost:8000
+
+**Docker:**
+
+http://backend:8000
+
+**운영:**
+
+실제 Backend 서버 주소
+
+와 같이 환경에 따라 변경될 수 있기 때문이다.
+
+## 46. 파일 경로 의존성
+
+공고문 원본 다운로드 기능에서 Frontend가 Backend 서버의 실제 로컬 파일
+경로를 직접 알고 있으면 Docker 분리 이후 문제가 발생할 수 있다.
+
+**지양:**
+
+C:`\project`{=tex}`\files`{=tex}`\announcement`{=tex}.pdf
+
+**권장:**
+
+``` text
+Frontend
+ ↓
+Backend API / 파일 URL
+ ↓
+Backend
+ ↓
+파일
+```
+
+Frontend는 서버 내부의 실제 파일 시스템 경로를 알 필요가 없어야 한다.
+
+## 47. 현재 구조에서 중요한 데이터 경계
+
+각 파트의 책임을 다음과 같이 유지한다.
+
+``` text
+Crawler
+→ 수집
+```
+
+``` text
+Parser
+→ 파싱
+```
+
+``` text
+Structure
+→ 구조화
+```
+
+``` text
+Extractor
+→ 핵심정보 추출
+```
+
+``` text
+Backend
+→ 저장 / API
+```
+
+``` text
+Frontend
+→ 표현
+```
+
+이 경계를 명확하게 유지하면 나중에 Docker로 각각 분리하더라도 구조를
+이해하기 쉽다.
+
+## 48. 개발자가 새로운 기능을 추가할 때
+
+새로운 기능을 추가할 때 먼저 다음 질문을 한다.
+
+이 기능은 데이터를 어디에서 가져오는가?
+
+-   Backend API인가?
+-   DB인가?
+-   파일인가?
+
+데이터를 누가 생성하는가?
+
+Frontend가 직접 처리해야 하는가?
+
+Backend에서 처리해야 하는가?
+
+다른 파트와 어떤 방식으로 연결되는가?
+
+**예를 들어 챗봇 Tooltip 기능이라면:**
+
+``` text
+용어 데이터
+→ Backend / DB
+```
+
+``` text
+챗봇 답변
+→ Backend API
+```
+
+``` text
+Tooltip UI
+→ Frontend
+```
+
+으로 역할을 나누는 것이 적절하다.
+
+## 49. 현재 고도화 작업의 큰 방향
+
+현재 Frontend 고도화의 핵심은 기능 개수 증가보다 사용자 경험과 신뢰성
+개선이다.
+
+**우선 개선 대상:**
+
+① 핵심 정보가 정확하게 표시되는가?
+
+``` text
+        ↓
+② AI 답변의 근거를 이해하기 쉽게 볼 수 있는가?
+        ↓
+③ 어려운 청약 용어를 바로 이해할 수 있는가?
+        ↓
+④ 공고 원문을 쉽게 확인할 수 있는가?
+```
+
+이 네 가지가 서로 연결되어 있다.
+
+## 50. 최종 사용자 경험
+
+최종적으로 사용자가 서비스를 이용하는 흐름은 다음과 같이 구성하는 것을
+목표로 한다.
+
+``` text
+공고 검색
+   ↓
+공고 선택
+   ↓
+```
+
+핵심 정보 확인
+
+``` text
+   ↓
+```
+
+궁금한 내용 질문
+
+``` text
+   ↓
+AI 답변
+   ↓
+모르는 용어 → Tooltip
+   ↓
+답변 근거 → 원문 근거 보기
+   ↓
+```
+
+더 자세한 확인 필요
+
+``` text
+   ↓
+공고문 원본 다운로드
+```
+
+이 구조가 완성되면 사용자는 공고문 전체를 처음부터 끝까지 읽지 않아도
+필요한 정보를 빠르게 확인할 수 있다.
+
+## 51. 개발 시 가장 중요한 판단 기준
+
+이 프로젝트의 Frontend 개발에서 중요한 것은
+
+"화면에 무엇을 많이 보여주는가"가 아니라 "사용자가 필요한 정보를 얼마나
+빠르고 정확하게 이해할 수 있는가"이다.
+
+따라서 다음을 우선한다.
+
+정확성
+
+``` text
+>
+```
+
+가독성
+
+``` text
+>
+```
+
+사용 편의성
+
+``` text
+>
+```
+
+기능 추가
+
+특히 공공임대/청약 정보는 잘못된 정보를 보여주는 것이 단순 UI 오류보다
+훨씬 큰 문제가 될 수 있으므로 데이터 정확성을 우선한다.
+
+## 52. 현재 주요 작업 기록
+
+**최근 Frontend 작업 흐름:**
+
+2026-08-25
+
+``` text
+│
+└── 관리자 용어사전 페이지 고도화
+    및 문서화
+```
+
+2026-08-26
+
+``` text
+│
+├── 관리자 용어사전 데이터 라우트 수정
+├── 용어사전 DB API 연동
+└── 관리자 용어사전 CRUD 수정
+```
+
+2026-08-27
+
+``` text
+│
+├── 관리자 용어사전 API 통신 연동
+├── 공고문 원본 다운로드 기능 추가
+├── 공고 마감일 T10:00 표시 문제 수정
+├── 사용자 용어 설명 메뉴 제거
+├── 네비게이션 비율 조정
+└── 공고 목록 데이터 밀림 문제 수정
+```
+
+## 53. 최근 커밋 기준 작업 이력
+
+-   `0000edc`
+    -   feat: 관리자 용어 사전 api통신 연동
+-   `f98fcc2`
+    -   fix: 관리자페이지 용어사전 목록 CRUD기능 작동수정
+-   `f28309e`
+    -   fix: 관리자페이지 - 용어사전집DB api연동
+-   `399c3ab`
+    -   fix: 관리자 페이지 용어설명 데이터 라우트 재설정
+-   `a2b24c6`
+    -   feat: 관리자 용어 사전 페이지 고도화 및 문서화 업데이트
+-   `b25706e`
+    -   feat: 공고문 원본 파일 다운로드 기능 추가,
+    -   공고 마감일 시간(T10:00)텍스트 제거,
+    -   사용자페이지 좌측 '용어 설명' 메뉴 삭제 및
+    -   네비게이션 비율 조정
+-   `f33632a`
+    -   fix: 공고 목록 메타데이터 한칸씩 밀림현상 수정
+
+fix
+
+공고목록 밀림현상 재수정
+
+## 54. 현재 한계
+
+현재 MVP 단계에서 알고 있어야 하는 구조적인 한계는 다음과 같다.
+
+**핵심 정보**
+
+문서 파싱/Extraction 결과에 따라 정확도가 달라진다.
+
+**원문 근거**
+
+현재 실제 원본 PDF/HWP를 직접 보여주는 것이 아니라 파싱된 Chunk
+기반이다.
+
+**용어 Tooltip**
+
+현재 용어사전 데이터와 챗봇 답변을 연결하는 작업이 진행 중이다.
+
+**API**
+
+일부 기능은 Backend API 개발 상태에 따라 Frontend 구현 상태가 달라질 수
+있다.
+
+**개발환경**
+
+현재 localhost 기반으로 개발하는 부분이 있으므로 Docker 분리 시 API
+주소와 서비스 간 통신 방식을 재검토해야 한다.
+
+## 55. 새로운 팀원이 가장 먼저 이해해야 하는 것
+
+이 프로젝트에 처음 참여한 개발자는 먼저 다음 구조를 이해하면 된다.
+
+``` text
+[공고 수집]
+```
+
+LH/SH 등
+
+``` text
+   ↓
+[Crawler]
+   ↓
+[문서 파일]
+   ↓
+[문서 파싱]
+   ↓
+[Structure]
+   ↓
+[핵심정보 추출]
+   ↓
+[Backend / DB]
+   ↓
+[Frontend]
+   ↓
+사용자 화면
+```
+
+그리고 AI 챗봇은 별도의 흐름으로
+
+``` text
+사용자 질문
    ↓
 Backend
    ↓
-RAG
+검색/RAG
    ↓
-JSON Response
+근거 Chunk
    ↓
-AI Message 추가
-```
-
----
-
-# 20. Chat Response
-
-Backend 주요 Response:
-
-```json
-{
-  "answer": "...",
-  "grounded": true,
-  "evidence": []
-}
-```
-
-Frontend는:
-
-```text
-data.answer
-```
-
-를 AI 메시지 Text로 사용합니다.
-
-그리고:
-
-```text
-data.evidence
-```
-
-가 Array이면 Evidence로 저장합니다.
-
----
-
-# 21. Frontend와 RAG의 경계
-
-Frontend는 다음 내용을 알 필요가 없습니다.
-
-```text
-BGE-M3
-pgvector
-ChunkSet
-ProcessingRun
-LLM Prompt
-llama.cpp
-```
-
-Frontend가 알아야 하는 것은 API Contract뿐입니다.
-
-```text
-POST /api/chat
-
-Input:
-announcementId
-question
-
-Output:
-answer
-grounded
-evidence
-```
-
-RAG 구현이 변경되어도 이 API Contract를 유지하는 것이 중요합니다.
-
----
-
-# 22. Chat 오류 처리
-
-Chat API Response가 HTTP 오류인 경우:
-
-```text
-response.ok == false
-```
-
-이면 Frontend에서 Error를 발생시킵니다.
-
-즉 다음은 다른 문제입니다.
-
-```text
-HTTP 500
-→ Backend/RAG 오류
-
-HTTP 200 + fallback answer
-→ Backend 연결은 성공
-→ RAG Generation 품질 문제 가능
-
-HTTP 200 + 정상 answer
-→ 전체 연결 정상
-```
-
----
-
-# 23. Evidence
-
-ChatResponse에는 검색 근거가 포함될 수 있습니다.
-
-예:
-
-```json
-{
-  "chunkId": "...",
-  "sectionTitle": "...",
-  "content": "...",
-  "score": 0.58
-}
-```
-
-Frontend에서는 Evidence를 사용자에게 근거 확인 UI로 보여줄 수 있습니다.
-
----
-
-# 24. Frontend에서 Answer가 이상할 때
-
-예:
-
-```text
-공고문 근거는 확인되었지만 현재 답변 생성 품질이 안정적이지 않아...
-```
-
-가 화면에 나왔다면 Frontend가 해당 문자열을 만든 것이 아닐 수 있습니다.
-
-먼저 API를 직접 확인합니다.
-
-```bash
-curl -i \
--X POST \
-http://127.0.0.1:8000/api/chat \
--H 'Content-Type: application/json' \
--d '{"announcementId":1,"question":"신청 일정은 언제인가?"}'
-```
-
-curl에도 같은 Answer가 나오면:
-
-```text
-Frontend 문제 X
-Backend/RAG 문제
-```
-
-입니다.
-
----
-
-# 25. User Frontend 문제 분류
-
-## 화면 자체가 열리지 않음
-
-확인:
-
-```text
-npm run dev
-Vite Port
-SSH Forwarding
-Browser URL
-```
-
----
-
-## 화면은 열리지만 공고가 없음
-
-확인:
-
-```text
-GET /api/announcements
-Vite Proxy
-ListScreen
-```
-
----
-
-## 공고 상세가 안 열림
-
-확인:
-
-```text
-GET /api/announcements/{id}
-DetailScreen
-notice.id
-```
-
----
-
-## Chat 자체가 실패
-
-확인:
-
-```text
-POST /api/chat
-Backend log
-RAG
-```
-
----
-
-## Chat 응답은 오는데 내용만 이상함
-
-확인:
-
-```text
-RAG Retrieval
-RAG Generation
-```
-
-Frontend부터 수정하지 않습니다.
-
----
-
-# 26. User Frontend Build 문제
-
-Build:
-
-```bash
-npm run build
-```
-
-오류가 발생하면 다음을 확인합니다.
-
-```text
-TypeScript 변수명
-잘못된 Import
-잘못된 Component Path
-사용하지 않는/존재하지 않는 Export
-문법 오류
-```
-
-특히 API 변수 오타는 Build로 빠르게 발견할 수 있습니다.
-
----
-
-# 27. User Frontend API Source of Truth
-
-API Base:
-
-```text
-frontend/user/src/config.ts
-```
-
-API Contract:
-
-```text
-docs/API.md
-backend/app/schemas/
-backend/app/api/routes/
-```
-
-화면:
-
-```text
-frontend/user/src/components/screens/
-```
-
-Proxy:
-
-```text
-frontend/user/vite.config.ts
-```
-
----
-
-# 28. AWS 서버의 User Frontend를 로컬에서 보는 방법
-
-AWS 서버 내부에서 Vite가:
-
-```text
-127.0.0.1:5173
-```
-
-또는:
-
-```text
-0.0.0.0:5173
-```
-
-에 실행 중이라고 가정합니다.
-
-로컬 Mac Terminal에서 SSH Port Forwarding을 사용합니다.
-
-```bash
-ssh -i <PEM_FILE_PATH> \
--L 5173:127.0.0.1:5173 \
-ubuntu@<AWS_PUBLIC_IP>
-```
-
-예시의 `<PEM_FILE_PATH>`와 `<AWS_PUBLIC_IP>`는 실제 환경에 맞게 입력합니다.
-
----
-
-# 29. PEM 파일 관련 주의
-
-다음 오류:
-
-```text
-Warning: Identity file ... not accessible
-Permission denied (publickey)
-```
-
-가 나오면 Frontend 문제가 아닙니다.
-
-로컬 Terminal이 PEM 파일을 찾지 못한 것입니다.
-
-확인:
-
-```bash
-ls -l <PEM_FILE_PATH>
-```
-
-PEM의 실제 위치를 SSH 명령에 지정합니다.
-
----
-
-# 30. 로컬 Browser 접근
-
-SSH Tunnel 연결 후 일반적으로:
-
-```text
-http://127.0.0.1:5173
-```
-
-또는:
-
-```text
-http://localhost:5173
-```
-
-으로 접근합니다.
-
----
-
-# 31. Backend Port Forwarding은 항상 필요한가
-
-User Frontend 개발 환경에서 Vite Proxy가:
-
-```text
-/api
-→ FastAPI :8000
-```
-
-으로 연결되어 있고 두 Server가 같은 AWS 서버 안에 있다면,
-Browser가 Backend `8000` 포트에 직접 접근할 필요는 없습니다.
-
-개념:
-
-```text
-Local Browser
-      ↓
-SSH 5173 Tunnel
-      ↓
-AWS Vite :5173
-      ↓
-AWS localhost:8000
-      ↓
-FastAPI
-```
-
-따라서 User Frontend 확인만 목적이라면 5173 Forwarding만으로도 동작할 수 있습니다.
-
----
-
-# 32. Backend를 직접 로컬에서 호출해야 할 경우
-
-필요하면 별도의 Forwarding을 추가할 수 있습니다.
-
-예:
-
-```bash
-ssh -i <PEM_FILE_PATH> \
--L 5173:127.0.0.1:5173 \
--L 8000:127.0.0.1:8000 \
-ubuntu@<AWS_PUBLIC_IP>
-```
-
-이 경우 로컬에서:
-
-```text
-http://127.0.0.1:8000
-```
-
-으로 Backend를 직접 확인할 수 있습니다.
-
----
-
-# 33. Admin Frontend
-
-경로:
-
-```text
-frontend/admin/
-```
-
-User Frontend와 달리 React/Vite 기반이 아닙니다.
-
-구성:
-
-```text
-HTML
-CSS
-JavaScript
-Python Static/Proxy Server
-```
-
----
-
-# 34. Admin Frontend 구조
-
-```text
-frontend/admin/
-├── announcement.html
-├── document.html
-├── error.html
-├── login.html
-│
-├── components/
-│   ├── header.html
-│   ├── modal.html
-│   ├── pagination.html
-│   └── sidebar.html
-│
-├── css/
-│
-├── js/
-│
-└── serve_admin.py
-```
-
----
-
-# 35. Admin JavaScript
-
-주요 파일:
-
-```text
-frontend/admin/js/
-```
-
-확인된 주요 역할:
-
-```text
-api.js
-→ 공통 API 요청
-
-auth.js
-→ 관리자 인증
-
-config.js
-→ API Base 설정
-
-announcement.js
-→ 공고 관리
-
-document.js
-→ 문서 관리
-
-error.js
-→ 오류 관리
-
-guard.js
-→ 인증 Guard
-
-token.js
-→ Token 관련 처리
-
-common.js
-→ 공통 UI
-```
-
----
-
-# 36. Admin API Base
-
-파일:
-
-```text
-frontend/admin/js/config.js
-```
-
-현재 API Base:
-
-```text
-/api
-```
-
-개념:
-
-```text
-Admin JS
-  ↓
-/api
-  ↓
-serve_admin.py
-  ↓
-FastAPI :8000
-```
-
----
-
-# 37. Admin Static/Proxy Server
-
-파일:
-
-```text
-frontend/admin/serve_admin.py
-```
-
-역할:
-
-```text
-1. Admin HTML/CSS/JS 제공
-2. /api 요청을 FastAPI로 Proxy
-```
-
-개념:
-
-```text
-Browser
-  ↓
-Admin Server
-  ├── HTML/CSS/JS
-  │
-  └── /api/*
-          ↓
-       FastAPI
-```
-
----
-
-# 38. Admin Backend Target
-
-현재 프로젝트 정리 이후 Backend 개발 Port는:
-
-```text
-8000
-```
-
-을 기준으로 사용합니다.
-
-Admin Server 코드에서 API Target의 최종 기준은:
-
-```text
-frontend/admin/serve_admin.py
-```
-
-입니다.
-
-과거 문서나 코드에:
-
-```text
-18000
-```
-
-이 남아 있다면 현재 Runtime과 일치하는지 반드시 확인합니다.
-
----
-
-# 39. Admin Frontend 실행
-
-```bash
-cd /home/ubuntu/ddokbot/one-cycle/frontend/admin
-
-python serve_admin.py
-```
-
-실제 지원 옵션 확인:
-
-```bash
-python serve_admin.py --help
-```
-
-가장 정확합니다.
-
----
-
-# 40. User와 Admin Frontend 차이
-
-| 구분 | User | Admin |
-|---|---|---|
-| 경로 | `frontend/user` | `frontend/admin` |
-| Framework | React | Static HTML/JS |
-| Language | TypeScript | JavaScript |
-| Dev Server | Vite | `serve_admin.py` |
-| API Base | `/api` | `/api` |
-| Backend | FastAPI :8000 | FastAPI :8000 |
-| 주요 목적 | 사용자 조회/Chat | 운영/관리 |
-
----
-
-# 41. Frontend에서 Backend 직접 구현 금지
-
-Frontend 코드에 다음 Logic을 넣지 않습니다.
-
-```text
-SQL Query
-pgvector
-RAG Retrieval
-Pipeline 실행
-DB Password
-Admin Secret
-```
-
-항상:
-
-```text
+LLM
+   ↓
+AI 답변
+   ↓
 Frontend
-  ↓
-Backend API
 ```
 
-를 통해 처리합니다.
+으로 동작한다고 이해하면 된다.
 
----
+## 56. 문제를 발견했을 때의 기본 원칙
 
-# 42. Frontend 변경 시 API Contract 유지
+화면에 이상한 데이터가 보였다고 해서 무조건 Frontend 문제라고 판단하지
+않는다.
 
-화면 디자인이나 Component 구조를 대폭 변경해도 가능하면 다음은 유지합니다.
+**예:**
 
-```text
-GET /api/announcements
-GET /api/announcements/{id}
-POST /api/chat
+화면에 이상한 공급 내용이 출력됨
+
+이라면
+
+``` text
+Frontend 문제인가?
+        ↓
+API Response 확인
+        ↓
+API가 이미 잘못됐나?
+        ↓
+DB 확인
+        ↓
+Extractor 확인
+        ↓
+Structure 확인
 ```
 
-Backend와 Frontend를 동시에 갈아엎지 않도록 하기 위한 원칙입니다.
+과 같이 데이터가 처음 잘못 생성된 지점을 찾는 방식으로 디버깅한다.
 
----
+## 57. 파트 간 협업 시 전달해야 하는 정보
 
-# 43. Backend 변경 시 Frontend 보호
+다른 팀원에게 문제를 전달할 때는 단순히
 
-Backend 내부 구현을 변경하더라도:
+"프론트에서 이상하게 나와요."
 
-```text
-URL
-HTTP Method
-Request Field
-Response Field
+라고 전달하지 않는다.
+
+다음과 같이 전달한다.
+
+**\[문제\]** 공고 상세 핵심정보의 공급 내용에
+
+개인정보 동의 관련 문장이 표시됨.
+
+**\[Frontend 확인\]** API Response 단계부터 동일한 데이터가 내려옴.
+
+**\[추정 원인\]** - Frontend 렌더링 문제가 아니라 - key_information
+extraction 단계에서 - 잘못된 Section이 supply_information으로
+
+매핑된 것으로 추정.
+
+**\[확인 요청\]** Structure Section의 domain.category/topic과
+
+supply_information scoring 결과 확인 필요.
+
+이렇게 전달하면 담당자가 훨씬 빠르게 원인을 찾을 수 있다.
+
+## 58. Frontend 담당자의 최종 책임
+
+Frontend 담당자의 핵심 책임은 다음과 같다.
+
+``` text
+Backend가 제공한 데이터를
+        ↓
 ```
 
-를 유지하면 Frontend는 대부분 수정하지 않아도 됩니다.
+정확하게 받고
 
-예:
-
-```json
-{
-  "answer": "...",
-  "grounded": true,
-  "evidence": []
-}
+``` text
+        ↓
 ```
 
-계약을 유지합니다.
+올바른 UI에 매핑하고
 
----
-
-# 44. Frontend Smoke Test
-
-코드 수정 후 최소 확인:
-
-```text
-1. npm run build
-2. npm run dev
-3. Intro 화면
-4. 공고 목록
-5. 공고 상세
-6. Chat 전송
-7. Chat Answer 표시
-8. Evidence 표시
+``` text
+        ↓
+사용자가 이해하기 쉽게 표시하며
+        ↓
+사용자 행동에 적절하게 반응하도록 만드는 것
 ```
 
----
+그리고 데이터의 품질 문제가 발생하면 해당 데이터가 생성되는 담당 파트와
+협업하여 원인을 찾아야 한다.
 
-# 45. API가 정상인지 먼저 확인
+## 59. 향후 개발 시 체크리스트
 
-Frontend 문제를 진단하기 전에 Backend 직접 테스트:
+새로운 기능을 구현하기 전에 다음을 확인한다.
 
-```bash
-curl -i \
-http://127.0.0.1:8000/api/announcements
+-   [ ] 이 기능은 어느 파트의 책임인가?
+
+-   [ ] 필요한 데이터는 어디에서 생성되는가?
+
+-   [ ] Backend API가 존재하는가?
+
+-   [ ] API 요청/응답 구조를 확인했는가?
+
+-   [ ] Frontend가 직접 처리해야 하는 로직인가?
+
+-   [ ] DB에 직접 접근하고 있지는 않은가?
+
+-   [ ] localhost 주소에 의존하고 있지는 않은가?
+
+-   [ ] Docker 분리 후에도 동작할 수 있는 구조인가?
+
+-   [ ] API 오류 / 빈 데이터 상태를 처리했는가?
+
+-   [ ] 사용자가 실제로 이해하기 쉬운 UI인가? \## 60. 최종 프로젝트 구조
+    이해
+
+이 프로젝트의 전체적인 구조를 한 문장으로 정리하면 다음과 같다.
+
+공공임대/청약 공고문을 수집하고 문서 구조화 및 AI/RAG 처리를 거쳐
+사용자가 복잡한 공고 정보를 쉽게 이해하고 질문할 수 있도록 제공하는
+서비스이며, Frontend는 이 데이터와 AI 결과를 사용자 친화적인 화면으로
+제공하는 역할을 담당한다.
+
+Frontend에서는 특히 다음 네 가지 경험을 연결하는 것이 중요하다.
+
+**핵심 정보**
+
+``` text
+   +
+AI 챗봇
+   +
 ```
 
-Chat:
-
-```bash
-curl -i \
--X POST \
-http://127.0.0.1:8000/api/chat \
--H 'Content-Type: application/json' \
--d '{"announcementId":1,"question":"신청 일정은 언제인가?"}'
-```
-
----
-
-# 46. Browser Developer Tools
-
-Frontend가 이상할 때 Browser Developer Tools에서:
-
-```text
-Console
-Network
-```
-
-를 확인합니다.
-
-Network에서:
-
-```text
-Request URL
-Status
-Request Payload
-Response
-```
-
-를 확인합니다.
-
----
-
-# 47. Network Status별 판단
-
-## 200
-
-Backend 응답 성공.
-
-Response 내용 확인.
-
----
-
-## 404
-
-```text
-잘못된 API URL
-Proxy 문제
-Route 문제
-```
-
----
-
-## 422
-
-```text
-Request JSON Schema 불일치
-```
-
-확인:
-
-```text
-announcementId
-question
-```
-
----
-
-## 500
-
-```text
-Backend 내부 오류
-```
-
-Browser Console보다 Backend Terminal Traceback이 중요합니다.
-
----
-
-## Failed to fetch
-
-가능성:
-
-```text
-Vite Proxy
-Server Down
-잘못된 Host
-Network
-Port Forwarding
-```
-
----
-
-# 48. User Frontend 수정 위치 Quick Reference
-
-| 기능 | 위치 |
-|---|---|
-| 전체 Screen Flow | `src/App.tsx` |
-| API Base | `src/config.ts` |
-| 공고 목록 | `src/components/screens/ListScreen.tsx` |
-| 공고 상세 | `src/components/screens/DetailScreen.tsx` |
-| Chat | `src/components/screens/DetailScreen.tsx` |
-| Global CSS | `src/index.css` |
-| Vite Proxy | `vite.config.ts` |
-| Package | `package.json` |
-
----
-
-# 49. Admin Frontend 수정 위치 Quick Reference
-
-| 기능 | 위치 |
-|---|---|
-| 로그인 | `login.html`, `js/auth.js` |
-| 공고 관리 | `announcement.html`, `js/announcement.js` |
-| 문서 관리 | `document.html`, `js/document.js` |
-| 오류 관리 | `error.html`, `js/error.js` |
-| 공통 API | `js/api.js` |
-| API Base | `js/config.js` |
-| Auth Guard | `js/guard.js` |
-| 공통 Header/Sidebar | `components/` |
-| Proxy Server | `serve_admin.py` |
-
----
-
-# 50. Frontend 파일을 이동할 때
-
-Component를 이동하면 Import Path를 반드시 확인합니다.
-
-예:
-
-```text
-src/components/screens/ListScreen.tsx
-```
-
-를 이동하면:
-
-```text
-App.tsx
-다른 Screen
-config import
-CSS import
-```
-
-등을 함께 검사합니다.
-
-이후 반드시:
-
-```bash
-npm run build
-```
-
-를 실행합니다.
-
----
-
-# 51. Source of Truth
-
-| 영역 | Source of Truth |
-|---|---|
-| User Entry | `frontend/user/src/main.tsx` |
-| User App | `frontend/user/src/App.tsx` |
-| User API Base | `frontend/user/src/config.ts` |
-| User Screens | `frontend/user/src/components/screens/` |
-| Vite Config | `frontend/user/vite.config.ts` |
-| User Dependencies | `frontend/user/package.json` |
-| Admin API Config | `frontend/admin/js/config.js` |
-| Admin API Client | `frontend/admin/js/api.js` |
-| Admin Auth | `frontend/admin/js/auth.js` |
-| Admin Proxy | `frontend/admin/serve_admin.py` |
-| Backend API Contract | `backend/app/api/routes/`, `backend/app/schemas/` |
-
----
-
-# 52. AI에게 User Frontend 작업을 맡길 때
-
-최소 전달:
-
-```text
-README.md
-docs/ARCHITECTURE.md
-docs/PROJECT_STRUCTURE.md
-docs/FRONTEND.md
-docs/API.md
-
-frontend/user/
-```
-
-Backend 연동 문제면 추가:
-
-```text
-backend/app/api/routes/
-backend/app/schemas/
-```
-
-Chat 문제면 추가:
-
-```text
-docs/RAG.md
-backend/app/api/routes/chat.py
-backend/app/schemas/chat.py
-rag/service.py
-```
-
----
-
-# 53. AI에게 Admin Frontend 작업을 맡길 때
-
-최소:
-
-```text
-README.md
-docs/ARCHITECTURE.md
-docs/FRONTEND.md
-docs/API.md
-
-frontend/admin/
-
-backend/app/api/routes/admin.py
-backend/app/api/routes/admin_auth.py
-backend/app/schemas/admin.py
-backend/app/schemas/admin_auth.py
-```
-
----
-
-# 54. AI가 Frontend 수정 전 확인할 질문
-
-```text
-1. User Frontend인가 Admin Frontend인가?
-2. API는 curl에서 정상인가?
-3. Browser Network Status는 무엇인가?
-4. API Base는 /api인가?
-5. Vite/Admin Proxy는 정상인가?
-6. Request Field가 Backend Schema와 맞는가?
-7. Response Field가 Frontend 코드와 맞는가?
-8. UI 문제인가 API 문제인가?
-```
-
----
-
-# 55. User Frontend 전체 연결
-
-```text
-Browser
+근거 보기
+
+``` text
+   +
+용어 Tooltip
    ↓
-Vite
-   ↓
-React App
-   ↓
-ListScreen / DetailScreen
-   ↓
-API_BASE_URL = /api
-   ↓
-Vite Proxy
-   ↓
-FastAPI :8000
-   ↓
-Service
-   ↓
-DB / RAG
+사용자가 공고문을
 ```
 
----
+쉽게 이해하고 신뢰할 수 있는 서비스
 
-# 56. Admin Frontend 전체 연결
+문서 작성 시 주의
 
-```text
-Browser
-   ↓
-serve_admin.py
-   ↓
-HTML / CSS / JS
-   ↓
-/api
-   ↓
-serve_admin.py Proxy
-   ↓
-FastAPI :8000
-   ↓
-Admin Service
-   ↓
-DB / Pipeline
-```
+이 문서에서 확정된 사실과 향후 구현 예정인 기능을 구분하는 것이
+중요하다.
 
----
+**현재 구현:**
 
-# 57. 가장 중요한 디버깅 원칙
+**공고 목록**
 
-Frontend 화면에서 문제가 보인다고 해서
-항상 Frontend 문제인 것은 아닙니다.
+-   공고 상세
+-   핵심 정보 카드
+-   AI 챗봇
+-   근거 보기
+-   공고문 다운로드
+-   관리자 용어사전 API 연동
+-   용어사전 UI
 
-예:
+**진행/고도화:**
 
-```text
-화면에 잘못된 AI 답변 표시
-```
+-   핵심정보 정확도 개선
+-   근거 보기 핵심 내용만 표시
+-   답변과 근거 데이터 매핑
+-   챗봇 용어 Tooltip
+-   용어사전과 챗봇 연동
 
-먼저:
-
-```text
-POST /api/chat Response
-```
-
-를 확인합니다.
-
-Response 자체가 잘못되었다면:
-
-```text
-RAG/Backend 문제
-```
-
-입니다.
-
-반대로 curl에서는 정상이지만 화면에 표시되지 않는다면:
-
-```text
-Frontend 문제
-```
-
-입니다.
-
----
-
-# 58. 핵심 요약
-
-현재 User Frontend의 연결 구조:
-
-```text
-React/Vite
-   ↓
-API_BASE_URL = /api
-   ↓
-Vite Proxy
-   ↓
-FastAPI :8000
-```
-
-주요 사용자 화면:
-
-```text
-ListScreen.tsx
-→ 공고 목록
-
-DetailScreen.tsx
-→ 공고 상세 + Chat
-```
-
-현재 Admin Frontend:
-
-```text
-Static HTML/CSS/JS
-   ↓
-serve_admin.py
-   ↓
-/api Proxy
-   ↓
-FastAPI :8000
-```
-
-Frontend 관련 문제를 수정할 때는 반드시 먼저:
-
-```text
-API가 정상인지
-```
-
-확인합니다.
-
-API가 정상이라면 Frontend를 보고,
-API 자체가 잘못되었다면 Backend/RAG를 먼저 수정합니다.
+따라서 후임자가 이 문서를 읽고 "문서에 적혀 있으니 이미 완성된
+기능이겠구나"라고 오해하지 않도록, 진행 중인 기능은 반드시 진행 중,
+고도화 예정, Backend 연동 예정 등의 상태를 함께 표시한다.

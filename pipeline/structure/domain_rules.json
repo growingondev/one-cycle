@@ -7,7 +7,10 @@
     "content": 1,
     "negative": -3,
     "exact_title_bonus": 2,
-    "composite_bonus": 3
+    "composite_bonus": 3,
+    "evidence_source_bonus": 2,
+    "evidence_bonus_min_sources": 2,
+    "evidence_source_bonus_max": 4
   },
   "low_confidence_threshold": 0.65,
   "max_content_chars": 1200,
@@ -46,7 +49,10 @@
         "무장애",
         "배리어프리"
       ],
-      "negative_keywords": []
+      "negative_keywords": [
+        "일반세대 기본시설",
+        "커뮤니티시설"
+      ]
     },
     {
       "category": "supply",
@@ -63,8 +69,10 @@
         "주택형별공급",
         "공급세대수"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "주택형", "전용면적", "공급면적", "세대수", "공급세대수", "특별공급", "일반공급"
+      ],
+      "negative_keywords": ["예비입주자 서류", "공급계약"]
     },
     {
       "category": "supply",
@@ -77,8 +85,10 @@
         "주택규모",
         "사업규모"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "대지면적", "연면적", "건축규모", "지하", "지상", "동수", "총세대수"
+      ],
+      "negative_keywords": ["공급금액", "분양대금"]
     },
     {
       "category": "price",
@@ -94,8 +104,10 @@
         "분양대금",
         "공급가격"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "공급금액", "분양가", "주택가격", "총액", "계약금", "중도금", "잔금"
+      ],
+      "negative_keywords": ["발코니 확장금액", "추가선택품목 금액"]
     },
     {
       "category": "option",
@@ -108,8 +120,10 @@
         "확장비용",
         "확장공사"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "발코니", "확장형", "비확장형", "확장공사비", "확장대금", "확장 선택"
+      ],
+      "negative_keywords": ["마이너스옵션", "가전 선택품목"]
     },
     {
       "category": "option",
@@ -125,8 +139,10 @@
         "마이너스옵션",
         "플러스옵션"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "선택품목", "옵션품목", "유상옵션", "시스템에어컨", "가전제품", "가구", "마이너스옵션"
+      ],
+      "negative_keywords": ["발코니 확장", "무상제공"]
     },
     {
       "category": "eligibility",
@@ -142,8 +158,10 @@
         "공급신청자격",
         "입주자격요건"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "입주자모집공고일 현재", "무주택세대구성원", "청약통장", "소득기준", "자산기준", "거주요건", "신청자격"
+      ],
+      "negative_keywords": ["당첨자 발표", "계약체결", "서류제출 대상자"]
     },
     {
       "category": "schedule",
@@ -159,8 +177,10 @@
         "신청및접수",
         "신청장소"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "청약접수", "신청접수", "접수기간", "접수일자", "신청일", "당첨자발표", "인터넷청약"
+      ],
+      "negative_keywords": ["입주예정", "계약금 납부"]
     },
     {
       "category": "schedule",
@@ -174,8 +194,10 @@
         "입주시기",
         "입주지정기간"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "입주예정", "입주개시", "입주지정기간", "입주일", "입주시기", "준공예정"
+      ],
+      "negative_keywords": ["청약접수", "계약체결일"]
     },
     {
       "category": "contract",
@@ -191,8 +213,10 @@
         "동호수지정",
         "계약장소"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "계약체결", "계약기간", "계약장소", "계약서 작성", "동호수", "전자계약", "계약당사자"
+      ],
+      "negative_keywords": ["청약신청", "입주금 납부"]
     },
     {
       "category": "documents",
@@ -208,8 +232,10 @@
         "필요서류",
         "증빙서류"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "주민등록표등본", "주민등록표초본", "가족관계증명서", "인감증명서", "신분증", "소득증빙", "자격확인서류"
+      ],
+      "negative_keywords": ["서류제출 대상자 발표", "계약서"]
     },
     {
       "category": "payment",
@@ -226,8 +252,10 @@
         "잔금",
         "분양대금납부"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "계약금", "중도금", "잔금", "납부기한", "납부계좌", "입금계좌", "분할납부"
+      ],
+      "negative_keywords": ["공급금액 총액", "대출이자"]
     },
     {
       "category": "restriction",
@@ -243,8 +271,10 @@
         "당첨취소",
         "제한사항"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "재당첨제한", "전매제한기간", "거주의무기간", "부적격당첨자", "당첨취소", "계약취소", "과태료"
+      ],
+      "negative_keywords": ["신청자격 확인", "유의사항"]
     },
     {
       "category": "notice",
@@ -258,8 +288,10 @@
         "안내사항",
         "기타사항"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "반드시 확인", "유의하시기", "주의하시기", "책임지지", "변경될 수", "착오", "불이익"
+      ],
+      "negative_keywords": ["신청자격", "공급금액", "제출서류"]
     },
     {
       "category": "location",
@@ -276,8 +308,10 @@
         "공급위치",
         "교통여건"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "사업지구", "대지위치", "교통", "교육환경", "주변환경", "기반시설", "단지배치"
+      ],
+      "negative_keywords": ["견본주택 위치", "계약장소"]
     },
     {
       "category": "management",
@@ -290,8 +324,10 @@
         "입주관리",
         "관리비"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "관리비", "관리사무소", "공동주택관리", "입주자대표회의", "하자보수", "시설관리"
+      ],
+      "negative_keywords": ["입주예정일", "주택관리번호"]
     },
     {
       "category": "organization",
@@ -306,8 +342,10 @@
         "사업시행자",
         "사업주체및시공업체"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "사업주체", "시행사", "시공사", "감리자", "건축주", "등록번호", "대표자"
+      ],
+      "negative_keywords": ["신청자", "계약자"]
     },
     {
       "category": "contact",
@@ -323,8 +361,10 @@
         "주택전시관",
         "사이버모델하우스"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "대표전화", "문의전화", "콜센터", "전화번호", "홈페이지", "견본주택", "모델하우스"
+      ],
+      "negative_keywords": ["비상연락망", "개인정보"]
     },
     {
       "category": "overview",
@@ -338,8 +378,10 @@
         "주요내용",
         "개요"
       ],
-      "content_keywords": [],
-      "negative_keywords": []
+      "content_keywords": [
+        "입주자모집공고", "공고일", "공급위치", "공급규모", "문의처", "청약일정"
+      ],
+      "negative_keywords": ["정정공고", "취소공고"]
     }
   ],
   "composite_rules": [

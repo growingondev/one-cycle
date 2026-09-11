@@ -41,13 +41,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-try:
-    from tkinter import Tk, filedialog, messagebox
-except ImportError:  # GUI가 없는 서버 환경
-    Tk = None
-    filedialog = None
-    messagebox = None
-
 
 OUTPUT_FILENAME = "step4-1_value_normalized.json"
 REPORT_FILENAME = "step4-2_value_validation.json"
@@ -1090,67 +1083,103 @@ def default_output_paths(input_path: Path) -> tuple[Path, Path]:
 
 
 def select_input_json() -> Path | None:
-    if Tk is None or filedialog is None:
+    try:
+        from tkinter import Tk, filedialog
+    except ImportError:
         return None
 
     root = Tk()
     root.withdraw()
+
     try:
-        root.attributes("-topmost", True)
-    except Exception:
-        pass
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
 
-    selected = filedialog.askopenfilename(
-        title="Structure 최종 JSON 선택",
-        filetypes=[
-            (
-                "Structure 최종 JSON",
-                "*step3-3_structured_tables.json",
-            ),
-            ("JSON Files", "*.json"),
-            ("All Files", "*.*"),
-        ],
-    )
-    root.destroy()
+        selected = filedialog.askopenfilename(
+            title="Structure 최종 JSON 선택",
+            filetypes=[
+                (
+                    "Structure 최종 JSON",
+                    "*step3-3_structured_tables.json",
+                ),
+                ("JSON Files", "*.json"),
+                ("All Files", "*.*"),
+            ],
+        )
 
-    return Path(selected).resolve() if selected else None
+        return Path(selected).resolve() if selected else None
+
+    finally:
+        root.destroy()
 
 
 def select_output_directory(initial_dir: Path) -> Path | None:
-    if Tk is None or filedialog is None:
+    try:
+        from tkinter import Tk, filedialog
+    except ImportError:
         return None
 
     root = Tk()
     root.withdraw()
+
     try:
-        root.attributes("-topmost", True)
-    except Exception:
-        pass
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
 
-    selected = filedialog.askdirectory(
-        title="값 정규화 결과 저장 폴더 선택",
-        initialdir=str(initial_dir),
-    )
-    root.destroy()
+        selected = filedialog.askdirectory(
+            title="값 정규화 결과 저장 폴더 선택",
+            initialdir=str(initial_dir),
+        )
 
-    return Path(selected).resolve() if selected else None
+        return Path(selected).resolve() if selected else None
+
+    finally:
+        root.destroy()
 
 
 def show_message(title: str, message: str, *, error: bool = False) -> None:
-    if Tk is None or messagebox is None:
+    try:
+        from tkinter import Tk, messagebox
+    except ImportError:
         return
+
+    root = None
 
     try:
         root = Tk()
         root.withdraw()
-        root.attributes("-topmost", True)
+
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+
         if error:
-            messagebox.showerror(title, message)
+            messagebox.showerror(
+                title,
+                message,
+                parent=root,
+            )
         else:
-            messagebox.showinfo(title, message)
-        root.destroy()
+            messagebox.showinfo(
+                title,
+                message,
+                parent=root,
+            )
+
     except Exception:
         pass
+
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
 
 def process(

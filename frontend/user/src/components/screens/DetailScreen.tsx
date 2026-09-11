@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   CalendarDays,
   House,
@@ -7,14 +7,38 @@ import {
   FileText,
   FileStack,
   ChevronDown,
-  ChevronUp,
+  ChevronUp, 
+  Download,
 } from "lucide-react";
 
 import { UserLayout } from "../layout/UserLayout";
 import { StatusPill } from "../common/StatusPill";
 import { Icon } from "../common/Icons";
 import { API_BASE_URL } from "../../config";
+import { GlossaryTooltip } from "../common/GlossaryTooltip";
+// 💡 파라미터로 받은 glossaryData를 활용하여 매칭
+function renderTextWithGlossary(text: string, glossaryData: Record<string, string>) {
+  // 1. 단어 목록을 가져와서 글자 길이가 '긴' 순서대로 내림차순 정렬 (포함 단어 버그 방지)
+  const terms = Object.keys(glossaryData).sort((a, b) => b.length - a.length);
+  if (terms.length === 0) return text;
 
+  // 2. 혹시 단어에 괄호나 특수문자가 있을 경우 정규식이 깨지는 것을 방지 (안전 장치)
+  const escapedTerms = terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
+  const regex = new RegExp(`(${escapedTerms.join("|")})`, "g");
+  const parts = text.split(regex);
+
+  return parts.map((part, index) => {
+    if (glossaryData[part]) {
+      return (
+        <GlossaryTooltip key={index} term={part} definition={glossaryData[part]}>
+          {part}
+        </GlossaryTooltip>
+      );
+    }
+    return <span key={index}>{part}</span>;
+  });
+}
 
 /* =========================
    공통 유틸
@@ -122,6 +146,54 @@ function toDisplayText(
 }
 
 
+function compactCardValue(
+  value: unknown,
+  fallback: string,
+  maxLength = 220
+): string {
+  const text = toDisplayText(
+    value,
+    fallback
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength).trim()}…`;
+}
+
+function hasDisplayValue(value: unknown): boolean {
+  return !(
+    value === null ||
+    value === undefined ||
+    (typeof value === "string" && value.trim() === "")
+  );
+}
+
+function formatHousingValue(value: unknown, unit?: "호" | "명"): string {
+  if (!hasDisplayValue(value)) {
+    return "";
+  }
+
+  const text =
+    typeof value === "number"
+      ? value.toLocaleString("ko-KR")
+      : toDisplayText(value, "").trim();
+
+  if (!text || !unit || text.endsWith(unit)) {
+    return text;
+  }
+
+  const isNumericValue =
+    typeof value === "number" || /^-?\d+(?:\.\d+)?$/.test(text.replace(/,/g, ""));
+
+  return isNumericValue ? `${text}${unit}` : text;
+}
+
+
 /* =========================
    근거 모달
 ========================= */
@@ -170,10 +242,14 @@ function SummaryCard({
   icon,
   title,
   rows,
+  action,
+  children,
 }: {
   icon: string;
   title: string;
   rows: [string, string][];
+  action?: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   const iconNode =
     icon === "calendar" ? (
@@ -190,10 +266,13 @@ function SummaryCard({
 
   return (
     <div className="border border-slate-200 rounded-lg p-4 mb-3">
-      <h3 className="flex items-center gap-2 text-blue-600 text-[16px] lg:text-[17px] font-bold mb-3">
-        <span>{iconNode}</span>
-        {title}
-      </h3>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="flex items-center gap-2 text-blue-600 text-[16px] lg:text-[17px] font-bold">
+          <span>{iconNode}</span>
+          {title}
+        </h3>
+        {action}
+      </div>
 
       {rows.map(([key, value], index) => (
         <div
@@ -204,11 +283,13 @@ function SummaryCard({
             {key}
           </b>
 
-          <span className="text-slate-900 font-medium text-[15px] lg:text-[17px] break-keep">
+          <span className="text-slate-900 font-medium text-[14px] lg:text-[15px] break-words whitespace-pre-line">
             {value}
           </span>
         </div>
       ))}
+
+      {children}
     </div>
   );
 }
@@ -232,6 +313,131 @@ type ChatMessage = {
   evidence?: EvidenceItem[];
 };
 
+type HousingItem = {
+  complex_name?: unknown;
+  housing_type?: unknown;
+  construction_units?: unknown;
+  supply_units?: unknown;
+  recruitment_units?: unknown;
+  waiting_waitlist?: unknown;
+  recruitment_waitlist?: unknown;
+};
+
+const HOUSING_ITEM_FIELDS: {
+  key: keyof HousingItem;
+  label: string;
+  unit?: "호" | "명";
+}[] = [
+  { key: "complex_name", label: "단지명" },
+  { key: "housing_type", label: "주택형" },
+  { key: "construction_units", label: "건설호수", unit: "호" },
+  { key: "supply_units", label: "공급호수", unit: "호" },
+  { key: "recruitment_units", label: "모집호수", unit: "호" },
+  { key: "waiting_waitlist", label: "대기 중인 예비자수", unit: "명" },
+  { key: "recruitment_waitlist", label: "모집할 예비자수", unit: "명" },
+];
+
+function HousingItemsDetails({ items }: { items: HousingItem[] }) {
+  return (
+    <div className="mt-4 pt-4 border-t border-slate-200 space-y-3">
+      {items.map((item, index) => {
+        const rows = HOUSING_ITEM_FIELDS.map(({ key, label, unit }) => ({
+          key,
+          label,
+          value: formatHousingValue(item[key], unit),
+        })).filter(({ value }) => value !== "");
+
+        return (
+          <section
+            key={`housing-item-${index}`}
+            className="rounded-lg border border-blue-100 bg-blue-50/50 p-3"
+          >
+            <h4 className="mb-2 text-[13px] font-bold text-blue-700">
+              상세 공급정보 {index + 1}
+            </h4>
+            <dl className="space-y-1.5">
+              {rows.map(({ key, label, value }) => (
+                <div
+                  key={key}
+                  className="grid grid-cols-[110px_minmax(0,1fr)] gap-2 text-[13px] leading-relaxed"
+                >
+                  <dt className="font-semibold text-slate-500">{label}</dt>
+                  <dd className="min-w-0 break-words font-medium text-slate-800">
+                    {value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function EligibilityDetailsContent({
+  commonConditions,
+  targetGroups,
+}: {
+  commonConditions: string[];
+  targetGroups: any[];
+}) {
+  return (
+    <>
+      {commonConditions.length > 0 && (
+        <div className="mb-5">
+          <h4 className="text-[14px] font-bold text-slate-800 mb-2">
+            ■ 공통 신청조건
+          </h4>
+          <ul className="list-disc pl-5 text-[13.5px] text-slate-700 space-y-1">
+            {commonConditions.map((condition, index) => (
+              <li key={`common-${index}`}>{condition}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {targetGroups.length > 0 && (
+        <div>
+          <h4 className="text-[14px] font-bold text-slate-800 mb-3">
+            ■ 계층별 상세조건
+          </h4>
+          <div className="space-y-3">
+            {targetGroups.map((group: any, index: number) => {
+              const label = group.label || "상세 자격";
+              let details = Array.isArray(group.details) ? group.details : [];
+
+              if (
+                details.length > 0 &&
+                typeof details[0] === "string" &&
+                details[0]
+                  .replace(/\s/g, "")
+                  .includes(label.replace(/\s/g, ""))
+              ) {
+                details = details.slice(1);
+              }
+
+              return (
+                <div
+                  key={group.code || index}
+                  className="bg-white border border-slate-200 p-3.5 rounded-lg shadow-sm text-[13.5px]"
+                >
+                  <b className="text-blue-700 block mb-2">{label}</b>
+                  <ul className="list-disc pl-4 text-slate-600 space-y-1.5 break-keep">
+                    {details.map((description: string, detailIndex: number) => (
+                      <li key={`desc-${detailIndex}`}>{description}</li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 
 /* =========================
    상세 화면
@@ -251,10 +457,48 @@ export function DetailScreen({
   const [isSummaryOpen, setIsSummaryOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [currentNotice, setCurrentNotice] = useState<any>(notice || null);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   // 💡 제출서류 근거 확인 토글을 위한 상태
   const [showDocsEvidence, setShowDocsEvidence] = useState(false);
+  const [showEligibilityDetails, setShowEligibilityDetails] = useState(false);
+  const [showSupplyDetails, setShowSupplyDetails] = useState(false);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const eligibilityToggleRef = useRef<HTMLButtonElement>(null);
+  const [glossary, setGlossary] = useState<Record<string, string>>({});
 
+  const closeEligibilityDetails = () => {
+    setShowEligibilityDetails(false);
+    window.requestAnimationFrame(() => eligibilityToggleRef.current?.focus());
+  };
+
+  useEffect(() => {
+    // 마운트 시 API를 한 번 호출하여 용어 사전을 메모리에 올려둡니다.
+    fetch(`${API_BASE_URL}/glossary`)
+      .then(res => res.json())
+      .then((data) => {
+        const glossaryMap: Record<string, string> = {};
+        if (Array.isArray(data)) {
+          data.forEach((item: any) => {
+            if (item.is_active !== false) { 
+              glossaryMap[item.term] = item.definition;
+            }
+          });
+        }
+        setGlossary(glossaryMap);
+      })
+      .catch(err => console.error("용어 사전 API 연동 실패:", err));
+  }, []);
+
+  useEffect(() => {
+    // 🟢 2. 창 전체가 아닌 '채팅창 내부'만 맨 아래로 내리도록 스크롤 로직 변경
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [messages]);
   /* =========================
      목록에서 전달받은 공고
   ========================= */
@@ -264,6 +508,12 @@ export function DetailScreen({
       setCurrentNotice(notice);
     }
   }, [notice]);
+
+  useEffect(() => {
+    setShowDocsEvidence(false);
+    setShowEligibilityDetails(false);
+    setShowSupplyDetails(false);
+  }, [notice?.id]);
 
 
   /* =========================
@@ -363,6 +613,49 @@ export function DetailScreen({
     }
   };
 
+  const handleDownload = async () => {
+    if (!currentNotice?.id || isDownloading) return;
+
+    setIsDownloading(true);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/announcements/${currentNotice.id}/download`
+      );
+
+      if (response.status === 404 || response.status === 409) {
+        showToast("현재 이 공고는 다운로드할 수 있는 원본 파일이 없습니다.");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(`공고문 다운로드 오류: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const documentInfo = currentNotice.documents?.find(
+        (item: any) => item.downloadStatus === "completed"
+      );
+      const contentDisposition = response.headers.get("Content-Disposition") || "";
+      const encodedFilename = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      const responseFilename = encodedFilename
+        ? decodeURIComponent(encodedFilename)
+        : undefined;
+      const link = document.createElement("a");
+
+      link.href = objectUrl;
+      link.download = responseFilename || documentInfo?.originalFilename || "공고문";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      console.error("공고문 다운로드 실패:", error);
+      showToast("공고문을 다운로드하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   /* =========================
      로딩
@@ -392,6 +685,23 @@ export function DetailScreen({
   const eligibility = keyInformation.eligibility ?? {};
   const incomeAssetCriteria = keyInformation.incomeAssetCriteria ?? keyInformation.income_asset_criteria ?? {};
   const requiredDocuments = keyInformation.requiredDocuments ?? keyInformation.required_documents ?? {};
+  const winnerAnnouncement = keyInformation.winnerAnnouncement ?? keyInformation.winner_announcement ?? {};
+
+  const rawHousingItems =
+    supplyInformation.housing_items ?? supplyInformation.housingItems;
+  const housingItems: HousingItem[] = Array.isArray(rawHousingItems)
+    ? rawHousingItems.filter((item: unknown): item is HousingItem => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) {
+          return false;
+        }
+
+        const housingItem = item as HousingItem;
+        return HOUSING_ITEM_FIELDS.some(({ key }) =>
+          hasDisplayValue(housingItem[key])
+        );
+      })
+    : [];
+  const hasSupplyDetails = housingItems.length > 0;
 
   // 데이터 보정 (크롤러의 새 데이터 적용)
   const displayAnnouncementDate = toDisplayText(
@@ -411,54 +721,118 @@ export function DetailScreen({
   /* =========================
      신청 일정
   ========================= */
+  const applicationPeriodDisplay =
+    applicationPeriod.start && applicationPeriod.end
+      ? `${applicationPeriod.start} ~ ${applicationPeriod.end}`
+      : compactCardValue(
+          applicationPeriod.summary,
+          "공고문 참조",
+          120
+        );
+
   const scheduleData: [string, string][] = [
-    ["게시일", displayAnnouncementDate],
-    ["마감일", toDisplayText(currentNotice.deadline_date, "-")],
-    ["운영 시간", toDisplayText(applicationPeriod.operating_hours, "공고문 참조")],
-    ["종료 조건", toDisplayText(applicationPeriod.end_condition, "공고문 참조")],
+    [
+      "게시일",
+      displayAnnouncementDate,
+    ],
+    [
+      "신청 기간",
+      applicationPeriodDisplay,
+    ],
+    [
+      "마감일",
+      compactCardValue(
+        currentNotice.deadlineDate ??
+          currentNotice.deadline_date ??
+          applicationPeriod.end,
+        "-",
+        80
+      ),
+    ],
+    [
+      "발표일",
+      compactCardValue(
+        winnerAnnouncement.announcement_date,
+        "공고문 참조",
+        80
+      ),
+    ],
   ];
 
-
-  /* =========================
-     공급 정보
-  ========================= */
-  const currentSupplyUnits = supplyInformation.current_supply_units;
-  const contractDeposit = supplyInformation.contract_deposit;
-  const priceUnit = supplyInformation.price_unit ?? "";
 
   const supplyData: [string, string][] = [
-    ["공급 위치", toDisplayText(supplyInformation.block ?? currentNotice.region, "공고문 참조")],
-    ["공고 유형", toDisplayText(currentNotice.notice_type || supplyInformation.housing_category, "공고문 참조")],
-    ["공급 세대", typeof currentSupplyUnits === "number" ? `${currentSupplyUnits.toLocaleString()}세대` : toDisplayText(currentSupplyUnits, "공고문 참조")],
-    ["입주 예정", toDisplayText(supplyInformation.move_in_expected, "공고문 참조")],
-    ["계약금", typeof contractDeposit === "number" ? `${contractDeposit.toLocaleString()}${priceUnit}` : toDisplayText(contractDeposit, "공고문 참조")],
+    [
+      "공급 위치",
+      compactCardValue(
+        currentNotice.region ??
+          supplyInformation.block,
+        "공고문 참조",
+        100
+      ),
+    ],
+    [
+      "공급 내용",
+      compactCardValue(
+        supplyInformation.summary,
+        "공고문 공급 정보를 확인하세요.",
+        230
+      ),
+    ],
   ];
 
 
-  /* =========================
-     신청 자격
-  ========================= */
-  const eligibilityData: [string, string][] = [
-    ["신청 자격", toDisplayText(eligibility.summary, "공고문 세부 요건 참조")],
-    ["소득/자산", toDisplayText(incomeAssetCriteria.summary, "공고문 세부 요건 참조")],
-  ];
+  const eligStatus = eligibility.status ?? "not_found";
+  
+  // 1. 요약 텍스트
+  const eligSummary = compactCardValue(
+    eligibility.summary,
+    "공고문 세부 자격 요건을 확인하세요.",
+    230
+  );
+  const incomeSummary = compactCardValue(
+    incomeAssetCriteria.summary,
+    "공고문 소득·자산 기준을 확인하세요.",
+    230
+  );
+  
+  // 2. 공통 조건 & 계층별 조건 (snake_case, camelCase 호환)
+  const commonConditions = eligibility.common_conditions ?? eligibility.commonConditions ?? [];
+  const targetGroups = eligibility.target_groups ?? eligibility.targetGroups ?? [];
+  
+  // 상세 버튼을 보여줄지 여부 (상세 데이터가 하나라도 추출되었을 때만 노출)
+  const hasEligibilityDetails = eligStatus === "extracted" && (commonConditions.length > 0 || targetGroups.length > 0);
 
 
-  /* =========================
-     제출 서류 (수정된 부분)
-  ========================= */
-  const personalContractExamples = Array.isArray(requiredDocuments.personal_contract_examples)
-    ? requiredDocuments.personal_contract_examples.map((item: unknown) => toDisplayText(item, "")).filter(Boolean)
+  const extractedDocumentItems = Array.isArray(
+    requiredDocuments.items
+  )
+    ? requiredDocuments.items
+        .map((item: unknown) =>
+          compactCardValue(
+            item,
+            "",
+            100
+          )
+        )
+        .filter(Boolean)
     : [];
 
-  const proxyContractNote = requiredDocuments.proxy_contract?.note;
+  const docsData: string[] =
+    extractedDocumentItems.length > 0
+      ? extractedDocumentItems
+      : [
+          compactCardValue(
+            requiredDocuments.summary,
+            "공고문 세부 제출서류를 확인하세요.",
+            180
+          ),
+        ];
 
-  const docsData: string[] = personalContractExamples.length > 0
-    ? [...personalContractExamples, ...(proxyContractNote ? [`대리계약: ${toDisplayText(proxyContractNote, "")}`] : [])]
-    : [toDisplayText(requiredDocuments.summary, "제출 서류 정보가 없습니다. 상세 공고문을 확인하세요.")];
-
-  // 💡 원본 근거 텍스트 (백엔드 구조에 맞춰 수정 가능. 현재는 fallback 제공)
-  const docsEvidenceText = requiredDocuments.evidence_text || "원본 HWP 발췌: 본 공고문에 안내된 필수 제출 서류는 공고일 이후 발급된 서류에 한하며, 자세한 내용은 원본 문서를 참조하시기 바랍니다.";
+  // Raw extracted text is shown only as evidence.
+  const docsEvidenceText =
+    requiredDocuments.evidence_text ??
+    requiredDocuments.text ??
+    "추출된 근거 정보가 없습니다."
 
 
   /* =========================
@@ -472,39 +846,48 @@ export function DetailScreen({
       </button>
 
       {/* 공고 제목 */}
-      <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-[26px] lg:text-[30px] font-extrabold text-slate-900 leading-tight tracking-tight mb-3 lg:mb-4">공고 상세 및 AI 질의응답</h1>
+      <div className="mb-6">
+        <div className="flex items-start justify-between gap-3 mb-3 lg:mb-4">
+          <h1 className="text-[26px] lg:text-[30px] font-extrabold text-slate-900 leading-tight tracking-tight">공고 상세 및 AI 질의응답</h1>
 
-          <div className="flex flex-col lg:flex-row lg:items-center gap-3">
-            <div className="flex-shrink-0 flex items-center gap-2">
-              <StatusPill>{toDisplayText(displayPublicationStatus, "상태 미확인")}</StatusPill>
-              {currentNotice.notice_type && (
-                <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded text-[13px] font-bold">{currentNotice.notice_type}</span>
-              )}
-            </div>
-            <strong className="text-[17px] lg:text-[20px] text-slate-900 leading-snug">{toDisplayText(currentNotice.title, "공고명 없음")}</strong>
-          </div>
+          <button
+            onClick={handleDownload}
+            disabled={isDownloading}
+            className="flex-shrink-0 flex items-center gap-2 bg-slate-800 text-white px-3 lg:px-4 py-2.5 rounded-lg text-[13px] lg:text-[15px] font-bold hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60 transition-colors shadow-sm"
+          >
+            <Download size={18} />
+            {isDownloading ? "다운로드 중" : "공고문 다운로드"}
+          </button>
+        </div>
 
-          <div className="text-[13px] lg:text-[15px] text-slate-500 mt-3">
-            <span className="mr-2">게시일</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayAnnouncementDate, "-")}</span>
-            <span className="mr-2">공고 상태</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayPublicationStatus, "상태 미확인")}</span>
-            {displayLocation !== "-" && (
-              <><span className="mr-2">공급 위치</span><span className="text-slate-800 font-medium">{displayLocation}</span></>
+        <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+          <div className="flex-shrink-0 flex items-center gap-2">
+            <StatusPill>{toDisplayText(displayPublicationStatus, "상태 미확인")}</StatusPill>
+            {currentNotice.notice_type && (
+              <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded text-[13px] font-bold">{currentNotice.notice_type}</span>
             )}
           </div>
+          <strong className="text-[17px] lg:text-[20px] text-slate-900 leading-snug">{toDisplayText(currentNotice.title, "공고명 없음")}</strong>
+        </div>
+
+        <div className="text-[13px] lg:text-[15px] text-slate-500 mt-3">
+          <span className="mr-2">게시일</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayAnnouncementDate, "-")}</span>
+          <span className="mr-2">공고 상태</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayPublicationStatus, "상태 미확인")}</span>
+          {displayLocation !== "-" && (
+            <><span className="mr-2">공급 위치</span><span className="text-slate-800 font-medium">{displayLocation}</span></>
+          )}
         </div>
       </div>
 
       {/* =====================
           메인 영역
       ====================== */}
-      <div className="grid grid-cols-1 xl:grid-cols-[340px_1fr] items-start gap-4 lg:gap-5">
+      <div className="grid grid-cols-1 items-start gap-4 lg:gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
 
         {/* =====================
             핵심정보
         ====================== */}
-        <div className="bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm">
+        <div className="min-w-0 bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm">
           <div className="flex items-center justify-between cursor-pointer xl:cursor-default" onClick={() => setIsSummaryOpen(!isSummaryOpen)}>
             <h2 className="text-[17px] lg:text-[19px] font-bold text-slate-900">핵심 정보 요약</h2>
             <button className="xl:hidden text-slate-500 hover:text-slate-800 p-1">{isSummaryOpen ? <ChevronUp size={22} /> : <ChevronDown size={22} />}</button>
@@ -512,8 +895,88 @@ export function DetailScreen({
 
           <div className={`${isSummaryOpen ? "block mt-4" : "hidden"} xl:block xl:mt-4`}>
             <SummaryCard icon="calendar" title="신청 일정" rows={scheduleData} />
-            <SummaryCard icon="home" title="공급 정보" rows={supplyData} />
-            <SummaryCard icon="eligibility" title="신청 자격" rows={eligibilityData} />
+            <SummaryCard
+              icon="home"
+              title="공급 정보"
+              rows={supplyData}
+              action={
+                hasSupplyDetails ? (
+                  <button
+                    type="button"
+                    aria-expanded={showSupplyDetails}
+                    aria-controls="supply-information-details"
+                    onClick={() => setShowSupplyDetails(!showSupplyDetails)}
+                    className="flex items-center gap-1 rounded bg-blue-50 px-2 py-1 text-[13px] text-blue-600 transition-colors hover:bg-blue-100"
+                  >
+                    {showSupplyDetails ? (
+                      <ChevronUp size={14} />
+                    ) : (
+                      <ChevronDown size={14} />
+                    )}
+                    {showSupplyDetails ? "상세 닫기" : "자세히 보기"}
+                  </button>
+                ) : undefined
+              }
+            >
+              {showSupplyDetails && (
+                <div id="supply-information-details">
+                  <HousingItemsDetails items={housingItems} />
+                </div>
+              )}
+            </SummaryCard>
+            <div className="relative border border-slate-200 rounded-lg p-4 mb-3">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="flex items-center gap-2 text-blue-600 text-[16px] lg:text-[17px] font-bold">
+                  <BadgeCheck size={20} /> 신청 자격
+                </h3>
+                
+                {/* 🟢 API에서 상세 조건 배열을 넘겨주었을 때만 버튼 노출 */}
+                {hasEligibilityDetails && (
+                  <button
+                    ref={eligibilityToggleRef}
+                    type="button"
+                    aria-expanded={showEligibilityDetails}
+                    aria-controls="eligibility-details-inline eligibility-details-panel"
+                    onClick={() => setShowEligibilityDetails(!showEligibilityDetails)}
+                    className="flex items-center gap-1 text-[13px] bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100 transition-colors"
+                  >
+                    {showEligibilityDetails ? (
+                      <ChevronUp size={14} />
+                    ) : (
+                      <ChevronDown size={14} />
+                    )}
+                    {showEligibilityDetails ? "상세 닫기" : "자세히 보기"}
+                  </button>
+                )}
+              </div>
+
+              {/* 기본 요약 (항상 노출) */}
+              <div className="grid grid-cols-[80px_1fr] lg:grid-cols-[100px_1fr] gap-2 items-baseline text-[14px] lg:text-[15px] leading-relaxed mb-2">
+                <b className="text-slate-500 font-semibold">신청 자격</b>
+                <span className="text-slate-900 font-medium break-words whitespace-pre-line">
+                  {eligSummary}
+                </span>
+              </div>
+              <div className="grid grid-cols-[80px_1fr] lg:grid-cols-[100px_1fr] gap-2 items-baseline text-[14px] lg:text-[15px] leading-relaxed mb-2">
+                <b className="text-slate-500 font-semibold">소득/자산</b>
+                <span className="text-slate-900 font-medium break-words whitespace-pre-line">
+                  {incomeSummary}
+                </span>
+              </div>
+
+              {/* 넓은 화면에서는 오른쪽 패널, 그보다 좁은 화면에서는 카드 아래에 표시 */}
+              {showEligibilityDetails && (
+                <div
+                  id="eligibility-details-inline"
+                  className="mt-4 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4 xl:hidden"
+                >
+                  <EligibilityDetailsContent
+                    commonConditions={commonConditions}
+                    targetGroups={targetGroups}
+                  />
+                </div>
+              )}
+            </div>
 
             {/* 💡 제출서류 및 근거 확인 영역 (수정된 부분) */}
             <div className="relative border border-slate-200 rounded-lg p-4 mb-2">
@@ -535,7 +998,7 @@ export function DetailScreen({
 
               {/* 버튼 클릭 시 노출되는 AI 원본 텍스트 */}
               {showDocsEvidence && (
-                <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg text-[13px] text-slate-700 leading-relaxed break-keep mt-4">
+                <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg text-[13px] text-slate-700 leading-relaxed whitespace-pre-wrap break-words mt-4 max-h-72 overflow-auto">
                   <b className="text-amber-700 block mb-1">🔍 AI 문서 추출 원본</b>
                   {toDisplayText(docsEvidenceText, "")}
                 </div>
@@ -546,14 +1009,46 @@ export function DetailScreen({
           </div>
         </div>
 
+        {showEligibilityDetails && (
+          <aside
+            id="eligibility-details-panel"
+            aria-labelledby="eligibility-details-title"
+            className="sticky top-8 hidden max-h-[calc(100vh-64px)] min-w-0 overflow-auto rounded-xl border border-slate-200 bg-white p-5 shadow-lg xl:block"
+          >
+            <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
+              <h3
+                id="eligibility-details-title"
+                className="flex items-center gap-2 text-[17px] font-bold text-blue-600"
+              >
+                <BadgeCheck size={20} /> 신청 자격 상세
+              </h3>
+              <button
+                type="button"
+                onClick={closeEligibilityDetails}
+                className="flex items-center gap-1 rounded bg-blue-50 px-2 py-1 text-[13px] text-blue-600 transition-colors hover:bg-blue-100"
+              >
+                <ChevronUp size={14} /> 상세 닫기
+              </button>
+            </div>
+            <EligibilityDetailsContent
+              commonConditions={commonConditions}
+              targetGroups={targetGroups}
+            />
+          </aside>
+        )}
+
         {/* =====================
             AI 채팅
         ====================== */}
-        <div className="bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm flex flex-col h-[600px] lg:h-[700px]">
+        <div
+          className={`min-w-0 bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm flex flex-col h-[600px] lg:h-[700px] ${
+            showEligibilityDetails ? "xl:col-start-2" : ""
+          }`}
+        >
           <h2 className="text-[17px] lg:text-[19px] font-bold text-slate-900 mb-1">AI에게 무엇이든 물어보세요</h2>
           <p className="text-[13px] lg:text-[14px] text-slate-500 mb-4">공고에 대해 궁금한 내용을 질문하면 AI가 답변해 드립니다.</p>
 
-          <div className="flex-1 overflow-auto px-2 py-4 bg-slate-50/50 rounded-lg border border-slate-100">
+          <div ref={chatContainerRef} className="flex-1 overflow-auto px-2 py-4 bg-slate-50/50 rounded-lg border border-slate-100">
             {messages.length === 0 && <div className="text-center text-slate-400 py-10 text-sm">질문을 입력하면 이곳에 AI 답변이 표시됩니다.</div>}
 
             {messages.map((message, index) => message.role === "user" ? (
@@ -566,7 +1061,7 @@ export function DetailScreen({
                 <div className="w-8 h-8 rounded-full border-2 border-blue-500 text-blue-600 flex items-center justify-center text-[12px] font-black flex-shrink-0 bg-white shadow-sm">AI</div>
                 <div className="flex flex-col items-start max-w-[80%] lg:max-w-[70%]">
                   <div className="bg-white border border-slate-200 text-slate-800 text-[14px] lg:text-[15px] leading-relaxed px-4 py-3 rounded-2xl rounded-tl-sm shadow-sm whitespace-pre-wrap break-keep">
-                    {message.text}
+                    {renderTextWithGlossary(message.text, glossary)}
                     {message.evidence && message.evidence.length > 0 && (
                       <button onClick={() => setEvidence(message.evidence ?? [])} className="block mt-3 bg-blue-50 text-blue-600 text-[13px] font-bold px-3 py-1.5 rounded-md hover:bg-blue-100 transition-colors">근거 문단 보기</button>
                     )}
@@ -575,6 +1070,7 @@ export function DetailScreen({
                 </div>
               </div>
             ))}
+          
           </div>
 
           <div className="mt-4">

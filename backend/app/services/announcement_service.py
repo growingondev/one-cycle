@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -21,6 +22,7 @@ def list_active_announcements(
     search: str | None,
     region: str | None,
     status_filter: str | None,
+    sort_order: str = "latest",
 ) -> AnnouncementListResponse:
     conditions = [
         "a.collection_run_id = ss.active_collection_run_id",
@@ -37,10 +39,41 @@ def list_active_announcements(
         conditions.append("a.region = :region")
         params["region"] = region
     if status_filter:
-        conditions.append("a.publication_status = :status")
-        params["status"] = status_filter
+        if status_filter == "상태 미확인":
+            conditions.append(
+                "("
+                "a.publication_status IS NULL "
+                "OR a.publication_status = '' "
+                "OR a.publication_status = 'fixture'"
+                ")"
+            )
+        else:
+            conditions.append(
+                "a.publication_status = :status"
+            )
+            params["status"] = status_filter
 
     where = " AND ".join(conditions)
+
+    notice_number_order = (
+        "CASE "
+        "WHEN a.notice_number ~ '^[0-9]+$' "
+        "THEN a.notice_number::integer "
+        "END"
+    )
+
+    if sort_order == "oldest":
+        order_by = (
+            "a.announcement_date ASC NULLS LAST, "
+            f"{notice_number_order} ASC NULLS LAST, "
+            "a.id ASC"
+        )
+    else:
+        order_by = (
+            "a.announcement_date DESC NULLS LAST, "
+            f"{notice_number_order} DESC NULLS LAST, "
+            "a.id DESC"
+        )
 
     total = db.execute(
         text(
@@ -60,15 +93,23 @@ def list_active_announcements(
             f"""
             SELECT
                 a.id,
+                a.notice_number,
                 a.title,
+                a.notice_type,
                 a.region,
                 a.announcement_date,
-                a.publication_status
+                a.publication_status,
+                COALESCE(
+                    a.deadline_date::text,
+                    ki.application_period ->> 'end'
+                ) AS deadline_date
             FROM system_state ss
             JOIN announcements a
               ON a.collection_run_id = ss.active_collection_run_id
+            LEFT JOIN key_information ki
+              ON ki.announcement_id = a.id
             WHERE {where}
-            ORDER BY a.announcement_date DESC NULLS LAST, a.id DESC
+            ORDER BY {order_by}
             OFFSET :offset
             LIMIT :limit
             """
@@ -80,10 +121,13 @@ def list_active_announcements(
         items=[
             AnnouncementListItem(
                 id=row["id"],
+                notice_number=row["notice_number"],
                 title=row["title"],
+                notice_type=row["notice_type"],
                 region=row["region"],
                 announcementDate=row["announcement_date"],
                 publicationStatus=row["publication_status"],
+                deadlineDate=row["deadline_date"],
             )
             for row in rows
         ],
@@ -105,6 +149,7 @@ def get_active_announcement(
                 a.id,
                 a.title,
                 a.region,
+                a.notice_type,
                 a.announcement_date,
                 a.publication_status,
                 a.detail_url,
@@ -162,6 +207,7 @@ def get_active_announcement(
         id=row["id"],
         title=row["title"],
         region=row["region"],
+        notice_type=row["notice_type"],
         announcementDate=row["announcement_date"],
         publicationStatus=row["publication_status"],
         detailUrl=row["detail_url"],
@@ -178,3 +224,46 @@ def get_active_announcement(
         ],
         keyInformation=key_info,
     )
+
+
+def get_active_announcement_download_info(
+    db: Session,
+    announcement_id: int,
+) -> dict[str, str | None] | None:
+    """Return the primary downloadable document for a public announcement."""
+    row = db.execute(
+        text(
+            """
+            SELECT d.original_filename, d.storage_path
+            FROM system_state ss
+            JOIN announcements a
+              ON a.collection_run_id = ss.active_collection_run_id
+            JOIN documents d
+              ON d.announcement_id = a.id
+            WHERE a.id = :announcement_id
+              AND d.download_status = 'completed'
+            ORDER BY
+              CASE d.document_role
+                WHEN 'primary' THEN 0
+                WHEN 'supporting' THEN 1
+                ELSE 2
+              END,
+              d.created_at DESC,
+              d.id DESC
+            LIMIT 1
+            """
+        ),
+        {"announcement_id": announcement_id},
+    ).mappings().first()
+
+    if row is None:
+        return None
+
+    storage_path = row["storage_path"]
+    if storage_path and not Path(storage_path).is_file():
+        storage_path = None
+
+    return {
+        "filename": row["original_filename"],
+        "storage_path": storage_path,
+    }

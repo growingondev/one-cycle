@@ -111,7 +111,8 @@ def get_runtime_info(
 
 def load_bge_m3_model(
     *,
-    model_name: str = "BAAI/bge-m3",
+    model_name: str,
+    model_path: str,
     use_fp16: bool = True,
     require_cuda: bool = True,
     device_index: int = 0,
@@ -180,7 +181,7 @@ FlagEmbedding import 실패
             print(f"GPU 메모리    : {runtime.gpu_memory_gb} GB")
 
         model = BGEM3FlagModel(
-            model_name,
+            model_path,
             use_fp16=runtime.use_fp16,
             devices=runtime.device,
         )

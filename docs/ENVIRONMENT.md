@@ -8,7 +8,7 @@
 > - Backend / Frontend 실행 Port
 > - PostgreSQL 및 pgvector 환경
 > - GPU / CUDA / BGE-M3 환경
-> - llama.cpp / Qwen Generation 환경
+> - llama.cpp / LLM Generation 환경
 > - `.env`와 `.env.example`의 역할
 > - 주요 환경변수의 의미
 > - 개발 서버를 실제로 실행하는 순서
@@ -892,12 +892,16 @@ MVP_DOCUMENT_FORMAT=hwpx
 ```text
 llama.cpp
 +
-Qwen 계열 GGUF Model
+GGUF 기반 LLM
 ```
 
 구조입니다.
 
 FastAPI가 직접 Model을 로딩하는 것이 아니라 별도의 llama.cpp Server를 HTTP로 호출합니다.
+
+Generation 코드는 특정 LLM에 종속되지 않도록 구성되어 있으며, llama.cpp에서 실행할 GGUF Model과 Model Alias를 변경하여 Gemma, Qwen 등 여러 LLM을 교체하여 사용할 수 있습니다.
+
+현재 성능 테스트에서는 Gemma 계열 GGUF Model을 사용하고 있습니다.
 
 ---
 
@@ -910,10 +914,16 @@ rag/generation/llm_client.py
        ↓
 HTTP
        ↓
+POST /v1/chat/completions
+       ↓
 llama.cpp Server
        ↓
-Qwen Model
+현재 실행 중인 GGUF LLM
 ```
+
+Generation Client는 특정 Model 이름을 Source Code에 고정하지 않습니다.
+
+실제 호출할 Model 이름은 `LLAMA_MODEL` 환경변수에서 결정됩니다.
 
 ---
 
@@ -925,27 +935,35 @@ Generation 설정:
 rag/generation/config.py
 ```
 
-현재 코드에서 사용한 기본 구조:
+현재 코드에서 사용하는 기본 구조:
 
 ```text
-base_url
+LLAMA_BASE_URL
 +
 /v1/chat/completions
 ```
 
-과거 확인된 기본 Local Endpoint:
+현재 개발 기준 Local Endpoint:
 
 ```text
 http://127.0.0.1:8080
 ```
 
-실제 현재 값은:
+실제 Runtime 값은 환경변수:
+
+```text
+LLAMA_BASE_URL
+```
+
+에서 결정됩니다.
+
+Generation 설정의 Source of Truth:
 
 ```text
 rag/generation/config.py
+.env
+.env.example
 ```
-
-를 Source of Truth로 확인합니다.
 
 ---
 
@@ -969,21 +987,86 @@ llama.cpp :8080
 
 Frontend Browser가 `8080`을 직접 호출하지 않습니다.
 
+Local PC에서 AWS llama.cpp Server를 직접 테스트할 경우 SSH Port Forwarding을 사용할 수 있습니다.
+
+예:
+
+```bash
+ssh -i <PEM_FILE_PATH> \
+-L 8080:127.0.0.1:8080 \
+ubuntu@<AWS_PUBLIC_IP>
+```
+
 ---
 
 # 37. LLM Model
 
-실제 Runtime Response에서 확인된 Model Path 예:
+Generation에서 사용할 실제 LLM GGUF 파일은 프로젝트 Source Code와 분리하여 관리합니다.
+
+현재 Gemma 성능 테스트에서 확인한 Model Path 예:
 
 ```text
-/home/ubuntu/ddokbot/models/llm/qwen/qwen2.5-7b-instruct-q4_k_m.gguf
+/home/ubuntu/ddokbot/models/llm/gemma4-12b/gemma-4-12B-it-Q4_0.gguf
 ```
-
-이 경로는 Project Root 내부가 아닌 별도의 Model 저장 영역입니다.
 
 Model Binary를 프로젝트 Source Code 폴더 안에 복사하지 않는 것이 좋습니다.
 
----
+llama.cpp Server 실행 시 실제 GGUF 경로와 별도로 Model Alias를 지정합니다.
+
+예:
+
+```bash
+./build/bin/llama-server \
+  -m /home/ubuntu/ddokbot/models/llm/gemma4-12b/gemma-4-12B-it-Q4_0.gguf \
+  --alias gemma \
+  --host 127.0.0.1 \
+  --port 8080 \
+  --ctx-size 8192 \
+  --n-gpu-layers all \
+  --no-ui
+```
+
+이 경우 RAG Runtime의 환경변수는 다음과 같이 맞춥니다.
+
+```env
+LLAMA_MODEL=gemma
+```
+
+핵심 규칙:
+
+```text
+llama-server --alias 값
+=
+LLAMA_MODEL 값
+```
+
+예:
+
+```text
+Gemma
+--alias gemma
+LLAMA_MODEL=gemma
+
+Qwen
+--alias qwen
+LLAMA_MODEL=qwen
+
+다른 LLM
+--alias <model-alias>
+LLAMA_MODEL=<model-alias>
+```
+
+따라서 성능 테스트 과정에서 LLM이 변경되어도 Python Generation Source Code의 Model 이름을 직접 수정하지 않습니다.
+
+변경 대상은:
+
+```text
+1. llama-server의 GGUF Model 경로
+2. llama-server의 --alias
+3. LLAMA_MODEL 환경변수
+```
+
+입니다.
 
 > **현재 미사용 환경변수**
 >
@@ -1021,14 +1104,19 @@ rag/generation/config.py
 현재 Generation은 별도로 실행되는 llama.cpp Server를 사용하며,
 FastAPI/RAG Process는 HTTP를 통해 해당 Server를 호출합니다.
 
-Generation Runtime의 주요 연결 설정은 `.env`에서 읽습니다.
+특정 LLM 이름과 주요 Generation Parameter를 Source Code에 고정하지 않고 환경변수로 관리할 수 있도록 구성되어 있습니다.
 
-현재 사용하는 환경변수:
+현재 사용하는 주요 환경변수:
 
 ```env
 LLAMA_BASE_URL=http://127.0.0.1:8080
-LLAMA_MODEL=qwen2.5-7b-instruct
+LLAMA_MODEL=gemma
 LLAMA_TIMEOUT_SECONDS=600
+LLAMA_TEMPERATURE=0.0
+LLAMA_TOP_P=1.0
+LLAMA_MAX_TOKENS=1024
+LLAMA_CONTEXT_TOP_K=5
+LLAMA_MAX_CONTEXT_CHARS=6000
 ```
 
 각 환경변수의 역할:
@@ -1036,8 +1124,13 @@ LLAMA_TIMEOUT_SECONDS=600
 | 환경변수 | 역할 |
 |---|---|
 | `LLAMA_BASE_URL` | llama.cpp Server 주소 |
-| `LLAMA_MODEL` | Chat Completion 요청에 전달할 Model 이름 |
+| `LLAMA_MODEL` | Chat Completion 요청에 전달할 llama.cpp Model Alias |
 | `LLAMA_TIMEOUT_SECONDS` | llama.cpp HTTP 요청 Timeout |
+| `LLAMA_TEMPERATURE` | LLM 답변 생성 Temperature |
+| `LLAMA_TOP_P` | LLM Top-P Sampling 값 |
+| `LLAMA_MAX_TOKENS` | LLM이 한 응답에서 생성할 최대 Token 수 |
+| `LLAMA_CONTEXT_TOP_K` | Generation Context에 전달할 최대 Retrieval 결과 수 |
+| `LLAMA_MAX_CONTEXT_CHARS` | LLM에 전달할 Retrieval 근거의 전체 최대 문자 수 |
 
 연결 구조:
 
@@ -1054,57 +1147,80 @@ POST /v1/chat/completions
   ↓
 llama.cpp Server
   ↓
-Qwen GGUF Model
+LLAMA_MODEL과 일치하는 Model Alias
+  ↓
+현재 실행 중인 GGUF LLM
 ```
 
-현재 검증된 Runtime 설정:
+현재 Gemma 성능 테스트 기준 Runtime 설정:
 
 ```text
 Base URL
 http://127.0.0.1:8080
 
-Model
-qwen2.5-7b-instruct
+Model Alias
+gemma
+
+Temperature
+0.0
+
+Top-P
+1.0
+
+Max Output Tokens
+1024
+
+Context Top-K
+5
+
+Max Retrieval Context Characters
+6000
 
 Timeout
 600 seconds
 ```
 
-Generation 품질 관련 Parameter는 현재 코드에서 관리합니다.
+`LLAMA_MAX_CONTEXT_CHARS`는 각 Chunk마다 6000자를 허용한다는 의미가 아닙니다.
 
-대표 값:
+Generation에 전달되는 Retrieval 근거 전체에 대해 최대 문자 수를 제한합니다.
+
+예:
 
 ```text
-temperature = 0.0
-top_p = 1.0
-max_tokens = 512
-context_top_k = 5
-max_chars_per_context = 6000
+LLAMA_CONTEXT_TOP_K=5
+LLAMA_MAX_CONTEXT_CHARS=6000
 ```
 
-따라서 설정은 두 종류로 구분합니다.
+이면 Retrieval 결과는 최대 5개까지 후보로 사용할 수 있지만,
+실제 Prompt에 전달되는 근거 Content의 전체 길이는 최대 약 6000자를 기준으로 제한합니다.
+
+현재 Generation 설정 구조:
 
 ```text
-Runtime / Deployment 설정
 .env
+│
 ├─ LLAMA_BASE_URL
 ├─ LLAMA_MODEL
-└─ LLAMA_TIMEOUT_SECONDS
-
-Generation 정책 / 품질 설정
+├─ LLAMA_TIMEOUT_SECONDS
+│
+├─ LLAMA_TEMPERATURE
+├─ LLAMA_TOP_P
+├─ LLAMA_MAX_TOKENS
+│
+├─ LLAMA_CONTEXT_TOP_K
+└─ LLAMA_MAX_CONTEXT_CHARS
+        ↓
 rag/generation/config.py
-├─ temperature
-├─ top_p
-├─ max_tokens
-├─ context_top_k
-└─ max_chars_per_context
+        ↓
+GenerationConfig
 ```
 
-llama.cpp Server 주소, Model 이름, Timeout을 변경할 때는
-`rag/generation/config.py`를 직접 수정하기보다 `.env` 환경변수를 변경합니다.
+따라서 Model 또는 Generation Parameter를 변경할 때 `rag/generation/config.py`의 값을 직접 수정하는 방식보다 환경변수를 변경하는 방식을 사용합니다.
 
-Generation Parameter 자체를 조정할 때는
-`rag/generation/config.py`의 `GenerationConfig`를 확인합니다.
+`rag/generation/config.py`에는 환경변수가 없을 때 사용할 일부 기본값과 설정 검증 로직이 존재하지만,
+`LLAMA_MODEL`은 특정 LLM을 기본값으로 고정하지 않습니다.
+
+실행 전에 사용할 Model Alias를 명시적으로 설정해야 합니다.
 
 ---
 
@@ -1119,9 +1235,21 @@ curl -i \
 http://127.0.0.1:8080/v1/models
 ```
 
-실제 llama.cpp Server의 지원 Endpoint에 따라 확인 방법은 달라질 수 있습니다.
+현재 Gemma Server가 `--alias gemma`로 실행된 경우 응답의 Model ID에서 다음 값을 확인할 수 있습니다.
 
-Generation Client가 사용하는 정확한 Endpoint:
+```text
+"id": "gemma"
+```
+
+이 값과:
+
+```env
+LLAMA_MODEL=gemma
+```
+
+가 일치해야 합니다.
+
+Generation Client가 사용하는 정확한 Endpoint 및 설정:
 
 ```text
 rag/generation/config.py
@@ -1146,16 +1274,18 @@ POST /v1/chat/completions
 
 ```json
 {
-  "model": "...",
+  "model": "gemma",
   "messages": [],
-  "temperature": 0,
-  "top_p": 1,
-  "max_tokens": 512,
+  "temperature": 0.0,
+  "top_p": 1.0,
+  "max_tokens": 1024,
   "stream": false
 }
 ```
 
-정확한 Payload는:
+실제 `model`, `temperature`, `top_p`, `max_tokens` 값은 `GenerationConfig`와 Runtime 환경변수에서 결정됩니다.
+
+정확한 Payload 생성 코드는:
 
 ```text
 rag/generation/llm_client.py
@@ -1478,7 +1608,8 @@ PostgreSQL             RAG
                   llama.cpp :8080
                          │
                          ▼
-                     Qwen GGUF
+                  GGUF 기반 LLM
+               (Gemma / Qwen 등)
 ```
 
 ---
@@ -1515,8 +1646,54 @@ http://127.0.0.1:8000/api/health/db
 
 Generation 기능을 사용할 경우 llama.cpp Server를 먼저 실행합니다.
 
-정확한 실행 Command는 사용 중인 llama.cpp Build와 Model 위치에 따라 달라질 수 있으므로
-현재 서버의 실제 실행 Script/Command를 기록하여 운영 문서에 추가하는 것을 권장합니다.
+현재 구조에서는 사용할 Model에 따라 GGUF 파일 경로와 `--alias`를 지정합니다.
+
+예:
+
+```bash
+./build/bin/llama-server \
+  -m <GGUF_MODEL_PATH> \
+  --alias <MODEL_ALIAS> \
+  --host 127.0.0.1 \
+  --port 8080 \
+  --ctx-size 8192 \
+  --n-gpu-layers all \
+  --no-ui
+```
+
+실행 후:
+
+```bash
+curl http://127.0.0.1:8080/v1/models
+```
+
+로 실제 Model Alias를 확인합니다.
+
+응답의 Model ID와:
+
+```text
+LLAMA_MODEL
+```
+
+환경변수 값이 동일해야 합니다.
+
+`--ctx-size`는 llama.cpp Server가 한 요청에서 사용할 수 있는 전체 Context 크기입니다.
+
+반면:
+
+```text
+LLAMA_MAX_TOKENS
+```
+
+는 LLM이 생성할 최대 출력 Token 수이며,
+
+```text
+LLAMA_MAX_CONTEXT_CHARS
+```
+
+는 RAG에서 LLM Prompt에 전달할 Retrieval 근거 길이를 제한하는 설정입니다.
+
+세 값은 서로 다른 역할을 가지므로 구분하여 관리합니다.
 
 Source Code 기준 연결 정보:
 
@@ -1791,13 +1968,19 @@ backend rag pipeline config \
 8. GPU/CUDA 검증
 9. BGE-M3 Model 확인
 10. llama.cpp 설치
-11. Qwen GGUF Model 준비
-12. .env 작성
-13. Backend 실행
-14. Frontend npm install
-15. Frontend 실행
-16. Smoke Test
+11. 사용할 LLM GGUF Model 준비
+12. llama-server Model Alias 설정
+13. .env 작성
+14. Backend 실행
+15. Frontend npm install
+16. Frontend 실행
+17. Smoke Test
 ```
+
+LLM Model은 특정 Qwen Model을 필수로 요구하지 않습니다.
+
+현재 Generation 인터페이스와 호환되는 llama.cpp GGUF Model을 선택하고,
+`--alias`와 `LLAMA_MODEL` 값을 일치시킵니다.
 
 ---
 
@@ -1896,6 +2079,9 @@ FastAPI :8000
 Generation
 llama.cpp :8080
 
+Current LLM Test Model
+Gemma GGUF
+
 Embedding
 BAAI/bge-m3
 
@@ -1921,8 +2107,27 @@ RAG
  ↓
 llama.cpp
  ↓
-Qwen
+현재 선택된 GGUF LLM
 ```
+
+Generation Model은 Source Code에 특정 Model 이름을 고정하지 않습니다.
+
+```text
+GGUF Model
+   ↓
+llama-server --alias
+   ↓
+LLAMA_MODEL
+   ↓
+rag/generation/config.py
+   ↓
+rag/generation/llm_client.py
+```
+
+구조로 연결됩니다.
+
+따라서 향후 Gemma, Qwen 또는 다른 llama.cpp 호환 GGUF Model을 성능 비교할 때 Generation Source Code를 반복 수정하지 않고,
+Model 파일, llama-server Alias, Runtime 환경변수를 변경하여 테스트합니다.
 
 환경 문제를 수정할 때는 코드 문제와 환경 문제를 먼저 구분합니다.
 

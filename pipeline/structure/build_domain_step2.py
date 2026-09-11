@@ -46,9 +46,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterator
 
-from tkinter import Tk, messagebox
-from tkinter.filedialog import askopenfilename
-
 
 # ===========================================================================
 # 도메인 규칙 로딩
@@ -330,6 +327,29 @@ def score_domain_rule(
         # 같은 위치에서 동의어가 여러 개 겹쳐도 한 번만 가중한다.
         score += weight
         matched.extend({"keyword": hit, "source": source_name, "weight": weight} for hit in hits)
+
+    # 같은 표현이 한 위치에서 반복되는 것보다 제목·본문·표 헤더처럼 서로
+    # 독립적인 위치에서 함께 발견되는 것을 더 강한 근거로 본다.
+    positive_sources = {
+        item["source"]
+        for item in matched
+        if item["source"] in {"title", "parent_title", "table_header", "content"}
+    }
+    minimum_sources = max(2, int(weights.get("evidence_bonus_min_sources", 2)))
+    if len(positive_sources) >= minimum_sources:
+        per_source_bonus = int(weights.get("evidence_source_bonus", 0))
+        max_bonus = int(weights.get("evidence_source_bonus_max", per_source_bonus * 2))
+        bonus = min(
+            max_bonus,
+            per_source_bonus * (len(positive_sources) - minimum_sources + 1),
+        )
+        if bonus:
+            score += bonus
+            matched.append({
+                "keyword": "+".join(sorted(positive_sources)),
+                "source": "evidence_bonus",
+                "weight": bonus,
+            })
 
     title_compact = compact_text(str(sources.get("title") or ""))
     for keyword in rule.get("title_keywords") or []:
@@ -1632,7 +1652,20 @@ def process(
 # ===========================================================================
 
 def select_input_json() -> str | None:
-    """Step 1 최종 hierarchy JSON 선택."""
+    """Step 1 최종 hierarchy JSON 선택.
+
+    tkinter는 로컬 GUI 실행에서만 필요하므로 여기서 지연 로드한다.
+    Document Worker가 process()만 import/호출할 때는 tkinter를 로드하지 않는다.
+    """
+
+    try:
+        from tkinter import Tk
+        from tkinter.filedialog import askopenfilename
+    except ImportError as exc:
+        raise RuntimeError(
+            "GUI 파일 선택 기능을 사용할 수 없습니다. "
+            "서버/Worker 환경에서는 process() 또는 run_structure_pipeline()을 사용하세요."
+        ) from exc
 
     root = Tk()
 
@@ -1643,8 +1676,9 @@ def select_input_json() -> str | None:
         True,
     )
 
-    selected = (
-        askopenfilename(
+    try:
+        selected = (
+            askopenfilename(
             title=(
                 "1단계 최종 계층 "
                 "JSON 선택"
@@ -1663,9 +1697,9 @@ def select_input_json() -> str | None:
                 ),
             ],
         )
-    )
-
-    root.destroy()
+        )
+    finally:
+        root.destroy()
 
     return (
         selected
@@ -1855,6 +1889,14 @@ def print_repair_summary(
 # ===========================================================================
 
 def main() -> None:
+    try:
+        from tkinter import messagebox
+    except ImportError as exc:
+        raise RuntimeError(
+            "GUI 실행 기능을 사용할 수 없습니다. "
+            "서버/Worker 환경에서는 main()이 아니라 process()를 사용하세요."
+        ) from exc
+
     input_path = (
         select_input_json()
     )

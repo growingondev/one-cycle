@@ -8,6 +8,9 @@ import { GlossaryScreen } from "./components/screens/GlossaryScreen";
 type Screen = "intro" | "list" | "detail" | "guide" | "glossary" | "admin-notices" | "admin-docs" | "admin-errors";
 type Toast = { message: string; id: number } | null;
 
+// 💡 백엔드 서버 연동 주소
+export const API_BASE_URL = "/api";
+
 function useToast() {
   const [toast, setToast] = useState<Toast>(null);
   const showToast = (message: string) => {
