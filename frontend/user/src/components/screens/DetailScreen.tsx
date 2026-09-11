@@ -323,12 +323,13 @@ type HousingItem = {
   recruitment_waitlist?: unknown;
 };
 
+type HousingItemFieldKey = Exclude<keyof HousingItem, "complex_name">;
+
 const HOUSING_ITEM_FIELDS: {
-  key: keyof HousingItem;
+  key: HousingItemFieldKey;
   label: string;
   unit?: "호" | "명";
 }[] = [
-  { key: "complex_name", label: "단지명" },
   { key: "housing_type", label: "주택형" },
   { key: "construction_units", label: "건설호수", unit: "호" },
   { key: "supply_units", label: "공급호수", unit: "호" },
@@ -337,37 +338,113 @@ const HOUSING_ITEM_FIELDS: {
   { key: "recruitment_waitlist", label: "모집할 예비자수", unit: "명" },
 ];
 
+type HousingItemGroup = {
+  key: string;
+  complexName: string | null;
+  items: HousingItem[];
+};
+
+function groupHousingItems(items: HousingItem[]): HousingItemGroup[] {
+  const groups: HousingItemGroup[] = [];
+  const namedGroups = new Map<string, HousingItemGroup>();
+
+  items.forEach((item, index) => {
+    const complexName = toDisplayText(item.complex_name, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    // 단지명이 없는 항목은 서로 합치지 않고 각각 독립 항목으로 유지합니다.
+    if (!complexName) {
+      groups.push({
+        key: `unnamed-${index}`,
+        complexName: null,
+        items: [item],
+      });
+      return;
+    }
+
+    const existingGroup = namedGroups.get(complexName);
+
+    if (existingGroup) {
+      existingGroup.items.push(item);
+      return;
+    }
+
+    const newGroup: HousingItemGroup = {
+      key: `complex-${index}`,
+      complexName,
+      items: [item],
+    };
+
+    namedGroups.set(complexName, newGroup);
+    groups.push(newGroup);
+  });
+
+  return groups;
+}
+
 function HousingItemsDetails({ items }: { items: HousingItem[] }) {
+  const groups = groupHousingItems(items);
+
   return (
-    <div className="mt-4 pt-4 border-t border-slate-200 space-y-3">
-      {items.map((item, index) => {
-        const rows = HOUSING_ITEM_FIELDS.map(({ key, label, unit }) => ({
-          key,
-          label,
-          value: formatHousingValue(item[key], unit),
-        })).filter(({ value }) => value !== "");
+    <div className="mt-4 space-y-3 border-t border-slate-200 pt-4">
+      {groups.map((group, groupIndex) => {
+        // 단지 안에서 하나라도 값이 있는 필드만 열로 표시합니다.
+        const visibleFields = HOUSING_ITEM_FIELDS.filter(({ key }) =>
+          group.items.some((item) => hasDisplayValue(item[key]))
+        );
 
         return (
           <section
-            key={`housing-item-${index}`}
+            key={group.key}
             className="rounded-lg border border-blue-100 bg-blue-50/50 p-3"
           >
-            <h4 className="mb-2 text-[13px] font-bold text-blue-700">
-              상세 공급정보 {index + 1}
+            <h4 className="mb-3 text-[14px] font-bold text-blue-700">
+              {group.complexName ?? `상세 공급정보 ${groupIndex + 1}`}
             </h4>
-            <dl className="space-y-1.5">
-              {rows.map(({ key, label, value }) => (
-                <div
-                  key={key}
-                  className="grid grid-cols-[110px_minmax(0,1fr)] gap-2 text-[13px] leading-relaxed"
-                >
-                  <dt className="font-semibold text-slate-500">{label}</dt>
-                  <dd className="min-w-0 break-words font-medium text-slate-800">
-                    {value}
-                  </dd>
-                </div>
-              ))}
-            </dl>
+
+            {visibleFields.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-max border-collapse text-left text-[13px]">
+                  <thead>
+                    <tr className="bg-white/70">
+                      {visibleFields.map(({ key, label }) => (
+                        <th
+                          key={key}
+                          scope="col"
+                          className="whitespace-nowrap border-b border-blue-100 px-3 py-2 font-semibold text-slate-500"
+                        >
+                          {label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+
+                  <tbody className="divide-y divide-blue-100">
+                    {group.items.map((item, itemIndex) => (
+                      <tr key={`${group.key}-item-${itemIndex}`}>
+                        {visibleFields.map(({ key, unit }) => {
+                          const value = formatHousingValue(item[key], unit);
+
+                          return (
+                            <td
+                              key={key}
+                              className="whitespace-nowrap px-3 py-2 font-medium text-slate-800"
+                            >
+                              {value || "-"}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-[13px] text-slate-500">
+                표시할 상세 공급정보가 없습니다.
+              </p>
+            )}
           </section>
         );
       })}
@@ -464,13 +541,7 @@ export function DetailScreen({
   const [showEligibilityDetails, setShowEligibilityDetails] = useState(false);
   const [showSupplyDetails, setShowSupplyDetails] = useState(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
-  const eligibilityToggleRef = useRef<HTMLButtonElement>(null);
   const [glossary, setGlossary] = useState<Record<string, string>>({});
-
-  const closeEligibilityDetails = () => {
-    setShowEligibilityDetails(false);
-    window.requestAnimationFrame(() => eligibilityToggleRef.current?.focus());
-  };
 
   useEffect(() => {
     // 마운트 시 API를 한 번 호출하여 용어 사전을 메모리에 올려둡니다.
@@ -689,6 +760,7 @@ export function DetailScreen({
 
   const rawHousingItems =
     supplyInformation.housing_items ?? supplyInformation.housingItems;
+
   const housingItems: HousingItem[] = Array.isArray(rawHousingItems)
     ? rawHousingItems.filter((item: unknown): item is HousingItem => {
         if (!item || typeof item !== "object" || Array.isArray(item)) {
@@ -696,11 +768,16 @@ export function DetailScreen({
         }
 
         const housingItem = item as HousingItem;
-        return HOUSING_ITEM_FIELDS.some(({ key }) =>
-          hasDisplayValue(housingItem[key])
+
+        return (
+          hasDisplayValue(housingItem.complex_name) ||
+          HOUSING_ITEM_FIELDS.some(({ key }) =>
+            hasDisplayValue(housingItem[key])
+          )
         );
       })
     : [];
+
   const hasSupplyDetails = housingItems.length > 0;
 
   // 데이터 보정 (크롤러의 새 데이터 적용)
@@ -782,23 +859,22 @@ export function DetailScreen({
 
 
   const eligStatus = eligibility.status ?? "not_found";
-  
+
   // 1. 요약 텍스트
-  const eligSummary = compactCardValue(
+  const eligSummary = toDisplayText(
     eligibility.summary,
-    "공고문 세부 자격 요건을 확인하세요.",
-    230
+    "공고문 세부 자격 요건을 확인하세요."
   );
   const incomeSummary = compactCardValue(
     incomeAssetCriteria.summary,
     "공고문 소득·자산 기준을 확인하세요.",
     230
   );
-  
+
   // 2. 공통 조건 & 계층별 조건 (snake_case, camelCase 호환)
   const commonConditions = eligibility.common_conditions ?? eligibility.commonConditions ?? [];
   const targetGroups = eligibility.target_groups ?? eligibility.targetGroups ?? [];
-  
+
   // 상세 버튼을 보여줄지 여부 (상세 데이터가 하나라도 추출되었을 때만 노출)
   const hasEligibilityDetails = eligStatus === "extracted" && (commonConditions.length > 0 || targetGroups.length > 0);
 
@@ -933,10 +1009,9 @@ export function DetailScreen({
                 {/* 🟢 API에서 상세 조건 배열을 넘겨주었을 때만 버튼 노출 */}
                 {hasEligibilityDetails && (
                   <button
-                    ref={eligibilityToggleRef}
                     type="button"
                     aria-expanded={showEligibilityDetails}
-                    aria-controls="eligibility-details-inline eligibility-details-panel"
+                    aria-controls="eligibility-details-inline"
                     onClick={() => setShowEligibilityDetails(!showEligibilityDetails)}
                     className="flex items-center gap-1 text-[13px] bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100 transition-colors"
                   >
@@ -964,11 +1039,11 @@ export function DetailScreen({
                 </span>
               </div>
 
-              {/* 넓은 화면에서는 오른쪽 패널, 그보다 좁은 화면에서는 카드 아래에 표시 */}
+              {/* 모든 화면에서 신청자격 카드 아래에 상세 내용을 표시합니다. */}
               {showEligibilityDetails && (
                 <div
                   id="eligibility-details-inline"
-                  className="mt-4 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4 xl:hidden"
+                  className="mt-4 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4"
                 >
                   <EligibilityDetailsContent
                     commonConditions={commonConditions}
@@ -1009,42 +1084,10 @@ export function DetailScreen({
           </div>
         </div>
 
-        {showEligibilityDetails && (
-          <aside
-            id="eligibility-details-panel"
-            aria-labelledby="eligibility-details-title"
-            className="sticky top-8 hidden max-h-[calc(100vh-64px)] min-w-0 overflow-auto rounded-xl border border-slate-200 bg-white p-5 shadow-lg xl:block"
-          >
-            <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
-              <h3
-                id="eligibility-details-title"
-                className="flex items-center gap-2 text-[17px] font-bold text-blue-600"
-              >
-                <BadgeCheck size={20} /> 신청 자격 상세
-              </h3>
-              <button
-                type="button"
-                onClick={closeEligibilityDetails}
-                className="flex items-center gap-1 rounded bg-blue-50 px-2 py-1 text-[13px] text-blue-600 transition-colors hover:bg-blue-100"
-              >
-                <ChevronUp size={14} /> 상세 닫기
-              </button>
-            </div>
-            <EligibilityDetailsContent
-              commonConditions={commonConditions}
-              targetGroups={targetGroups}
-            />
-          </aside>
-        )}
-
         {/* =====================
             AI 채팅
         ====================== */}
-        <div
-          className={`min-w-0 bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm flex flex-col h-[600px] lg:h-[700px] ${
-            showEligibilityDetails ? "xl:col-start-2" : ""
-          }`}
-        >
+        <div className="min-w-0 bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm flex flex-col h-[600px] lg:h-[700px]">
           <h2 className="text-[17px] lg:text-[19px] font-bold text-slate-900 mb-1">AI에게 무엇이든 물어보세요</h2>
           <p className="text-[13px] lg:text-[14px] text-slate-500 mb-4">공고에 대해 궁금한 내용을 질문하면 AI가 답변해 드립니다.</p>
 
