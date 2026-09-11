@@ -2448,6 +2448,7 @@ def _build_eligibility_summary_from_structure(
         "입주순위",
         "제출서류",
         "■ 성년자",
+        "■ 무주택세대구성원",
         "성년자 「민법",
     )
 
@@ -2686,15 +2687,33 @@ def _extract_eligibility_type_groups_from_structure(
     if target_section is None or best_score <= 0:
         return []
 
-    # 해당 자격 Section과 그 자식 Section만 범위로 사용한다.
-    # 구조화 과정에서 ① 신혼부부, ② 예비신혼부부 등이 자식
-    # Section으로 분리되는 경우가 있으므로 direct text만 보지 않는다.
+    # 해당 자격 Section과 가까운 하위 Section만 범위로 사용한다.
+    # 너무 깊은 descendant까지 재귀 탐색하면 뒤쪽 유의사항/재계약
+    # Section의 '고령자', '청년' 등이 현재 신청자격 그룹으로 섞일 수 있다.
+    scoped_children: list[dict[str, Any]] = []
+    direct_children = target_section.get("children")
+
+    if isinstance(direct_children, list):
+        for child in direct_children:
+            if not isinstance(child, dict):
+                continue
+
+            scoped_children.append(child)
+
+            grandchildren = child.get("children")
+            if not isinstance(grandchildren, list):
+                continue
+
+            for grandchild in grandchildren:
+                if isinstance(grandchild, dict):
+                    scoped_children.append(grandchild)
+
     scoped_parts: list[str] = []
     root_text = _section_direct_text(target_section)
     if root_text:
         scoped_parts.append(root_text)
 
-    for child, _ in _iter_sections(target_section.get("children")):
+    for child in scoped_children:
         child_text = _section_direct_text(child)
         if child_text:
             scoped_parts.append(child_text)
@@ -2709,7 +2728,20 @@ def _extract_eligibility_type_groups_from_structure(
         return []
 
     # 긴 표현부터 배치한다.
+    #
+    # 국민/영구임대 공고는 행복주택처럼 "청년계층" 등만
+    # 상세 자격의 제목으로 쓰지 않고, "■ 성년자",
+    # "■ 무주택세대구성원"을 실제 신청자격 하위 항목으로
+    # 사용하는 경우가 많다. 이 두 항목도 문서에 명시된
+    # 경우에만 상세 자격으로 구조화한다.
     label_patterns: tuple[tuple[str, str], ...] = (
+        (
+            "eligibility_exception",
+            r"(?:주요\s*)?(?:신청|입주)?\s*자격\s*"
+            r"(?:예외(?:\s*및\s*특례)?|특례)(?:\s*조건)?",
+        ),
+        ("no_home_household", r"무주택\s*세대구성원"),
+        ("adult", r"성년자"),
         ("supported_single_parent", r"지원대상\s*한부모가족"),
         ("prospective_newlywed", r"예비\s*신혼부부"),
         ("married_with_children", r"유자녀\s*혼인가구"),
@@ -2732,10 +2764,11 @@ def _extract_eligibility_type_groups_from_structure(
         + ")"
     )
 
-    # ① 신혼부부 / 3-1 한부모가족 / 1. 청년 등 명시적
-    # 번호가 붙은 대상 시작점만 1차로 인정한다.
+    # ① 신혼부부 / 3-1 한부모가족 / 1. 청년뿐 아니라
+    # "■ 성년자", "■ 무주택세대구성원"처럼 LH 공고문에서
+    # 실제 하위 자격 제목으로 사용하는 불릿도 시작점으로 인정한다.
     start_pattern = re.compile(
-        r"(?P<marker>(?:[①②③④⑤⑥⑦⑧⑨⑩](?:-\d+)?|\d+(?:-\d+)?[.)]?))\s*"
+        r"(?P<marker>(?:[■◆●▪□]|[①②③④⑤⑥⑦⑧⑨⑩](?:-\d+)?|\d+(?:-\d+)?[.)]?))\s*"
         + label_regex
         + r"\s*[:：]?\s*",
         re.IGNORECASE,
@@ -2745,6 +2778,81 @@ def _extract_eligibility_type_groups_from_structure(
 
     groups: list[dict[str, Any]] = []
     seen_codes: set[str] = set()
+
+    def _compact_detail_for_ui(
+        value: str,
+        *,
+        code: str,
+        max_length: int = 240,
+    ) -> str:
+        """
+        신청자격 자세히 보기에서 장문 원문이 한 카드에 과도하게
+        노출되지 않도록 핵심 앞부분만 문장 단위로 정리한다.
+
+        원문에 없는 내용을 새로 만들지 않으며, 가능한 경우 문장/번호
+        경계에서 끊는다. 성년자·무주택세대구성원처럼 예외 설명이 긴
+        항목도 첫 핵심조건과 바로 이어지는 대표 설명까지만 유지한다.
+        """
+        cleaned = re.sub(
+            r"\s+",
+            " ",
+            _clean_text(value),
+        ).strip(" ,;·")
+
+        if not cleaned:
+            return ""
+
+        if len(cleaned) <= max_length:
+            return cleaned
+
+        parts = [
+            part.strip(" ,;·")
+            for part in re.split(
+                r"(?<=[.!?])\s+|(?=[①②③④⑤⑥⑦⑧⑨⑩])",
+                cleaned,
+            )
+            if part.strip(" ,;·")
+        ]
+
+        if not parts:
+            return _compact_summary(
+                cleaned,
+                max_length,
+            )
+
+        selected: list[str] = []
+        current_length = 0
+
+        # 기본적으로 최대 2개 문장/번호 항목만 노출한다.
+        # 긴 계층 설명도 자세히 보기에서 핵심을 빠르게 확인할 수 있게 한다.
+        max_parts = 2
+
+        for part in parts:
+            separator_length = 1 if selected else 0
+            next_length = (
+                current_length
+                + separator_length
+                + len(part)
+            )
+
+            if selected and next_length > max_length:
+                break
+
+            selected.append(part)
+            current_length = next_length
+
+            if len(selected) >= max_parts:
+                break
+
+        compact = " ".join(selected).strip()
+
+        if not compact:
+            compact = cleaned
+
+        return _compact_summary(
+            compact,
+            max_length,
+        )
 
     def _append_group(
         *,
@@ -2780,12 +2888,20 @@ def _extract_eligibility_type_groups_from_structure(
         if not detail or code in seen_codes:
             return
 
+        compact_detail = _compact_detail_for_ui(
+            detail,
+            code=code,
+        )
+
+        if not compact_detail:
+            return
+
         seen_codes.add(code)
         groups.append(
             {
                 "code": code,
                 "label": re.sub(r"\s+", " ", label).strip(),
-                "details": [_compact_summary(detail, 500)],
+                "details": [compact_detail],
             }
         )
 
@@ -2818,7 +2934,7 @@ def _extract_eligibility_type_groups_from_structure(
     # 번호가 파싱에서 사라지고 각 대상이 자식 Section 제목으로만
     # 남은 경우를 보완한다. 이때도 target_section의 자식만 본다.
     if len(groups) < 2:
-        for child, _ in _iter_sections(target_section.get("children")):
+        for child in scoped_children:
             title = _clean_text(
                 child.get("title")
                 or child.get("normalized_title")
@@ -2835,7 +2951,7 @@ def _extract_eligibility_type_groups_from_structure(
                     # 자격 영역의 짧은 제목 또는 번호가 붙은 제목만 허용.
                     # 일반 문장 속 단순 언급은 대상 그룹으로 보지 않는다.
                     stripped_title = re.sub(
-                        r"^[①②③④⑤⑥⑦⑧⑨⑩\d\-.)\s]+",
+                        r"^[■◆●▪□①②③④⑤⑥⑦⑧⑨⑩\d\-.)\s]+",
                         "",
                         title,
                     ).strip()
@@ -5552,6 +5668,10 @@ SUPPLY_TABLE_HEADER_RULES = (
             "대기 중인 예비자수",
             "대기중 예비자수",
             "대기 예비자수",
+            "기존예비자수",
+            "기존 예비자수",
+            "기존예비자",
+            "기존 예비자",
         ),
     ),
     (
@@ -6017,6 +6137,16 @@ def _extract_supply_table_rows(
         # -----------------------------------------------
         # header 아래의 실제 data row를 구조화한다.
         # -----------------------------------------------
+        # LH 표의 단지명/주택군은 여러 주택형 행에 걸쳐 세로 병합되는
+        # 경우가 많다. 병합된 두 번째 이후 행에서는 셀 텍스트가 비어
+        # 있으므로, 같은 표 안에서만 직전 값을 이어받는다.
+        # 주택형과 공급/모집 수량은 행별 값이므로 절대 이어받지 않는다.
+        carried_identity_values: dict[str, str] = {}
+        carry_forward_fields = {
+            "complex_name",
+            "housing_group",
+        }
+
         for row_number in (
             sorted_row_numbers
         ):
@@ -6046,7 +6176,19 @@ def _extract_supply_table_rows(
                 )
 
                 if not raw_value:
+                    if (
+                        field in carry_forward_fields
+                        and field in carried_identity_values
+                    ):
+                        item[field] = (
+                            carried_identity_values[field]
+                        )
                     continue
+
+                if field in carry_forward_fields:
+                    carried_identity_values[field] = (
+                        raw_value
+                    )
 
                 if (
                     field
@@ -6432,45 +6574,218 @@ def _summarize_supply_table_rows(
     }
 
 
+def _supply_title_hint(
+    structure: dict[str, Any],
+) -> str:
+    """
+    공급 카드 대표값의 우선순위를 정할 때 사용할 공고 제목 힌트를 만든다.
+
+    본문에 등장하는 "예비입주자" 안내 문구는 제목으로 취급하지 않는다.
+    문서 filename과 최상위 Section의 앞부분 제목만 사용한다.
+    """
+    values: list[str] = []
+
+    document = structure.get("document")
+    if isinstance(document, dict):
+        filename = _clean_text(document.get("filename"))
+        if filename:
+            values.append(filename)
+
+    sections = structure.get("sections")
+    if isinstance(sections, list):
+        for section in sections[:6]:
+            if not isinstance(section, dict):
+                continue
+
+            title = _clean_text(
+                section.get("title")
+                or section.get("normalized_title")
+            )
+            if title:
+                values.append(title)
+
+    return "\n".join(_deduplicate_texts(values))
+
+
+def _supply_prefers_waitlist(
+    structure: dict[str, Any],
+) -> bool:
+    """
+    공고 제목이 '예비입주자/예비자 모집' 성격인지 판별한다.
+
+    제목은 우선순위만 정한다. 실제 모집 예비자 수가 없으면
+    공급호수/모집호수/건설호수로 자동 fallback한다.
+    """
+    title_hint = _normalized_match_text(
+        _supply_title_hint(structure)
+    )
+
+    return bool(
+        re.search(
+            r"(?:예비입주자|예비자).*모집",
+            title_hint,
+        )
+    )
+
+
+def _extract_explicit_supply_units_from_structure(
+    structure: dict[str, Any],
+) -> int | None:
+    """
+    표에 공급호수 열이 없는 문서에서 명시적인 공급대상 주택 수를 찾는다.
+
+    강한 표현만 허용한다.
+    예:
+    - '공급대상 주택 : 총 137호'
+    - '입주대상 주택 ... 다가구 등 주택 145호'
+    - '공급대상 : 통합공공임대주택 60호'
+
+    '건설위치 ... 1,088호'처럼 단지 전체 건설호수를 설명하는 문장은
+    이 fallback의 공급호수로 사용하지 않는다.
+    """
+    candidates: list[tuple[int, int]] = []
+
+    patterns: tuple[tuple[int, re.Pattern[str]], ...] = (
+        (
+            100,
+            re.compile(
+                r"공급\s*대상\s*주택\s*[:：]?\s*"
+                r"(?:총\s*)?(?P<number>\d[\d,]*)\s*호"
+            ),
+        ),
+        (
+            95,
+            re.compile(
+                r"입주\s*대상\s*주택.{0,100}?"
+                r"(?P<number>\d[\d,]*)\s*호"
+            ),
+        ),
+        (
+            90,
+            re.compile(
+                r"공급\s*대상\s*[:：].{0,80}?"
+                r"(?P<number>\d[\d,]*)\s*호"
+            ),
+        ),
+    )
+
+    search_texts = list(_collect_structure_texts(structure))
+
+    # Section title과 바로 아래 본문이 서로 다른 node로 분리된 경우
+    # (예: title='입주대상 주택', paragraph='... 주택 145호')도
+    # 함께 판정할 수 있도록 direct section text를 추가한다.
+    for section, _ in _iter_sections(structure.get("sections")):
+        section_text = _section_direct_text(section)
+        if section_text:
+            search_texts.append(section_text)
+
+    for text_value in _deduplicate_texts(search_texts):
+        compact = re.sub(r"\s+", " ", _clean_text(text_value))
+        if not compact:
+            continue
+
+        if _contains_keyword(
+            compact,
+            (
+                "건설위치",
+                "건설 위치",
+            ),
+        ) and not _contains_keyword(
+            compact,
+            (
+                "공급대상 주택",
+                "입주대상 주택",
+                "공급대상 :",
+                "공급대상:",
+            ),
+        ):
+            continue
+
+        for score, pattern in patterns:
+            match = pattern.search(compact)
+            if not match:
+                continue
+
+            try:
+                value = int(match.group("number").replace(",", ""))
+            except (TypeError, ValueError):
+                continue
+
+            if value <= 0:
+                continue
+
+            candidates.append((score, value))
+
+    if not candidates:
+        return None
+
+    candidates.sort(
+        key=lambda item: (
+            -item[0],
+            -item[1],
+        )
+    )
+    return candidates[0][1]
+
+
 def _select_supply_summary(
     *,
     recruitment_waitlist: int | None,
     recruitment_units: int | None,
     supply_units: int | None,
     construction_units: int | None,
+    prefer_waitlist: bool = False,
 ) -> tuple[str, int | None, str | None]:
     """
     사용자 카드에 표시할 공급 규모를 선택한다.
 
-    서비스 관점에서 전체 단지 규모보다 이번 공고의 실제 모집 규모를 우선한다.
-    우선순위는 ``모집 예비자 -> 금회 모집호수 -> 공급호수 -> 건설호수``이다.
+    - 예비입주자 모집 공고:
+      모집 예비자 -> 금회 모집호수 -> 공급호수 -> 건설호수
+    - 일반 입주자 모집 공고:
+      금회 모집호수 -> 공급호수 -> 건설호수 -> 모집 예비자
+
+    제목은 우선순위를 정하는 데만 사용한다. 예비입주자 모집 제목이어도
+    실제 모집 예비자 수가 없으면 주택 공급 수량으로 fallback한다.
     """
-    candidates = (
-        (
-            "recruitment_waitlist",
-            recruitment_waitlist,
-            "금회 모집 예비자",
-            "명",
-        ),
-        (
-            "recruitment_units",
-            recruitment_units,
-            "금회 모집 호수",
-            "호",
-        ),
-        (
-            "supply_units",
-            supply_units,
-            "공급 호수",
-            "호",
-        ),
-        (
-            "construction_units",
-            construction_units,
-            "공급대상 주택",
-            "호",
-        ),
+    waitlist_candidate = (
+        "recruitment_waitlist",
+        recruitment_waitlist,
+        "금회 모집 예비자",
+        "명",
     )
+    recruitment_units_candidate = (
+        "recruitment_units",
+        recruitment_units,
+        "금회 모집 호수",
+        "호",
+    )
+    supply_units_candidate = (
+        "supply_units",
+        supply_units,
+        "공급대상 주택",
+        "호",
+    )
+    construction_units_candidate = (
+        "construction_units",
+        construction_units,
+        "공급대상 주택",
+        "호",
+    )
+
+    if prefer_waitlist:
+        candidates = (
+            waitlist_candidate,
+            recruitment_units_candidate,
+            supply_units_candidate,
+            construction_units_candidate,
+        )
+    else:
+        candidates = (
+            recruitment_units_candidate,
+            supply_units_candidate,
+            construction_units_candidate,
+            waitlist_candidate,
+        )
 
     for metric, value, label, unit in candidates:
         if isinstance(value, int) and value >= 0:
@@ -6490,11 +6805,11 @@ def _extract_supply_from_structure(
     structure: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Structure 전체 텍스트에서 표 수량 이외의 보조 공급정보만 찾는다.
+    Structure 전체 텍스트에서 표 수량 이외의 보조 공급정보를 찾는다.
 
-    수량 요약은 ``_extract_supply_table_rows`` 결과만 사용한다. 과거처럼 본문
-    텍스트의 ``총 N호``를 다시 읽으면 표에서 계산한 모집 규모와 충돌하거나
-    임대조건의 숫자를 오인할 수 있어 여기서는 수량을 추출하지 않는다.
+    모집 예비자/모집호수 집계는 구조화된 표를 기준으로 유지한다.
+    다만 표에 공급호수 열이 없는 공고의 '공급대상 주택 N호'처럼
+    명시적인 주택 수만 제한적으로 supply_units fallback으로 사용한다.
     """
     texts = _collect_structure_texts(structure)
     details_reference = ""
@@ -6533,7 +6848,11 @@ def _extract_supply_from_structure(
     return {
         "details_reference": details_reference,
         "rental_condition_summary": rental_condition_summary,
+        "explicit_supply_units": (
+            _extract_explicit_supply_units_from_structure(structure)
+        ),
     }
+
 
 def _extract_supply_details_reference(
     matches: list[
@@ -6681,11 +7000,28 @@ def _build_supply_information(
         recruitment_waitlist = table_summary.get("recruitment_waitlist")
         waiting_waitlist = table_summary.get("waiting_waitlist")
 
+        # '입주대상 주택 145호', '공급대상 60호'처럼 표 밖에만
+        # 명시된 공급 수량은 표에서 supply_units를 찾지 못했을 때만
+        # 제한적으로 보완한다.
+        if supply_units is None:
+            explicit_supply_units = auxiliary.get(
+                "explicit_supply_units"
+            )
+            if isinstance(explicit_supply_units, int):
+                supply_units = explicit_supply_units
+
+    prefer_waitlist = (
+        _supply_prefers_waitlist(structure)
+        if structure is not None
+        else False
+    )
+
     summary, total_units, summary_metric = _select_supply_summary(
         recruitment_waitlist=recruitment_waitlist,
         recruitment_units=recruitment_units,
         supply_units=supply_units,
         construction_units=construction_units,
+        prefer_waitlist=prefer_waitlist,
     )
 
     # 구조화 표에서 수량을 찾지 못한 문서는 기존 텍스트 요약을 fallback으로 사용한다.
