@@ -17,7 +17,6 @@ INTENT_TOKEN_RULES: dict[str, list[set[str]]] = {
         {"무주택"},
         {"세대주"},
         {"세대원"},
-        {"대상자"},
     ],
 
     "schedule": [
@@ -26,6 +25,7 @@ INTENT_TOKEN_RULES: dict[str, list[set[str]]] = {
         {"서류", "제출", "기간"},
         {"계약", "기간"},
         {"발표"},
+        {"발표일"},
         {"마감"},
         {"일정"},
     ],
@@ -41,7 +41,6 @@ INTENT_TOKEN_RULES: dict[str, list[set[str]]] = {
     ],
 
     "documents": [
-        {"제출", "서류"},
         {"필요", "서류"},
         {"준비", "서류"},
         {"증빙", "서류"},
