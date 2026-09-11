@@ -40,7 +40,7 @@ jobs:
           printf '%s\n' "$AWS_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
 
-          ssh-keyscan -H "$AWS_HOST" >> ~/.ssh/known_hosts
+          ssh-keyscan -T 10 -H "$AWS_HOST" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
       - name: Deploy application
@@ -95,6 +95,9 @@ jobs:
             document-worker \
             rag
 
+          # Reload the new Backend container address.
+          "${COMPOSE[@]}" restart nginx
+
           check_url() {
             local name="$1"
             local url="$2"
@@ -121,6 +124,21 @@ jobs:
 
           check_url "Crawler" \
             "http://127.0.0.1:18004/health"
+
+          check_url "Document Worker" \
+            "http://127.0.0.1:18003/openapi.json"
+
+          check_url "RAG" \
+            "http://127.0.0.1:18002/health"
+
+          check_url "Public API" \
+            "https://ddokbot-api.hwanmade.store/api/health"
+
+          check_url "User API Proxy" \
+            "https://ddokbot.codefoilo.store/api/health"
+
+          check_url "Admin API Proxy" \
+            "https://ddokbot.admin.codefoilo.store/api/health"
 
           "${COMPOSE[@]}" ps
           git log -1 --oneline
