@@ -84,8 +84,10 @@ jobs:
             document-worker \
             rag
 
-          "${COMPOSE[@]}" run --rm --no-deps \
-            backend alembic upgrade head
+          "${COMPOSE[@]}" run --rm --no-deps -T \
+            backend alembic upgrade head </dev/null
+
+          echo "Database migration completed"
 
           "${COMPOSE[@]}" up -d --no-deps \
             nginx \
