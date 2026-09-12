@@ -188,6 +188,20 @@ const REGION_NAME_ALIASES: Record<string, string> = {
   제주도: "제주특별자치도",
 };
 
+function normalizeLocationCandidate(value: unknown): string {
+  const text = toDisplayText(value, "").trim();
+
+  if (
+    !text ||
+    text === "미상" ||
+    text === "공고문 참조"
+  ) {
+    return "";
+  }
+
+  return text;
+}
+
 function formatSupplyLocation(
   value: unknown,
   level: "province" | "cityCounty"
@@ -845,9 +859,8 @@ export function DetailScreen({
   const rawPublicationStatus = currentNotice.publication_status ?? currentNotice.publicationStatus ?? currentNotice.status;
   const displayPublicationStatus = rawPublicationStatus === "fixture" ? "상태 미확인" : toDisplayText(rawPublicationStatus, "상태 미확인");
   const supplyLocation =
-    supplyInformation.location ??
-    supplyInformation.block ??
-    currentNotice.region;
+    normalizeLocationCandidate(supplyInformation.location) ||
+    normalizeLocationCandidate(currentNotice.region);
   const displayProvinceLocation = formatSupplyLocation(
     supplyLocation,
     "province"
