@@ -289,6 +289,29 @@ SUPPLY_DATA_KEYWORDS = (
     "건설 위치",
 )
 
+INCOME_ASSET_EXCLUSION_KEYWORDS = (
+    "개인정보 수집",
+    "개인정보 이용",
+    "개인정보 제공",
+    "개인정보 처리",
+    "민감정보 수집",
+    "민감정보 이용",
+    "민감정보 활용",
+    "개인정보의 제3자",
+    "제3자 제공",
+    "제공받는 자",
+    "제공목적",
+    "제공항목",
+    "보유·이용기간",
+    "보유 이용 기간",
+    "원천정보 보유기관",
+    "정보 보유기관",
+    "동의 여부",
+    "동의여부",
+    "동의 거부",
+)
+
+
 SUPPLY_EXCLUSION_KEYWORDS = (
     "개인정보 수집",
     "개인정보 이용",
@@ -822,6 +845,73 @@ def _is_valid_supply_section(
     return data_evidence_count >= 2
 
 
+def _is_valid_income_asset_section(
+    section: dict[str, Any],
+) -> bool:
+    """
+    소득/자산 카드 후보가 실제 입주자격 기준인지 보수적으로 판별한다.
+
+    개인정보 동의서의 "소득·재산·주택 관련 원천정보 보유기관"처럼
+    소득/자산이라는 단어만 포함된 문장을 자격 기준으로 오인하지 않도록 한다.
+    """
+    title_text = " ".join(
+        filter(
+            None,
+            (
+                _clean_text(section.get("title")),
+                _clean_text(section.get("normalized_title")),
+                _clean_text(section.get("search_title")),
+            ),
+        )
+    )
+    body_text = _section_direct_text(section)
+    full_text = f"{title_text} {body_text}".strip()
+
+    if not full_text:
+        return False
+
+    normalized = _normalized_match_text(full_text)
+
+    # 개인정보/제3자 제공 영역은 소득·자산이라는 단어가 자주 나오지만
+    # 이는 수집·조회 항목 설명이지 입주자격 기준이 아니다.
+    if _contains_keyword(
+        full_text,
+        INCOME_ASSET_EXCLUSION_KEYWORDS,
+    ):
+        return False
+
+    # 실제 자격 기준에서 자주 등장하는 강한 신호.
+    strong_signals = (
+        "월평균소득",
+        "소득기준",
+        "소득및자산보유기준",
+        "총자산",
+        "자동차가액",
+        "자동차기준",
+        "소득적용배제",
+        "자산요건배제",
+    )
+
+    if any(signal in normalized for signal in strong_signals):
+        return True
+
+    # 제목 자체가 소득/자산 기준 영역이면 후보로 허용한다.
+    title_normalized = _normalized_match_text(title_text)
+    if any(
+        signal in title_normalized
+        for signal in (
+            "소득기준",
+            "자산기준",
+            "소득및자산",
+            "소득자산",
+        )
+    ):
+        return True
+
+    # 단순히 '소득', '자산'이라는 단어만 있는 경우는 기준으로 보지 않는다.
+    return False
+
+
 def _score_section_for_field(
     section: dict[str, Any],
     field: str,
@@ -831,6 +921,14 @@ def _score_section_for_field(
     if (
         field == "supply_information"
         and not _is_valid_supply_section(
+            section
+        )
+    ):
+        return 0
+
+    if (
+        field == "income_asset_criteria"
+        and not _is_valid_income_asset_section(
             section
         )
     ):
@@ -5124,6 +5222,12 @@ def _build_income_asset_summary(
                 cleaned
             )
         )
+
+        if _contains_keyword(
+            cleaned,
+            INCOME_ASSET_EXCLUSION_KEYWORDS,
+        ):
+            continue
 
         has_income = (
             _normalized_match_text(
@@ -10324,6 +10428,11 @@ def _build_income_asset_criteria(
                 matches
             )
         )
+
+        if not result["summary"]:
+            result["status"] = "not_found"
+            result["text"] = ""
+            result["key_values"] = []
 
     return result
 
