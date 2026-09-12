@@ -3147,9 +3147,16 @@ def _extract_supply_target_details(
     # intro 안의 '①-㉮와', '②～⑤'는 뒤에 조사/범위기호가 붙으므로 매치되지 않고,
     # 실제 조건 제목인 '①-㉮ (대학생)', '② 혼인...'만 매치된다.
     condition_marker = re.compile(
-        r"(?<!\S)"
+        r"(?<!\S)(?:"
         r"[①②③④⑤⑥⑦⑧⑨⑩➀➁➂➃➄➅➆➇➈➉]"
-        r"(?:\s*-\s*[㉮㉯㉰㉱㉲㉳㉴㉵㉶㉷])?"
+        r"(?:\s*-\s*[㉮㉯㉰㉱㉲㉳㉴㉵㉶㉷가-하])?"
+        r"|"
+        # value_normalizer가 ①/②를 1/2로 풀어 쓴 구조도 허용한다.
+        # 단, '1)', '2)' 같은 사회초년생 하위목록이나 '19세' 같은
+        # 일반 숫자는 상위 자격조건 marker로 보지 않는다.
+        r"(?:[1-9]|10)"
+        r"(?:\s*-\s*[㉮㉯㉰㉱㉲㉳㉴㉵㉶㉷가-하])?"
+        r")"
         r"(?=\s|\()"
     )
     markers = list(condition_marker.finditer(compact))
@@ -3385,6 +3392,83 @@ def _extract_happyhouse_groups_from_text_value(
     return candidates
 
 
+def _collect_happyhouse_ordered_section_texts(
+    structure: dict[str, Any],
+) -> list[str]:
+    """행복주택 3-x 자격 블록용 문서순서 텍스트를 sections에서만 수집한다.
+
+    HWPX 구조화 결과는 ``3-2. 청년 계층`` 같은 제목이 Section.title이 아니라
+    content/cell의 text로 내려가고, 실제 ``■ 공급대상자`` 본문은 그 다음
+    sibling cell/block에 놓이는 경우가 있다. 기존 전역 텍스트 수집은 중복 제거
+    과정에서 이 인접 관계가 흐트러질 수 있으므로, sections 트리의 실제 순서를
+    보존한 fallback 문자열을 별도로 만든다.
+    """
+    result: list[str] = []
+    previous_key = ""
+
+    def _append(value: Any) -> None:
+        nonlocal previous_key
+        if not isinstance(value, str):
+            return
+        cleaned = _clean_text(value)
+        if not cleaned:
+            return
+        normalized = _normalized_match_text(cleaned)
+        if not normalized or normalized == previous_key:
+            return
+        previous_key = normalized
+        result.append(cleaned)
+
+    def _walk_content(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                _walk_content(item)
+            return
+        if not isinstance(value, dict):
+            return
+
+        direct_text = value.get("text")
+        if isinstance(direct_text, str) and _clean_text(direct_text):
+            _append(direct_text)
+        else:
+            for key in ("raw_text", "value", "search_text"):
+                candidate = value.get(key)
+                if isinstance(candidate, str) and _clean_text(candidate):
+                    _append(candidate)
+                    break
+
+        for key in (
+            "blocks",
+            "cells",
+            "records",
+            "structured_table",
+            "contents",
+        ):
+            nested = value.get(key)
+            if isinstance(nested, (list, dict)):
+                _walk_content(nested)
+
+    def _walk_sections(sections: Any) -> None:
+        if not isinstance(sections, list):
+            return
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+
+            _append(
+                section.get("title")
+                or section.get("normalized_title")
+            )
+            _walk_content(section.get("contents"))
+
+            children = section.get("children")
+            if isinstance(children, list):
+                _walk_sections(children)
+
+    _walk_sections(structure.get("sections"))
+    return result
+
+
 def _extract_happyhouse_eligibility_target_groups_from_structure(
     structure: dict[str, Any],
 ) -> list[dict[str, Any]]:
@@ -3495,6 +3579,14 @@ def _extract_happyhouse_eligibility_target_groups_from_structure(
         for group in _extract_happyhouse_groups_from_text_value(text_value):
             _consider(group)
 
+    # 3) HWPX에서 3-x 제목과 공급대상자 본문이 서로 다른 sibling
+    #    content/cell로 분리된 경우를 위한 문서순서 fallback.
+    ordered_texts = _collect_happyhouse_ordered_section_texts(structure)
+    if ordered_texts:
+        ordered_all = "\n".join(ordered_texts)
+        for group in _extract_happyhouse_groups_from_text_value(ordered_all):
+            _consider(group)
+
     order = {
         code: index
         for index, (code, _, _) in enumerate(
@@ -3506,6 +3598,566 @@ def _extract_happyhouse_eligibility_target_groups_from_structure(
         key=lambda group: order.get(str(group.get("code") or ""), 999)
     )
     return groups
+
+
+def _is_multi_child_purchase_rental_structure(
+    structure: dict[str, Any],
+) -> bool:
+    texts = _collect_structure_texts(structure)
+    combined = re.sub(
+        r"\s+",
+        " ",
+        _clean_text("\n".join(texts[:400])),
+    )
+    normalized = _normalized_match_text(combined)
+
+    return (
+        "다자녀" in normalized
+        and "매입임대" in normalized
+        and (
+            "다자녀매입임대" in normalized
+            or "다자녀가구" in normalized
+            or "두명이상의직계비속" in normalized
+            or "2명이상의미성년자녀" in normalized
+            or "2인이상의미성년자녀" in normalized
+        )
+    )
+
+
+def _extract_multi_child_eligibility_group_from_structure(
+    structure: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """
+    다자녀 매입임대의 신청자격을 '다자녀 가구' 하나의 대상 그룹으로 구성한다.
+
+    UI에서는 긴 원문 한 문장을 그대로 노출하지 않고,
+    실제 신청 판단에 필요한 조건을 의미 단위별 detail로 분리한다.
+    """
+    if not _is_multi_child_purchase_rental_structure(structure):
+        return []
+
+    texts = _collect_structure_texts(structure)
+    combined = re.sub(
+        r"\s+",
+        " ",
+        _clean_text("\n".join(texts)),
+    )
+
+    details: list[str] = []
+
+    # 1) 자녀 요건
+    child_match = re.search(
+        r"(?:두|2)\s*(?:명|인)\s*이상(?:의)?\s*"
+        r"(?:미성년\s*)?(?:직계비속|자녀)"
+        r".{0,80}?양육",
+        combined,
+        re.IGNORECASE,
+    )
+    if child_match:
+        details.append(
+            re.sub(
+                r"\s+",
+                " ",
+                _clean_text(child_match.group(0)),
+            ).strip()
+        )
+
+    # 2) 무주택 요건
+    if re.search(r"무주택\s*세대구성원", combined):
+        details.append("무주택세대구성원")
+
+    # 3) 소득 요건
+    income_match = re.search(
+        r"월평균소득.{0,180}?"
+        r"(?P<pct>\d{1,3})\s*%\s*이하",
+        combined,
+        re.IGNORECASE,
+    )
+    if income_match:
+        details.append(
+            f"월평균소득 {income_match.group('pct')}% 이하"
+        )
+
+    # 4) 총자산 요건
+    asset_match = re.search(
+        r"(?:총\s*자산(?:가액)?|총자산(?:가액)?)"
+        r"[^0-9]{0,100}"
+        r"(?P<amount>\d{2,3}(?:,\d{3})*)\s*만원"
+        r"(?=\s*(?:이하|[,，)]|자동차))",
+        combined,
+        re.IGNORECASE,
+    )
+    if asset_match:
+        details.append(
+            f"총자산 {asset_match.group('amount')}만원 이하"
+        )
+
+    # 5) 자동차가액 요건
+    car_match = re.search(
+        r"자동차(?:\s*가액|\s*기준)?"
+        r"[^0-9]{0,80}"
+        r"(?P<amount>\d{1,3}(?:,\d{3})*)\s*만원\s*이하",
+        combined,
+        re.IGNORECASE,
+    )
+    if car_match:
+        details.append(
+            f"자동차가액 {car_match.group('amount')}만원 이하"
+        )
+
+    # 6) 직계비속 정의: 태아 포함 / 민법상 미성년자
+    definition_match = re.search(
+        r"직계비속\s*[:：]?\s*"
+        r"태아(?:를)?\s*포함(?:하여|하고)?"
+        r".{0,100}?미성년자(?:에\s*한함|만)?",
+        combined,
+        re.IGNORECASE,
+    )
+    if not definition_match:
+        definition_match = re.search(
+            r"직계비속\s*[:：]?\s*"
+            r".{0,220}?태아.{0,220}?미성년자",
+            combined,
+            re.IGNORECASE,
+        )
+    if definition_match:
+        definition = re.sub(
+            r"\s+",
+            " ",
+            _clean_text(definition_match.group(0)),
+        ).strip()
+        if definition:
+            details.append(definition)
+
+    details = _deduplicate_texts(details)
+
+    if not details:
+        return []
+
+    return [
+        {
+            "code": "multi_child_family",
+            "label": "다자녀 가구",
+            "details": details[:6],
+        }
+    ]
+
+
+def _extract_multi_child_income_asset_criteria(
+    structure: dict[str, Any],
+) -> dict[str, Any]:
+    if not _is_multi_child_purchase_rental_structure(structure):
+        return {}
+
+    texts = _collect_structure_texts(structure)
+    combined = re.sub(
+        r"\s+",
+        " ",
+        _clean_text("\n".join(texts)),
+    )
+
+    result: dict[str, Any] = {}
+
+    income_match = re.search(
+        r"월평균소득.{0,180}?"
+        r"(?P<pct>\d{1,3})\s*%\s*이하",
+        combined,
+        re.IGNORECASE,
+    )
+    if income_match:
+        result["income_criteria"] = (
+            f"월평균소득 {income_match.group('pct')}% 이하"
+        )
+
+    asset_match = re.search(
+        r"(?:총\s*자산(?:가액)?|총자산(?:가액)?)"
+        r"[^0-9]{0,100}"
+        r"(?P<amount>\d{2,3}(?:,\d{3})*)\s*만원"
+        r"(?=\s*(?:이하|[,，)]|자동차))",
+        combined,
+        re.IGNORECASE,
+    )
+    if asset_match:
+        result["total_asset_criteria"] = (
+            f"{asset_match.group('amount')}만원 이하"
+        )
+
+    car_match = re.search(
+        r"자동차(?:\s*가액|\s*기준)?"
+        r"[^0-9]{0,80}"
+        r"(?P<amount>\d{1,3}(?:,\d{3})*)\s*만원\s*이하",
+        combined,
+        re.IGNORECASE,
+    )
+    if car_match:
+        result["car_value_limit"] = (
+            f"{car_match.group('amount')}만원 이하"
+        )
+
+    if re.search(
+        r"수급자\s*가구.{0,120}?차상위(?:계층)?\s*가구"
+        r".{0,160}?지원대상\s*한부모가족"
+        r".{0,120}?소득\s*[·ㆍ및]*\s*자산\s*검증\s*불필요",
+        combined,
+        re.IGNORECASE,
+    ):
+        result["verification_exemption"] = (
+            "수급자 가구·차상위계층 가구·지원대상 한부모가족은 "
+            "소득·자산 검증 불필요"
+        )
+
+    return result
+
+
+
+def _standard_general_rental_eligibility_text(
+    structure: dict[str, Any],
+) -> str:
+    """
+    국민임대/50년 공공임대처럼 공통 신청자격형인 공고에서
+    실제 ``신청자격`` 또는 ``입주자격`` Section 내부 텍스트만 모은다.
+
+    뒤쪽 ``선정기준``/배점표의 예비신혼부부·북한이탈주민 등을
+    현재 신청자격이나 소득·자산 대표값으로 오인하지 않도록
+    문서 전체가 아니라 자격 Section의 subtree만 사용한다.
+    """
+    target_section: dict[str, Any] | None = None
+    best_score = -1
+
+    for section, _ in _iter_sections(structure.get("sections")):
+        title = _clean_text(
+            section.get("title")
+            or section.get("normalized_title")
+        )
+        normalized = _normalized_match_text(title)
+
+        if any(
+            excluded in normalized
+            for excluded in (
+                "입주자격확인서류",
+                "자격확인서류",
+                "제출서류",
+                "선정기준",
+            )
+        ):
+            continue
+
+        score = 0
+        if normalized in {"신청자격", "입주자격"}:
+            score = 100
+        elif normalized.endswith("신청자격") or normalized.endswith("입주자격"):
+            score = 80
+
+        if score > best_score:
+            best_score = score
+            target_section = section
+
+    if target_section is None or best_score <= 0:
+        return ""
+
+    parts: list[str] = []
+
+    root_text = _section_direct_text(target_section)
+    if root_text:
+        parts.append(root_text)
+
+    children = target_section.get("children")
+    if isinstance(children, list):
+        for child, _ in _iter_sections(children):
+            child_title = _clean_text(
+                child.get("title")
+                or child.get("normalized_title")
+            )
+            child_title_normalized = _normalized_match_text(child_title)
+
+            # 구조화 계층이 비정상적으로 깊게 이어진 경우에도
+            # 다음 대단원인 선정기준 이후는 자격 범위에서 제외한다.
+            if (
+                child_title_normalized == "선정기준"
+                or child_title_normalized.endswith("선정기준")
+            ):
+                continue
+
+            child_text = _section_direct_text(child)
+            if child_text:
+                parts.append(child_text)
+
+    combined = "\n".join(_deduplicate_texts(parts))
+
+    # 일부 구조화 결과에서 '5. 선정기준'이 같은 text 블록 끝에 붙는 경우를
+    # 대비해 명시적인 다음 대단원부터는 잘라낸다.
+    combined = re.split(
+        r"(?:^|\n)\s*(?:\d+\s*[.)]?\s*)?선정기준\s*(?:\n|$)",
+        combined,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    return re.sub(r"\s+", " ", _clean_text(combined)).strip()
+
+
+def _is_standard_general_rental_eligibility_structure(
+    structure: dict[str, Any],
+) -> bool:
+    """
+    국민임대/50년 공공임대의 표준 공통 신청자격형 공고인지 판별한다.
+
+    강한 신호를 함께 요구해 행복주택/매입임대 등 다른 공급유형에는
+    영향을 주지 않도록 한다.
+    """
+    eligibility_text = _standard_general_rental_eligibility_text(structure)
+    if not eligibility_text:
+        return False
+
+    eligibility_normalized = _normalized_match_text(eligibility_text)
+    document_normalized = _normalized_match_text(
+        " ".join(_collect_structure_texts(structure))
+    )
+
+    rental_type_signal = any(
+        token in document_normalized
+        for token in (
+            "국민임대주택",
+            "50년공공임대",
+            "공임50년",
+        )
+    )
+
+    required_signals = (
+        "성년자",
+        "무주택세대구성원",
+        "소득및자산",
+    )
+
+    return rental_type_signal and all(
+        signal in eligibility_normalized
+        for signal in required_signals
+    )
+
+
+def _extract_standard_general_rental_income_asset_criteria(
+    structure: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    국민임대/50년 공공임대의 실제 신청자격 Section에서만
+    소득·총자산·자동차 기준을 추출한다.
+
+    선정기준의 사회취약계층 문구(예: 북한이탈주민 70%)가
+    카드 대표값으로 선택되는 문제를 방지한다.
+    """
+    if not _is_standard_general_rental_eligibility_structure(structure):
+        return {}
+
+    combined = _standard_general_rental_eligibility_text(structure)
+    if not combined:
+        return {}
+
+    result: dict[str, Any] = {}
+
+    # 표준 국민임대 소득표는 일반적으로
+    # '월평균 소득(원) 70% 80% 90%'처럼 기본/가산 기준 열을 함께 제공한다.
+    # '1인 가구 20% 가산, 2인 가구 10% 가산'의 20/10을 기본 소득기준으로
+    # 잘못 잡지 않도록 표 헤더를 가장 우선해서 읽는다.
+    base_pct: int | None = None
+
+    income_table_header = re.search(
+        r"월평균\s*소득(?:액)?(?:\s*\([^)]*\))?"
+        r".{0,180}?"
+        r"(?P<p1>\d{1,3})\s*%\s+"
+        r"(?P<p2>\d{1,3})\s*%\s+"
+        r"(?P<p3>\d{1,3})\s*%",
+        combined,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if income_table_header:
+        percentages = [
+            int(income_table_header.group("p1")),
+            int(income_table_header.group("p2")),
+            int(income_table_header.group("p3")),
+        ]
+        # 정상적인 표는 오름차순(예: 70, 80, 90)으로 배치된다.
+        if (
+            all(0 < pct <= 200 for pct in percentages)
+            and percentages == sorted(percentages)
+        ):
+            base_pct = percentages[0]
+
+    # 표 헤더를 못 찾은 경우에만, 실제 자격을 표현하는 명시적 문구를 사용한다.
+    # '20% 가산' 같은 가산비율은 base 값으로 사용하지 않는다.
+    if base_pct is None:
+        explicit_base_match = re.search(
+            r"월평균\s*소득(?:액)?"
+            r"(?:이|은|의)?"
+            r"[^%]{0,140}?"
+            r"(?P<pct>\d{1,3})\s*(?:%|퍼센트)"
+            r"\s*(?:이하|이내)",
+            combined,
+            re.IGNORECASE,
+        )
+        if explicit_base_match:
+            candidate_pct = int(explicit_base_match.group("pct"))
+            if 0 < candidate_pct <= 200:
+                base_pct = candidate_pct
+
+    # 일부 HWP/HWPX 구조화 결과에서는 '소득 및 자산보유 기준' 표의
+    # 헤더(70% / 80% / 90%)가 신청자격 section의 direct text에 포함되지
+    # 않는 경우가 있다. 이때만 문서 전체에서 해당 표 구간을 좁게 잘라
+    # 기본 소득기준을 보완한다. 뒤의 선정기준/사회취약계층 문구는
+    # fallback 범위에 포함하지 않는다.
+    if base_pct is None:
+        document_text = re.sub(
+            r"\s+",
+            " ",
+            _clean_text(" ".join(_collect_structure_texts(structure))),
+        ).strip()
+
+        criteria_anchor = re.search(
+            r"소득\s*(?:및|[·․])\s*자산(?:보유)?\s*기준",
+            document_text,
+            re.IGNORECASE,
+        )
+
+        if criteria_anchor:
+            criteria_window = document_text[
+                criteria_anchor.start():
+                criteria_anchor.start() + 7000
+            ]
+
+            stop_match = re.search(
+                r"(?:■\s*)?소득\s*[·․]\s*자산\s*산정방법"
+                r"|(?:^|\s)\d+\s*[.)]?\s*선정기준",
+                criteria_window,
+                re.IGNORECASE,
+            )
+            if stop_match:
+                criteria_window = criteria_window[:stop_match.start()]
+
+            fallback_header = re.search(
+                r"월평균\s*소득(?:액)?(?:\s*\([^)]*\))?"
+                r".{0,300}?"
+                r"(?P<p1>\d{1,3})\s*%\s+"
+                r"(?P<p2>\d{1,3})\s*%\s+"
+                r"(?P<p3>\d{1,3})\s*%",
+                criteria_window,
+                re.IGNORECASE | re.DOTALL,
+            )
+
+            if not fallback_header:
+                fallback_header = re.search(
+                    r"(?P<p1>\d{1,3})\s*%\s+"
+                    r"(?P<p2>\d{1,3})\s*%\s+"
+                    r"(?P<p3>\d{1,3})\s*%",
+                    criteria_window[:1800],
+                    re.IGNORECASE | re.DOTALL,
+                )
+
+            if fallback_header:
+                percentages = [
+                    int(fallback_header.group("p1")),
+                    int(fallback_header.group("p2")),
+                    int(fallback_header.group("p3")),
+                ]
+                if (
+                    all(0 < pct <= 200 for pct in percentages)
+                    and percentages == sorted(percentages)
+                    and percentages[0] >= 50
+                ):
+                    base_pct = percentages[0]
+
+    if base_pct is not None:
+        one_pct: int | None = None
+        two_pct: int | None = None
+
+        explicit_one = re.search(
+            r"1\s*인\s*가구(?:는|의)?\s*(?P<pct>\d{1,3})\s*%(?!\s*가산)",
+            combined,
+            re.IGNORECASE,
+        )
+        explicit_two = re.search(
+            r"2\s*인\s*가구(?:는|의)?\s*(?P<pct>\d{1,3})\s*%(?!\s*가산)",
+            combined,
+            re.IGNORECASE,
+        )
+
+        if explicit_one:
+            one_pct = int(explicit_one.group("pct"))
+        if explicit_two:
+            two_pct = int(explicit_two.group("pct"))
+
+        # '1인 가구 20% 가산, 2인 가구 10% 가산' 형식도 지원한다.
+        if one_pct is None:
+            one_bonus = re.search(
+                r"1\s*인\s*가구\s*(?P<bonus>\d{1,3})\s*%\s*가산",
+                combined,
+                re.IGNORECASE,
+            )
+            if one_bonus:
+                one_pct = base_pct + int(one_bonus.group("bonus"))
+
+        if two_pct is None:
+            two_bonus = re.search(
+                r"2\s*인\s*가구\s*(?P<bonus>\d{1,3})\s*%\s*가산",
+                combined,
+                re.IGNORECASE,
+            )
+            if two_bonus:
+                two_pct = base_pct + int(two_bonus.group("bonus"))
+
+        income_text = f"월평균소득 {base_pct}% 이하"
+        household_parts: list[str] = []
+        if one_pct is not None:
+            household_parts.append(f"1인가구 {one_pct}%")
+        if two_pct is not None:
+            household_parts.append(f"2인가구 {two_pct}%")
+        if household_parts:
+            income_text += " (" + ", ".join(household_parts) + ")"
+
+        result["income_criteria"] = income_text
+
+    # 총자산: '34,500만원 이하'와 '(345)백만원 이하'를 모두 지원한다.
+    total_asset_match = re.search(
+        r"총\s*자산(?:가액)?"
+        r"[^0-9]{0,160}"
+        r"(?P<amount>[0-9][0-9,]*)\s*만원\s*이하",
+        combined,
+        re.IGNORECASE,
+    )
+    if total_asset_match:
+        result["total_asset_criteria"] = (
+            f"{total_asset_match.group('amount')}만원 이하"
+        )
+    else:
+        total_asset_million_match = re.search(
+            r"총\s*자산(?:가액)?"
+            r"[^0-9]{0,160}"
+            r"\(?\s*(?P<amount>[0-9][0-9,]*)\s*\)?\s*백만원\s*이하",
+            combined,
+            re.IGNORECASE,
+        )
+        if total_asset_million_match:
+            raw_amount = total_asset_million_match.group("amount").replace(",", "")
+            try:
+                amount_manwon = int(raw_amount) * 100
+            except ValueError:
+                amount_manwon = 0
+            if amount_manwon > 0:
+                result["total_asset_criteria"] = (
+                    f"{amount_manwon:,}만원 이하"
+                )
+
+    car_match = re.search(
+        r"자동차(?:\s*가액|\s*기준)?"
+        r"[^0-9]{0,160}"
+        r"\(?\s*(?P<amount>[0-9][0-9,]*)\s*\)?\s*만원\s*이하",
+        combined,
+        re.IGNORECASE,
+    )
+    if car_match:
+        result["car_value_limit"] = (
+            f"{car_match.group('amount')}만원 이하"
+        )
+
+    return result
 
 def _extract_eligibility_type_groups_from_structure(
     structure: dict[str, Any],
@@ -3677,7 +4329,7 @@ def _extract_eligibility_type_groups_from_structure(
             r"|\s*[;；]\s*"
             r"|(?=※)"
             r"|(?=[①②③④⑤⑥⑦⑧⑨⑩])"
-            r"|(?=\d+(?:-\d+)?[.)]\s*)"
+            r"|(?=(?<!\S)\d+(?:-\d+)?[.)]\s+)"
             r"|(?=[가-하][.)]\s*)"
             r"|(?=단,\s*)"
             r"|(?=다만,\s*)"
@@ -4303,6 +4955,54 @@ def _build_income_asset_summary_from_structure(
         return ""
 
     parts: list[str] = []
+
+    # 신혼·신생아 매입임대처럼 1~5순위에 동일한 소득/자산 기준이
+    # 적용되는 공고를 일반 매입임대의 "1순위 장애인 / 2순위" 규칙보다
+    # 먼저 처리한다.
+    family_housing_signal = any(
+        token in _normalized_match_text(combined)
+        for token in (
+            "신혼·신생아매입임대",
+            "신혼신생아매입임대",
+            "신혼·신생아매입임대주택",
+            "신혼신생아매입임대주택",
+        )
+    )
+
+    if family_housing_signal:
+        family_income_match = re.search(
+            r"(?:1\s*[·ㆍ,/]?\s*2\s*[·ㆍ,/]?\s*3\s*[·ㆍ,/]?\s*4\s*[·ㆍ,/]?\s*5\s*순위|"
+            r"1\s*[~～-]\s*5\s*순위|1\s*순위.{0,80}?5\s*순위)"
+            r".{0,360}?월평균소득.{0,220}?(?P<base>\d{2,3})\s*%\s*이하"
+            r".{0,220}?(?:본인\s*및\s*배우자\s*모두\s*소득이\s*있는\s*경우|"
+            r"맞벌이(?:인\s*경우)?)"
+            r".{0,100}?(?P<dual>\d{2,3})\s*%\s*이하",
+            combined,
+            re.IGNORECASE,
+        )
+        family_asset_match = re.search(
+            r"(?:총\s*자산|총자산(?:가액)?)"
+            r"[^0-9]{0,80}"
+            r"(?P<asset>[0-9][0-9,]*)\s*만원\s*이하",
+            combined,
+            re.IGNORECASE,
+        )
+
+        family_parts: list[str] = []
+        if family_income_match:
+            family_parts.append(
+                "1~5순위: 월평균소득 "
+                f"{family_income_match.group('base')}% 이하"
+                "(본인·배우자 모두 소득이 있는 경우 "
+                f"{family_income_match.group('dual')}% 이하)"
+            )
+        if family_asset_match:
+            family_parts.append(
+                f"총자산 {family_asset_match.group('asset')}만원 이하"
+            )
+
+        if family_parts:
+            return " · ".join(family_parts)
 
     # 1순위 장애인 소득 기준
     disability_match = re.search(
@@ -6653,7 +7353,14 @@ def _normalize_eligibility_groups_for_ui(
                 normalized_groups.append(normalized_group)
             continue
 
-        max_detail_count = 3
+        # 일반 fallback 그룹은 최대 3개만 노출하되,
+        # 다자녀 매입임대는 자녀/무주택/소득/총자산/자동차/직계비속 정의까지
+        # 서로 다른 핵심 조건이므로 최대 6개를 그대로 유지한다.
+        if group_code == "multi_child_family":
+            max_detail_count = 6
+        else:
+            max_detail_count = 3
+
         group_max_length = max_length
 
         compact_details: list[str] = []
@@ -6673,7 +7380,7 @@ def _normalize_eligibility_groups_for_ui(
                     r"|\s*[;；]\s*"
                     r"|(?=※)"
                     r"|(?=[①②③④⑤⑥⑦⑧⑨⑩])"
-                    r"|(?=\d+(?:-\d+)?[.)]\s*)"
+                    r"|(?=(?<!\S)\d+(?:-\d+)?[.)]\s+)"
                     r"|(?=[가-하][.)]\s*)"
                     r"|(?=단,\s*)"
                     r"|(?=다만,\s*)",
@@ -6715,8 +7422,8 @@ def _normalize_eligibility_groups_for_ui(
             seen.add(key)
             compact_details.append(compact)
 
-            # 일반 fallback 그룹은 최대 3개, 성년자 그룹은 예외 3개까지
-            # 모두 보여주기 위해 최대 4개를 유지한다.
+            # 일반 fallback 그룹은 최대 3개를 유지한다.
+            # 다자녀 매입임대는 서로 다른 핵심 자격조건 6개까지 유지한다.
             if len(compact_details) >= max_detail_count:
                 break
 
@@ -6829,10 +7536,12 @@ def _extract_adult_eligibility_group_from_structure(
         # 첫 설명문: 미성년자는 원칙적으로 신청 불가하되 예외가 있음을
         # 알리는 문장을 통째로 보존한다.
         intro_match = re.search(
-            r"「?민법」?\s*상\s*미성년자\s*\([^)]*\)는\s*"
-            r"공급\s*신청할\s*수\s*없습니다\.?\s*"
-            r"단,?\s*아래의\s*어느\s*하나에\s*해당하는\s*경우\s*"
-            r"미성년자도\s*공급\s*신청\s*가능합니다\.?",
+            r"(?:「?민법」?\s*상\s*)?"
+            r"미성년자\s*\([^)]*\)\s*는?\s*"
+            r"공급\s*신청할\s*수\s*없습니다\.?"
+            r".{0,120}?"
+            r"미성년자도\s*공급\s*신청\s*가능합니다\.?"
+            r"(?:\s*\([^)]*법정대리인[^)]*\))?",
             body,
             re.IGNORECASE | re.DOTALL,
         )
@@ -6840,6 +7549,27 @@ def _extract_adult_eligibility_group_from_structure(
             _append(intro_match.group(0))
             remainder = body[intro_match.end():]
         else:
+            normalized_body = _normalized_match_text(body)
+            if (
+                "미성년자" in normalized_body
+                and "공급신청할수없" in normalized_body
+                and "미성년자도" in normalized_body
+                and "신청가능" in normalized_body
+            ):
+                age_match = re.search(
+                    r"미성년자\s*\((?P<age>[^)]*세\s*미만[^)]*)\)",
+                    body,
+                    re.IGNORECASE,
+                )
+                age_text = (
+                    age_match.group("age").strip()
+                    if age_match
+                    else "19세 미만"
+                )
+                _append(
+                    f"「민법」상 미성년자({age_text})는 공급 신청할 수 없으며, "
+                    "예외에 해당하는 경우 신청 가능"
+                )
             remainder = body
 
         # HWPX 파싱 결과에서는 예외 조건이 보통 '-'로 시작하는 별도 줄이다.
@@ -6886,7 +7616,81 @@ def _extract_adult_eligibility_group_from_structure(
             for line in first_lines:
                 _append(line)
 
-        # 성년자 카드에는 대표 설명 + 예외 3개 정도가 가장 적절하다.
+        # 일부 HWP/HWPX 구조화 결과에서는 '■ 성년자' 아래의 원칙 문장이
+        # 별도 paragraph/search_text로 분리되어 현재 body에는 예외 bullet 3개만
+        # 남는 경우가 있다. 이 경우 문서 전체 후보에서 원칙 문장을 한 번 더
+        # 찾아 성년자 카드의 첫 detail로 복원한다.
+        principle_present = any(
+            (
+                "공급신청할수없" in _normalized_match_text(detail)
+                or (
+                    "미성년자" in _normalized_match_text(detail)
+                    and "신청불가" in _normalized_match_text(detail)
+                )
+            )
+            for detail in details
+        )
+
+        if not principle_present:
+            principle_match = None
+            for candidate in content_candidates:
+                principle_match = re.search(
+                    r"(?:「?민법」?\s*상\s*)?"
+                    r"미성년자\s*\((?P<age>[^)]*세\s*미만[^)]*)\)"
+                    r".{0,160}?"
+                    r"공급\s*신청할\s*수\s*없(?:습니다|다|음)"
+                    r".{0,220}?"
+                    r"미성년자도\s*공급\s*신청\s*가능",
+                    candidate,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                if principle_match:
+                    break
+
+            normalized_details = _normalized_match_text(" ".join(details))
+            has_known_exception = any(
+                token in normalized_details
+                for token in (
+                    "자녀가있는미성년세대주",
+                    "형제자매를부양",
+                    "외국인부모",
+                )
+            )
+
+            # 이 함수 자체가 '■ 성년자' 제목을 명시적으로 찾은 경우에만
+            # 실행되므로, 예외조건 3개가 실제로 추출되었다면 기본 원칙을
+            # 반드시 첫 detail로 보존한다. 구조화 과정에서 원칙 문장 노드가
+            # 빠지거나 쪼개져도 UI에서 핵심 원칙이 사라지지 않게 한다.
+            if principle_match or has_known_exception:
+                age_text = "19세 미만"
+
+                if principle_match:
+                    age_text = principle_match.group("age").strip()
+                else:
+                    all_text = re.sub(
+                        r"\s+",
+                        " ",
+                        _clean_text(" ".join(content_candidates)),
+                    )
+                    age_match = re.search(
+                        r"미성년자\s*\((?P<age>[^)]*세\s*미만[^)]*)\)",
+                        all_text,
+                        re.IGNORECASE,
+                    )
+                    if age_match:
+                        age_text = age_match.group("age").strip()
+
+                principle = (
+                    f"「민법」상 미성년자({age_text})는 공급 신청할 수 없으며, "
+                    "예외에 해당하는 경우 신청 가능"
+                )
+                principle_key = _normalized_match_text(principle)
+
+                if principle_key not in seen:
+                    seen.add(principle_key)
+                    details.insert(0, principle)
+
+        # 성년자 카드는 '기본 원칙 1개 + 예외 3개'가 가장 적절하다.
         # 지나친 주변 문구 유입을 막기 위해 최대 4개로 제한한다.
         details = details[:4]
         if not details:
@@ -7158,14 +7962,25 @@ def _build_eligibility(
     # 행복주택처럼 명시적인 공급계층이 있는 공고는 기존 계층별 카드 사용.
     target_groups: list[dict[str, Any]] = []
     used_happyhouse_groups = False
+    standard_general_rental = (
+        structure is not None
+        and _is_standard_general_rental_eligibility_structure(structure)
+    )
 
     if structure is not None:
         target_groups = (
-            _extract_happyhouse_eligibility_target_groups_from_structure(
+            _extract_multi_child_eligibility_group_from_structure(
                 structure
             )
         )
-        used_happyhouse_groups = bool(target_groups)
+
+        if not target_groups:
+            target_groups = (
+                _extract_happyhouse_eligibility_target_groups_from_structure(
+                    structure
+                )
+            )
+            used_happyhouse_groups = bool(target_groups)
 
     # 든든전세처럼 '■ 입주자격'은 공통 자격이고 뒤의 표는 선정 배점인
     # 공고를 별도로 감지한다. 이 경우 배점항목을 target_groups로 오인하지 않는다.
@@ -7201,6 +8016,18 @@ def _build_eligibility(
             _extract_adult_eligibility_group_from_structure(structure),
         )
 
+    # 국민임대/50년 공공임대의 표준 공통 자격형에서는
+    # '무주택세대구성원'은 공통조건이고, 예비신혼부부·한부모가족 등은
+    # 뒤쪽 선정/배점에서 언급될 수 있으므로 독립 모집계층으로 표시하지 않는다.
+    # 명시적 신청자격 하위 항목인 '성년자'만 상세 카드로 유지한다.
+    if standard_general_rental:
+        target_groups = [
+            group
+            for group in target_groups
+            if isinstance(group, dict)
+            and str(group.get("code") or "") == "adult"
+        ]
+
     target_groups = _filter_eligibility_target_groups_for_summary(
         target_groups,
         summary,
@@ -7217,6 +8044,10 @@ def _build_eligibility(
 
     if used_happyhouse_groups:
         common_conditions: list[str] = []
+    elif standard_general_rental:
+        # 표준 국민/50년 공공임대의 핵심 공통조건은
+        # 단순 '무주택자'보다 정확한 원문 용어를 유지한다.
+        common_conditions = ["무주택세대구성원"]
     elif common_only_conditions:
         common_conditions = common_only_conditions
     else:
@@ -7270,6 +8101,8 @@ SUPPLY_TABLE_HEADER_RULES = (
             "단지 위치",
             "건설위치",
             "건설 위치",
+            "대상주택",
+            "대상 주택",
         ),
     ),
     (
@@ -7315,6 +8148,15 @@ SUPPLY_TABLE_HEADER_RULES = (
             "금회모집세대수",
             "금회 모집세대수",
             "금회 모집 세대수",
+        ),
+    ),
+    (
+        "recruitment_people",
+        (
+            "모집인원수",
+            "모집 인원수",
+            "모집인원",
+            "모집 인원",
         ),
     ),
     (
@@ -7373,6 +8215,7 @@ SUPPLY_TABLE_NUMERIC_FIELDS = {
     "construction_units",
     "supply_units",
     "recruitment_units",
+    "recruitment_people",
     "recruitment_waitlist",
     "waiting_waitlist",
 }
@@ -7484,6 +8327,7 @@ def _is_strong_supply_header_set(
     actual_supply_fields = {
         "supply_units",
         "recruitment_units",
+        "recruitment_people",
         "recruitment_waitlist",
         "waiting_waitlist",
     }
@@ -7523,6 +8367,7 @@ def _looks_like_supply_item(
         "construction_units",
         "supply_units",
         "recruitment_units",
+        "recruitment_people",
         "recruitment_waitlist",
         "waiting_waitlist",
     )
@@ -8171,6 +9016,7 @@ def _summarize_supply_table_rows(
     metric_fields = (
         "supply_units",
         "recruitment_units",
+        "recruitment_people",
         "recruitment_waitlist",
         "waiting_waitlist",
     )
@@ -8603,6 +9449,111 @@ def _extract_complex_name_catalog(
     return result
 
 
+def _extract_supply_overview_location(
+    structure: dict[str, Any],
+) -> str:
+    """
+    공급 수량표와 별도의 '주택단지 개요/건설위치' 표에 있는 실제 주소를 추출한다.
+    단지명 + 위치가 함께 있는 표만 사용하여 신청장소 주소 오탐을 방지한다.
+    """
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    for node in _iter_nested_dicts(structure):
+        cells = node.get("cells")
+        if not isinstance(cells, list):
+            continue
+
+        table_cells = [cell for cell in cells if isinstance(cell, dict)]
+        if not table_cells:
+            continue
+
+        rows: dict[int, dict[int, str]] = {}
+        for cell in table_cells:
+            row = cell.get("row")
+            col = cell.get("col")
+            if not isinstance(row, int) or not isinstance(col, int):
+                continue
+            cell_text = _clean_text(cell.get("text"))
+            if cell_text:
+                rows.setdefault(row, {})[col] = cell_text
+
+        if not rows:
+            continue
+
+        sorted_rows = sorted(rows)
+        header_row: int | None = None
+        location_col: int | None = None
+        has_complex_name = False
+
+        for row_number in sorted_rows[:4]:
+            row_fields: dict[int, str] = {}
+            for col, value in rows[row_number].items():
+                field = _supply_table_header_field(value)
+                if field:
+                    row_fields[col] = field
+
+            if "location" not in row_fields.values():
+                continue
+
+            header_row = row_number
+            has_complex_name = "complex_name" in row_fields.values()
+            for col, field in row_fields.items():
+                if field == "location":
+                    location_col = col
+                    break
+            break
+
+        if (
+            header_row is None
+            or location_col is None
+            or not has_complex_name
+        ):
+            continue
+
+        for row_number in sorted_rows:
+            if row_number <= header_row:
+                continue
+
+            location = re.sub(
+                r"\s+",
+                " ",
+                _clean_text(rows[row_number].get(location_col)),
+            ).strip()
+
+            if not location:
+                continue
+
+            normalized = _normalized_match_text(location)
+            if len(normalized) < 8:
+                continue
+
+            address_signal_count = sum(
+                1
+                for token in (
+                    "시", "군", "구", "읍", "면", "동", "로", "길"
+                )
+                if token in location
+            )
+            if address_signal_count < 2:
+                continue
+
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            candidates.append(location)
+
+    if not candidates:
+        return ""
+
+    candidates.sort(key=len, reverse=True)
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    return " · ".join(candidates[:3])
+
+
 def _canonical_complex_name(
     value: Any,
     catalog: list[str],
@@ -8759,6 +9710,7 @@ def _filter_supply_housing_items_for_ui(
         "construction_units",
         "supply_units",
         "recruitment_units",
+        "recruitment_people",
         "recruitment_waitlist",
         "waiting_waitlist",
     )
@@ -9017,6 +9969,51 @@ def _extract_supply_rental_condition_summary(
     return ""
 
 
+
+def _extract_supply_location_from_housing_items(
+    housing_items: list[dict[str, Any]],
+) -> str:
+    """
+    구조화된 공급표의 location 값을 공급정보 대표 위치로 사용한다.
+
+    - 동일 주소가 여러 행에 반복되면 1회만 유지
+    - 실제 주소가 있는 경우 '전국' 같은 announcement.region fallback보다
+      우선해서 사용할 수 있도록 supply_information.location에 보존
+    - 여러 공급 위치가 있으면 앞의 3개까지만 결합
+    """
+    locations: list[str] = []
+    seen: set[str] = set()
+
+    for item in housing_items:
+        if not isinstance(item, dict):
+            continue
+
+        location = re.sub(
+            r"\s+",
+            " ",
+            _clean_text(item.get("location")),
+        ).strip()
+
+        if not location:
+            continue
+
+        normalized = _normalized_match_text(location)
+        if not normalized or normalized in seen:
+            continue
+
+        seen.add(normalized)
+        locations.append(location)
+
+    if not locations:
+        return ""
+
+    if len(locations) <= 3:
+        return " · ".join(locations)
+
+    return " · ".join(locations[:3]) + " 외"
+
+
+
 def _build_supply_information(
     matches: list[dict[str, Any]],
     *,
@@ -9045,9 +10042,11 @@ def _build_supply_information(
     )
 
     housing_items: list[dict[str, Any]] = []
+    supply_location = ""
     construction_units: int | None = None
     supply_units: int | None = None
     recruitment_units: int | None = None
+    recruitment_people: int | None = None
     recruitment_waitlist: int | None = None
     waiting_waitlist: int | None = None
 
@@ -9076,11 +10075,27 @@ def _build_supply_information(
         table_summary = _summarize_supply_table_rows(normalized_housing_items)
         supply_units = table_summary.get("supply_units")
         recruitment_units = table_summary.get("recruitment_units")
+        recruitment_people = table_summary.get("recruitment_people")
         recruitment_waitlist = table_summary.get("recruitment_waitlist")
         waiting_waitlist = table_summary.get("waiting_waitlist")
 
         housing_items = _filter_supply_housing_items_for_ui(
             normalized_housing_items
+        )
+
+        # 화면의 대표 공급 위치에 사용할 실제 공급표 주소.
+        # location이 보조값이라 UI용 행 필터에서 제외된 경우를 대비해
+        # normalized_housing_items를 먼저 보고, 없으면 최종 housing_items를 본다.
+        supply_location = (
+            _extract_supply_location_from_housing_items(
+                normalized_housing_items
+            )
+            or _extract_supply_location_from_housing_items(
+                housing_items
+            )
+            or _extract_supply_overview_location(
+                structure
+            )
         )
 
         # 본문에 '■ 공급대상 주택 : 총 137호'처럼 명시적인 총량이 있으면
@@ -9105,6 +10120,21 @@ def _build_supply_information(
         prefer_waitlist=prefer_waitlist,
     )
 
+    # 다자녀 매입임대는 공급호수와 모집인원수를 서로 다른 값으로 표시한다.
+    # 모집인원 0명은 값 없음이 아니라 실제 공고 값이므로 그대로 보존한다.
+    if (
+        structure is not None
+        and _is_multi_child_purchase_rental_structure(structure)
+        and isinstance(supply_units, int)
+        and isinstance(recruitment_people, int)
+    ):
+        summary = (
+            f"공급호수 {supply_units}호 · "
+            f"모집인원 {recruitment_people}명"
+        )
+        total_units = supply_units
+        summary_metric = "supply_units_and_recruitment_people"
+
     # 구조화 표에서 수량을 찾지 못한 문서는 기존 텍스트 요약을 fallback으로 사용한다.
     # 단, 임대보증금/월임대료/전환이율만 설명하는 문장은 _build_supply_summary에서
     # 제외되므로 공급 카드에 임대조건 문장이 들어가는 문제를 막는다.
@@ -9121,9 +10151,11 @@ def _build_supply_information(
             "construction_units": construction_units,
             "supply_units": supply_units,
             "recruitment_units": recruitment_units,
+            "recruitment_people": recruitment_people,
             "recruitment_waitlist": recruitment_waitlist,
             "waiting_waitlist": waiting_waitlist,
             "housing_items": housing_items,
+            "location": supply_location,
             "details_reference": details_reference,
             "rental_condition_summary": rental_condition_summary,
         }
@@ -9133,9 +10165,11 @@ def _build_supply_information(
         total_units is not None
         or supply_units is not None
         or recruitment_units is not None
+        or recruitment_people is not None
         or recruitment_waitlist is not None
         or waiting_waitlist is not None
         or bool(housing_items)
+        or bool(supply_location)
         or details_reference
         or rental_condition_summary
     ):
@@ -9154,6 +10188,79 @@ def _build_income_asset_criteria(
         "income_asset_criteria",
         matches,
     )
+
+    if structure is not None:
+        multi_child_criteria = (
+            _extract_multi_child_income_asset_criteria(
+                structure
+            )
+        )
+        if multi_child_criteria:
+            summary_parts: list[str] = []
+
+            income_criteria = multi_child_criteria.get(
+                "income_criteria"
+            )
+            if income_criteria:
+                summary_parts.append(str(income_criteria))
+
+            total_asset_criteria = multi_child_criteria.get(
+                "total_asset_criteria"
+            )
+            if total_asset_criteria:
+                summary_parts.append(
+                    f"총자산 {total_asset_criteria}"
+                )
+
+            car_value_limit = multi_child_criteria.get(
+                "car_value_limit"
+            )
+            if car_value_limit:
+                summary_parts.append(
+                    f"자동차가액 {car_value_limit}"
+                )
+
+            if summary_parts:
+                result["summary"] = " · ".join(summary_parts)
+                result["key_criteria"] = multi_child_criteria
+                result["status"] = "extracted"
+                return result
+
+        standard_rental_criteria = (
+            _extract_standard_general_rental_income_asset_criteria(
+                structure
+            )
+        )
+        if standard_rental_criteria:
+            summary_parts: list[str] = []
+
+            income_criteria = standard_rental_criteria.get(
+                "income_criteria"
+            )
+            if income_criteria:
+                summary_parts.append(str(income_criteria))
+
+            total_asset_criteria = standard_rental_criteria.get(
+                "total_asset_criteria"
+            )
+            if total_asset_criteria:
+                summary_parts.append(
+                    f"총자산 {total_asset_criteria}"
+                )
+
+            car_value_limit = standard_rental_criteria.get(
+                "car_value_limit"
+            )
+            if car_value_limit:
+                summary_parts.append(
+                    f"자동차가액 {car_value_limit}"
+                )
+
+            if summary_parts:
+                result["summary"] = " · ".join(summary_parts)
+                result["key_criteria"] = standard_rental_criteria
+                result["status"] = "extracted"
+                return result
 
     # 입주자격 완화 공고는 일반적인 소득/자산 설명이나
     # 갱신계약 할증 문장보다 실제 적용되는 완화 기준을
