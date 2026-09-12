@@ -319,6 +319,7 @@ type HousingItem = {
   construction_units?: unknown;
   supply_units?: unknown;
   recruitment_units?: unknown;
+  recruitment_people?: unknown;
   waiting_waitlist?: unknown;
   recruitment_waitlist?: unknown;
 };
@@ -334,6 +335,7 @@ const HOUSING_ITEM_FIELDS: {
   { key: "construction_units", label: "건설호수", unit: "호" },
   { key: "supply_units", label: "공급호수", unit: "호" },
   { key: "recruitment_units", label: "모집호수", unit: "호" },
+  { key: "recruitment_people", label: "모집인원", unit: "명" },
   { key: "waiting_waitlist", label: "대기 중인 예비자수", unit: "명" },
   { key: "recruitment_waitlist", label: "모집할 예비자수", unit: "명" },
 ];
@@ -487,9 +489,7 @@ function EligibilityDetailsContent({
               if (
                 details.length > 0 &&
                 typeof details[0] === "string" &&
-                details[0]
-                  .replace(/\s/g, "")
-                  .includes(label.replace(/\s/g, ""))
+                details[0].replace(/\s/g, "") === label.replace(/\s/g, "")
               ) {
                 details = details.slice(1);
               }
@@ -792,7 +792,11 @@ export function DetailScreen({
 
   const rawPublicationStatus = currentNotice.publication_status ?? currentNotice.publicationStatus ?? currentNotice.status;
   const displayPublicationStatus = rawPublicationStatus === "fixture" ? "상태 미확인" : toDisplayText(rawPublicationStatus, "상태 미확인");
-  const displayLocation = toDisplayText(currentNotice.region ?? supplyInformation.block, "-");
+  const supplyLocation =
+    supplyInformation.location ??
+    supplyInformation.block ??
+    currentNotice.region;
+  const displayLocation = toDisplayText(supplyLocation, "-");
 
 
   /* =========================
@@ -841,8 +845,7 @@ export function DetailScreen({
     [
       "공급 위치",
       compactCardValue(
-        currentNotice.region ??
-          supplyInformation.block,
+        supplyLocation,
         "공고문 참조",
         100
       ),
