@@ -165,6 +165,58 @@ function compactCardValue(
   return `${text.slice(0, maxLength).trim()}…`;
 }
 
+const REGION_NAME_ALIASES: Record<string, string> = {
+  서울: "서울특별시",
+  부산: "부산광역시",
+  대구: "대구광역시",
+  인천: "인천광역시",
+  광주: "광주광역시",
+  대전: "대전광역시",
+  울산: "울산광역시",
+  세종: "세종특별자치시",
+  경기: "경기도",
+  강원: "강원특별자치도",
+  강원도: "강원특별자치도",
+  충북: "충청북도",
+  충남: "충청남도",
+  전북: "전북특별자치도",
+  전라북도: "전북특별자치도",
+  전남: "전라남도",
+  경북: "경상북도",
+  경남: "경상남도",
+  제주: "제주특별자치도",
+  제주도: "제주특별자치도",
+};
+
+function formatSupplyLocation(
+  value: unknown,
+  level: "province" | "cityCounty"
+): string {
+  const rawLocation = toDisplayText(value, "")
+    .replace(/,/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!rawLocation) {
+    return "-";
+  }
+
+  const parts = rawLocation.split(" ");
+  const province = REGION_NAME_ALIASES[parts[0]] ?? parts[0];
+
+  if (level === "province") {
+    return province;
+  }
+
+  const cityCounty = parts
+    .slice(1)
+    .find((part) => /(시|군|구)$/.test(part));
+
+  return cityCounty
+    ? `${province} ${cityCounty}`
+    : province;
+}
+
 function hasDisplayValue(value: unknown): boolean {
   return !(
     value === null ||
@@ -319,6 +371,7 @@ type HousingItem = {
   construction_units?: unknown;
   supply_units?: unknown;
   recruitment_units?: unknown;
+  recruitment_people?: unknown;
   waiting_waitlist?: unknown;
   recruitment_waitlist?: unknown;
 };
@@ -334,6 +387,7 @@ const HOUSING_ITEM_FIELDS: {
   { key: "construction_units", label: "건설호수", unit: "호" },
   { key: "supply_units", label: "공급호수", unit: "호" },
   { key: "recruitment_units", label: "모집호수", unit: "호" },
+  { key: "recruitment_people", label: "모집인원", unit: "명" },
   { key: "waiting_waitlist", label: "대기 중인 예비자수", unit: "명" },
   { key: "recruitment_waitlist", label: "모집할 예비자수", unit: "명" },
 ];
@@ -487,9 +541,7 @@ function EligibilityDetailsContent({
               if (
                 details.length > 0 &&
                 typeof details[0] === "string" &&
-                details[0]
-                  .replace(/\s/g, "")
-                  .includes(label.replace(/\s/g, ""))
+                details[0].replace(/\s/g, "") === label.replace(/\s/g, "")
               ) {
                 details = details.slice(1);
               }
@@ -792,7 +844,18 @@ export function DetailScreen({
 
   const rawPublicationStatus = currentNotice.publication_status ?? currentNotice.publicationStatus ?? currentNotice.status;
   const displayPublicationStatus = rawPublicationStatus === "fixture" ? "상태 미확인" : toDisplayText(rawPublicationStatus, "상태 미확인");
-  const displayLocation = toDisplayText(currentNotice.region ?? supplyInformation.block, "-");
+  const supplyLocation =
+    supplyInformation.location ??
+    supplyInformation.block ??
+    currentNotice.region;
+  const displayProvinceLocation = formatSupplyLocation(
+    supplyLocation,
+    "province"
+  );
+  const displayCityCountyLocation = formatSupplyLocation(
+    supplyLocation,
+    "cityCounty"
+  );
 
 
   /* =========================
@@ -840,12 +903,9 @@ export function DetailScreen({
   const supplyData: [string, string][] = [
     [
       "공급 위치",
-      compactCardValue(
-        currentNotice.region ??
-          supplyInformation.block,
-        "공고문 참조",
-        100
-      ),
+      displayCityCountyLocation === "-"
+        ? "공고문 참조"
+        : displayCityCountyLocation,
     ],
     [
       "공급 내용",
@@ -865,11 +925,15 @@ export function DetailScreen({
     eligibility.summary,
     "공고문 세부 자격 요건을 확인하세요."
   );
-  const incomeSummary = compactCardValue(
-    incomeAssetCriteria.summary,
-    "공고문 소득·자산 기준을 확인하세요.",
-    230
-  );
+  const incomeStatus = incomeAssetCriteria.status ?? "";
+  const incomeSummary =
+    incomeStatus === "not_found"
+      ? "공고문에 별도 소득·자산 기준이 명시되어 있지 않습니다."
+      : compactCardValue(
+          incomeAssetCriteria.summary,
+          "공고문 소득·자산 기준을 확인하세요.",
+          230
+        );
 
   // 2. 공통 조건 & 계층별 조건 (snake_case, camelCase 호환)
   const commonConditions = eligibility.common_conditions ?? eligibility.commonConditions ?? [];
@@ -949,8 +1013,8 @@ export function DetailScreen({
         <div className="text-[13px] lg:text-[15px] text-slate-500 mt-3">
           <span className="mr-2">게시일</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayAnnouncementDate, "-")}</span>
           <span className="mr-2">공고 상태</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayPublicationStatus, "상태 미확인")}</span>
-          {displayLocation !== "-" && (
-            <><span className="mr-2">공급 위치</span><span className="text-slate-800 font-medium">{displayLocation}</span></>
+          {displayProvinceLocation !== "-" && (
+            <><span className="mr-2">공급 위치</span><span className="text-slate-800 font-medium">{displayProvinceLocation}</span></>
           )}
         </div>
       </div>
