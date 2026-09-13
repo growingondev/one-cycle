@@ -364,7 +364,55 @@ function SummaryCard({
 /* =========================
    타입
 ========================= */
+function normalizeEvidenceContent(value: unknown): string {
+  return toDisplayText(value, "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/g, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
+function normalizeEvidenceHeading(value: unknown): string {
+  return toDisplayText(value, "")
+    .trim()
+    .replace(/^[[(【]\s*/, "")
+    .replace(/\s*[\])】]$/, "")
+    .replace(/\s+/g, "")
+    .toLocaleLowerCase("ko-KR");
+}
+
+function removeDuplicatedEvidenceHeading(
+  content: string,
+  sectionTitle: unknown,
+): string {
+  const normalizedTitle = normalizeEvidenceHeading(sectionTitle);
+
+  if (!normalizedTitle) {
+    return content;
+  }
+
+  const lines = content.split("\n");
+  const firstContentLineIndex = lines.findIndex((line) => line.trim());
+
+  if (firstContentLineIndex === -1) {
+    return content;
+  }
+
+  const normalizedFirstLine = normalizeEvidenceHeading(
+    lines[firstContentLineIndex],
+  );
+
+  // 첫 문장과 sectionTitle이 실제로 동일할 때만 중복 제목을 제거합니다.
+  if (normalizedFirstLine !== normalizedTitle) {
+    return content;
+  }
+
+  lines.splice(firstContentLineIndex, 1);
+
+  return lines.join("\n").trim();
+}
 type EvidenceItem = {
   chunkId: string | number;
   sectionTitle?: string | null;
@@ -596,6 +644,19 @@ export function DetailScreen({
   notice?: any;
 }) {
   const [evidence, setEvidence] = useState<EvidenceItem[] | null>(null);
+
+  const [expandedEvidenceIndex, setExpandedEvidenceIndex] =
+    useState<number | null>(null);
+
+  const [fullEvidenceIndex, setFullEvidenceIndex] =
+    useState<number | null>(null);
+
+  const closeEvidenceModal = () => {
+    setEvidence(null);
+    setExpandedEvidenceIndex(null);
+    setFullEvidenceIndex(null);
+};
+
   const [input, setInput] = useState("");
   const [isSummaryOpen, setIsSummaryOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -994,14 +1055,19 @@ export function DetailScreen({
 
   return (
     <UserLayout screen="detail" go={go} showToast={showToast}>
-      <button className="flex items-center gap-1.5 text-[15px] lg:text-[16px] font-bold text-slate-600 hover:text-slate-900 mb-4 lg:mb-6 transition-colors" onClick={() => go("list")}>
+      <button
+        className="flex items-center gap-1.5 text-[15px] lg:text-[16px] font-bold text-slate-600 hover:text-slate-900 mb-4 lg:mb-6 transition-colors"
+        onClick={() => go("list")}
+      >
         <Icon name="back" size={18} /> 목록으로 돌아가기
       </button>
 
       {/* 공고 제목 */}
       <div className="mb-6">
         <div className="flex items-start justify-between gap-3 mb-3 lg:mb-4">
-          <h1 className="text-[26px] lg:text-[30px] font-extrabold text-slate-900 leading-tight tracking-tight">공고 상세 및 AI 질의응답</h1>
+          <h1 className="text-[26px] lg:text-[30px] font-extrabold text-slate-900 leading-tight tracking-tight">
+            공고 상세 및 AI 질의응답
+          </h1>
 
           <button
             onClick={handleDownload}
@@ -1015,19 +1081,36 @@ export function DetailScreen({
 
         <div className="flex flex-col lg:flex-row lg:items-center gap-3">
           <div className="flex-shrink-0 flex items-center gap-2">
-            <StatusPill>{toDisplayText(displayPublicationStatus, "상태 미확인")}</StatusPill>
+            <StatusPill>
+              {toDisplayText(displayPublicationStatus, "상태 미확인")}
+            </StatusPill>
             {currentNotice.notice_type && (
-              <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded text-[13px] font-bold">{currentNotice.notice_type}</span>
+              <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded text-[13px] font-bold">
+                {currentNotice.notice_type}
+              </span>
             )}
           </div>
-          <strong className="text-[17px] lg:text-[20px] text-slate-900 leading-snug">{toDisplayText(currentNotice.title, "공고명 없음")}</strong>
+          <strong className="text-[17px] lg:text-[20px] text-slate-900 leading-snug">
+            {toDisplayText(currentNotice.title, "공고명 없음")}
+          </strong>
         </div>
 
         <div className="text-[13px] lg:text-[15px] text-slate-500 mt-3">
-          <span className="mr-2">게시일</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayAnnouncementDate, "-")}</span>
-          <span className="mr-2">공고 상태</span> <span className="text-slate-800 font-medium mr-5">{toDisplayText(displayPublicationStatus, "상태 미확인")}</span>
+          <span className="mr-2">게시일</span>{" "}
+          <span className="text-slate-800 font-medium mr-5">
+            {toDisplayText(displayAnnouncementDate, "-")}
+          </span>
+          <span className="mr-2">공고 상태</span>{" "}
+          <span className="text-slate-800 font-medium mr-5">
+            {toDisplayText(displayPublicationStatus, "상태 미확인")}
+          </span>
           {displayProvinceLocation !== "-" && (
-            <><span className="mr-2">공급 위치</span><span className="text-slate-800 font-medium">{displayProvinceLocation}</span></>
+            <>
+              <span className="mr-2">공급 위치</span>
+              <span className="text-slate-800 font-medium">
+                {displayProvinceLocation}
+              </span>
+            </>
           )}
         </div>
       </div>
@@ -1036,18 +1119,34 @@ export function DetailScreen({
           메인 영역
       ====================== */}
       <div className="grid grid-cols-1 items-start gap-4 lg:gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
-
         {/* =====================
             핵심정보
         ====================== */}
         <div className="min-w-0 bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm">
-          <div className="flex items-center justify-between cursor-pointer xl:cursor-default" onClick={() => setIsSummaryOpen(!isSummaryOpen)}>
-            <h2 className="text-[17px] lg:text-[19px] font-bold text-slate-900">핵심 정보 요약</h2>
-            <button className="xl:hidden text-slate-500 hover:text-slate-800 p-1">{isSummaryOpen ? <ChevronUp size={22} /> : <ChevronDown size={22} />}</button>
+          <div
+            className="flex items-center justify-between cursor-pointer xl:cursor-default"
+            onClick={() => setIsSummaryOpen(!isSummaryOpen)}
+          >
+            <h2 className="text-[17px] lg:text-[19px] font-bold text-slate-900">
+              핵심 정보 요약
+            </h2>
+            <button className="xl:hidden text-slate-500 hover:text-slate-800 p-1">
+              {isSummaryOpen ? (
+                <ChevronUp size={22} />
+              ) : (
+                <ChevronDown size={22} />
+              )}
+            </button>
           </div>
 
-          <div className={`${isSummaryOpen ? "block mt-4" : "hidden"} xl:block xl:mt-4`}>
-            <SummaryCard icon="calendar" title="신청 일정" rows={scheduleData} />
+          <div
+            className={`${isSummaryOpen ? "block mt-4" : "hidden"} xl:block xl:mt-4`}
+          >
+            <SummaryCard
+              icon="calendar"
+              title="신청 일정"
+              rows={scheduleData}
+            />
             <SummaryCard
               icon="home"
               title="공급 정보"
@@ -1082,14 +1181,16 @@ export function DetailScreen({
                 <h3 className="flex items-center gap-2 text-blue-600 text-[16px] lg:text-[17px] font-bold">
                   <BadgeCheck size={20} /> 신청 자격
                 </h3>
-                
+
                 {/* 🟢 API에서 상세 조건 배열을 넘겨주었을 때만 버튼 노출 */}
                 {hasEligibilityDetails && (
                   <button
                     type="button"
                     aria-expanded={showEligibilityDetails}
                     aria-controls="eligibility-details-inline"
-                    onClick={() => setShowEligibilityDetails(!showEligibilityDetails)}
+                    onClick={() =>
+                      setShowEligibilityDetails(!showEligibilityDetails)
+                    }
                     className="flex items-center gap-1 text-[13px] bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100 transition-colors"
                   >
                     {showEligibilityDetails ? (
@@ -1140,24 +1241,32 @@ export function DetailScreen({
                   onClick={() => setShowDocsEvidence(!showDocsEvidence)}
                   className="flex items-center gap-1 text-[13px] bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100 transition-colors"
                 >
-                  <FileText size={14} /> {showDocsEvidence ? "근거 닫기" : "근거 확인"}
+                  <FileText size={14} />{" "}
+                  {showDocsEvidence ? "근거 닫기" : "근거 확인"}
                 </button>
               </div>
 
               <ul className="text-[14px] lg:text-[15px] font-medium text-slate-800 leading-relaxed pl-5 list-disc mb-4 break-keep">
-                {docsData.map((doc, index) => <li key={index}>{doc}</li>)}
+                {docsData.map((doc, index) => (
+                  <li key={index}>{doc}</li>
+                ))}
               </ul>
 
               {/* 버튼 클릭 시 노출되는 AI 원본 텍스트 */}
               {showDocsEvidence && (
                 <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg text-[13px] text-slate-700 leading-relaxed whitespace-pre-wrap break-words mt-4 max-h-72 overflow-auto">
-                  <b className="text-amber-700 block mb-1">🔍 AI 문서 추출 원본</b>
+                  <b className="text-amber-700 block mb-1">
+                    🔍 AI 문서 추출 원본
+                  </b>
                   {toDisplayText(docsEvidenceText, "")}
                 </div>
               )}
             </div>
 
-            <p className="text-[12px] text-slate-400 mt-3 break-keep">※ 핵심 정보는 공고문을 AI가 분석하여 추출한 내용으로, 실제 공고문을 원본으로 확인하세요.</p>
+            <p className="text-[12px] text-slate-400 mt-3 break-keep">
+              ※ 핵심 정보는 공고문을 AI가 분석하여 추출한 내용으로, 실제
+              공고문을 원본으로 확인하세요.
+            </p>
           </div>
         </div>
 
@@ -1165,38 +1274,81 @@ export function DetailScreen({
             AI 채팅
         ====================== */}
         <div className="min-w-0 bg-white border border-slate-200 rounded-xl p-4 lg:p-5 shadow-sm flex flex-col h-[600px] lg:h-[700px]">
-          <h2 className="text-[17px] lg:text-[19px] font-bold text-slate-900 mb-1">AI에게 무엇이든 물어보세요</h2>
-          <p className="text-[13px] lg:text-[14px] text-slate-500 mb-4">공고에 대해 궁금한 내용을 질문하면 AI가 답변해 드립니다.</p>
+          <h2 className="text-[17px] lg:text-[19px] font-bold text-slate-900 mb-1">
+            AI에게 무엇이든 물어보세요
+          </h2>
+          <p className="text-[13px] lg:text-[14px] text-slate-500 mb-4">
+            공고에 대해 궁금한 내용을 질문하면 AI가 답변해 드립니다.
+          </p>
 
-          <div ref={chatContainerRef} className="flex-1 overflow-auto px-2 py-4 bg-slate-50/50 rounded-lg border border-slate-100">
-            {messages.length === 0 && <div className="text-center text-slate-400 py-10 text-sm">질문을 입력하면 이곳에 AI 답변이 표시됩니다.</div>}
-
-            {messages.map((message, index) => message.role === "user" ? (
-              <div key={index} className="flex flex-col items-end mb-5">
-                <div className="max-w-[80%] lg:max-w-[65%] bg-blue-600 text-white text-[14px] lg:text-[15px] leading-relaxed px-4 py-3 rounded-2xl rounded-br-sm shadow-sm whitespace-pre-wrap break-keep">{message.text}</div>
-                <small className="text-[11px] text-slate-400 mt-1.5">{message.time}</small>
+          <div
+            ref={chatContainerRef}
+            className="flex-1 overflow-auto px-2 py-4 bg-slate-50/50 rounded-lg border border-slate-100"
+          >
+            {messages.length === 0 && (
+              <div className="text-center text-slate-400 py-10 text-sm">
+                질문을 입력하면 이곳에 AI 답변이 표시됩니다.
               </div>
-            ) : (
-              <div key={index} className="flex items-start gap-2.5 mb-5">
-                <div className="w-8 h-8 rounded-full border-2 border-blue-500 text-blue-600 flex items-center justify-center text-[12px] font-black flex-shrink-0 bg-white shadow-sm">AI</div>
-                <div className="flex flex-col items-start max-w-[80%] lg:max-w-[70%]">
-                  <div className="bg-white border border-slate-200 text-slate-800 text-[14px] lg:text-[15px] leading-relaxed px-4 py-3 rounded-2xl rounded-tl-sm shadow-sm whitespace-pre-wrap break-keep">
-                    {renderTextWithGlossary(message.text, glossary)}
-                    {message.evidence && message.evidence.length > 0 && (
-                      <button onClick={() => setEvidence(message.evidence ?? [])} className="block mt-3 bg-blue-50 text-blue-600 text-[13px] font-bold px-3 py-1.5 rounded-md hover:bg-blue-100 transition-colors">근거 문단 보기</button>
-                    )}
+            )}
+
+            {messages.map((message, index) =>
+              message.role === "user" ? (
+                <div key={index} className="flex flex-col items-end mb-5">
+                  <div className="max-w-[80%] lg:max-w-[65%] bg-blue-600 text-white text-[14px] lg:text-[15px] leading-relaxed px-4 py-3 rounded-2xl rounded-br-sm shadow-sm whitespace-pre-wrap break-keep">
+                    {message.text}
                   </div>
-                  <small className="text-[11px] text-slate-400 mt-1.5">{message.time}</small>
+                  <small className="text-[11px] text-slate-400 mt-1.5">
+                    {message.time}
+                  </small>
                 </div>
-              </div>
-            ))}
-          
+              ) : (
+                <div key={index} className="flex items-start gap-2.5 mb-5">
+                  <div className="w-8 h-8 rounded-full border-2 border-blue-500 text-blue-600 flex items-center justify-center text-[12px] font-black flex-shrink-0 bg-white shadow-sm">
+                    AI
+                  </div>
+                  <div className="flex flex-col items-start max-w-[80%] lg:max-w-[70%]">
+                    <div className="bg-white border border-slate-200 text-slate-800 text-[14px] lg:text-[15px] leading-relaxed px-4 py-3 rounded-2xl rounded-tl-sm shadow-sm whitespace-pre-wrap break-keep">
+                      {renderTextWithGlossary(message.text, glossary)}
+                      {message.evidence && message.evidence.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExpandedEvidenceIndex(null);
+                            setFullEvidenceIndex(null);
+                            setEvidence(message.evidence ?? []);
+                          }}
+                          className="block mt-3 rounded-md bg-blue-50 px-3 py-1.5 text-[13px] font-bold text-blue-600 transition-colors hover:bg-blue-100"
+                        >
+                          근거 문단 보기
+                        </button>
+                      )}
+                    </div>
+                    <small className="text-[11px] text-slate-400 mt-1.5">
+                      {message.time}
+                    </small>
+                  </div>
+                </div>
+              ),
+            )}
           </div>
 
           <div className="mt-4">
             <div className="flex h-12 lg:h-14 border border-slate-300 rounded-lg overflow-hidden focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all shadow-sm">
-              <input className="flex-1 border-0 px-4 outline-none text-[14px] lg:text-[15px]" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }} placeholder="궁금한 내용을 입력하세요." />
-              <button onClick={send} className="w-[50px] lg:w-[60px] bg-white text-blue-600 hover:bg-blue-50 flex items-center justify-center transition-colors"><Icon name="send" size={20} /></button>
+              <input
+                className="flex-1 border-0 px-4 outline-none text-[14px] lg:text-[15px]"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") send();
+                }}
+                placeholder="궁금한 내용을 입력하세요."
+              />
+              <button
+                onClick={send}
+                className="w-[50px] lg:w-[60px] bg-white text-blue-600 hover:bg-blue-50 flex items-center justify-center transition-colors"
+              >
+                <Icon name="send" size={20} />
+              </button>
             </div>
           </div>
         </div>
@@ -1206,18 +1358,120 @@ export function DetailScreen({
           근거 모달
       ====================== */}
       {evidence && (
-        <InfoModal title="답변 근거" onClose={() => setEvidence(null)}>
-          <p className="text-slate-500 text-sm mb-4">AI 답변에 실제 사용된 원문 문단입니다.</p>
-          <div className="space-y-4">
-            {evidence.map((item, index) => (
-              <div key={`${item.chunkId}-${index}`} className="border border-slate-200 rounded-lg p-4">
-                <div className="text-[13px] text-slate-500 mb-2"><b className="text-slate-700 mr-2">근거 {index + 1}</b>{toDisplayText(item.sectionTitle, "문서 위치 미상")}</div>
-                <div className="text-[14px] text-slate-800 leading-relaxed whitespace-pre-wrap break-keep">{toDisplayText(item.content, "근거 내용이 없습니다.")}</div>
-                {typeof item.score === "number" && <div className="text-[11px] text-slate-400 mt-2">score: {item.score.toFixed(4)}</div>}
-              </div>
-            ))}
+        <InfoModal title="답변 근거" onClose={closeEvidenceModal}>
+          <p className="mb-4 pr-7 text-sm leading-relaxed text-slate-500">
+            AI 답변에 참고된 공고문 내용입니다.
+          </p>
+
+          <div className="space-y-2">
+            {evidence.map((item, index) => {
+              const isExpanded = expandedEvidenceIndex === index;
+              const isFullContent = fullEvidenceIndex === index;
+
+              const sectionTitle = toDisplayText(
+                item.sectionTitle,
+                "문서 위치 미상",
+              ).trim();
+
+              const normalizedContent = normalizeEvidenceContent(item.content);
+
+              const displayContent =
+                removeDuplicatedEvidenceHeading(
+                  normalizedContent,
+                  item.sectionTitle,
+                ) || "근거 내용이 없습니다.";
+
+              const isLongContent =
+                displayContent.length > 450 ||
+                displayContent.split("\n").length > 12;
+
+              return (
+                <section
+                  key={`${item.chunkId}-${index}`}
+                  className="overflow-hidden rounded-lg border border-slate-200 bg-white"
+                >
+                  <button
+                    type="button"
+                    aria-expanded={isExpanded}
+                    onClick={() => {
+                      const nextIndex = isExpanded ? null : index;
+
+                      setExpandedEvidenceIndex(nextIndex);
+                      setFullEvidenceIndex(null);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-3 text-left transition-colors hover:bg-slate-50 sm:px-4"
+                  >
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center text-slate-500">
+                      {isExpanded ? (
+                        <ChevronUp size={18} />
+                      ) : (
+                        <ChevronDown size={18} />
+                      )}
+                    </span>
+
+                    <b className="shrink-0 text-[13px] text-slate-800 sm:text-[14px]">
+                      근거 {index + 1}
+                    </b>
+
+                    <span
+                      className="min-w-0 flex-1 overflow-hidden text-[13px] leading-5 text-slate-500 sm:text-[14px]"
+                      style={{
+                        display: "-webkit-box",
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: "vertical",
+                      }}
+                    >
+                      {sectionTitle}
+                    </span>
+                  </button>
+
+                  {isExpanded && (
+                    <div className="border-t border-slate-200 px-3 py-4 sm:px-4">
+                      <div
+                        className={`relative ${
+                          isLongContent && !isFullContent
+                            ? "max-h-64 overflow-hidden"
+                            : ""
+                        }`}
+                      >
+                        <div className="whitespace-pre-wrap break-words text-[14px] leading-7 text-slate-700 [overflow-wrap:anywhere]">
+                          {displayContent}
+                        </div>
+
+                        {isLongContent && !isFullContent && (
+                          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-white to-transparent" />
+                        )}
+                      </div>
+
+                      {isLongContent && (
+                        <div className="mt-3 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFullEvidenceIndex(isFullContent ? null : index)
+                            }
+                            className="rounded-md bg-blue-50 px-3 py-1.5 text-[13px] font-bold text-blue-600 transition-colors hover:bg-blue-100"
+                          >
+                            {isFullContent ? "접기" : "전체 내용 보기"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
           </div>
-          <div className="flex justify-end mt-6"><button onClick={() => setEvidence(null)} className="bg-blue-600 text-white font-bold px-5 py-2.5 rounded-lg hover:bg-blue-700 transition-colors">닫기</button></div>
+
+          <div className="mt-6 flex justify-end">
+            <button
+              type="button"
+              onClick={closeEvidenceModal}
+              className="rounded-lg bg-blue-600 px-5 py-2.5 font-bold text-white transition-colors hover:bg-blue-700"
+            >
+              닫기
+            </button>
+          </div>
         </InfoModal>
       )}
     </UserLayout>
