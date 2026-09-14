@@ -14,7 +14,7 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY docker/rag/requirements.txt /tmp/requirements.txt
+COPY infra/rag/requirements.txt /tmp/requirements.txt
 RUN python -m pip install --no-cache-dir --requirement /tmp/requirements.txt
 
 COPY services/__init__.py /app/services/__init__.py
