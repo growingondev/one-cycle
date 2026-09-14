@@ -820,14 +820,10 @@ def process_document(
         db_format
         and db_format != document_format
     ):
-        raise DocumentProcessingError(
-            document_id=document_db_id,
-            stage="format_detection",
-            message=(
-                "DB document_format과 실제 파일 형식이 다릅니다. "
-                f"db={db_format}, actual={document_format}. "
-                "Crawler 저장 형식을 확인하세요."
-            ),
+        print(
+            "[DocumentProcessor] 문서 형식 보정: "
+            f"db={db_format}, actual={document_format}, "
+            f"path={source_path}"
         )
 
     paths = _stage_paths(
