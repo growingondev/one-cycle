@@ -650,13 +650,14 @@ def persist_outputs(
                 == announcement_key,
                 Document.original_filename
                 == summary["filename"],
-                Document.document_format
-                == summary["format"],
                 Document.download_status == "completed",
                 *(
                     [Document.id == document_id]
                     if document_id is not None
-                    else []
+                    else [
+                        Document.document_format
+                        == summary["format"]
+                    ]
                 ),
             )
         ).all()
