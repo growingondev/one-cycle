@@ -237,6 +237,51 @@ class DocumentProcessingServiceTest(
                     30
                 )
 
+    def test_worker_detected_document_format_is_allowed(
+        self,
+    ):
+        context = {
+            "announcement_key": "LH-TEST-001",
+            "announcement_db_id": 20,
+            "document_db_id": 30,
+            "filename": "sample.hwpx",
+            "format": "hwpx",
+            "storage_path": (
+                "/data/documents/"
+                "LH-TEST-001/sample.hwpx"
+            ),
+        }
+
+        corrected_response = _worker_response(
+            document_format="hwp",
+        )
+
+        with (
+            patch(
+                "backend.app.services."
+                "document_processing_service."
+                "get_registered_document_context",
+                return_value=context,
+            ),
+            patch(
+                "backend.app.services."
+                "document_processing_service."
+                "document_worker_client.process_document",
+                return_value=corrected_response,
+            ),
+        ):
+            result = process_document_via_worker(
+                30
+            )
+
+        self.assertIs(
+            result,
+            corrected_response,
+        )
+        self.assertEqual(
+            result.document_format,
+            "hwp",
+        )
 
 class DocumentWorkerFinalizationTest(
     unittest.TestCase

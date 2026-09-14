@@ -146,6 +146,16 @@ def _validate_document_format(
     source_path: Path,
     expected_format: str,
 ) -> str:
+    """
+    파일 확장자/Backend 전달 형식이 아니라 실제 내부 형식을 최종 기준으로 삼는다.
+
+    - 실제 OLE/CFBF HWP이면 "hwp"
+    - 실제 ZIP/XML HWPX이면 "hwpx"
+    - 둘 다 아니면 오류
+
+    expected_format과 actual_format이 달라도 HWP/HWPX로 정상 판별되었다면
+    오류로 처리하지 않고 실제 형식에 맞는 Parser로 자동 라우팅한다.
+    """
     actual_format = (
         detect_actual_document_format(
             source_path
@@ -178,17 +188,11 @@ def _validate_document_format(
         normalized_expected_format
         != actual_format
     ):
-        raise DocumentWorkerServiceError(
-            status_code=500,
-            error_code=(
-                "DOCUMENT_FORMAT_VALIDATION_FAILED"
-            ),
-            message=(
-                "Backend가 전달한 문서 형식과 "
-                "실제 파일 내부 형식이 다릅니다. "
-                f"expected={normalized_expected_format}, "
-                f"actual={actual_format}"
-            ),
+        print(
+            "[DocumentWorker] 문서 형식 보정: "
+            f"expected={normalized_expected_format or '<empty>'}, "
+            f"actual={actual_format}, "
+            f"path={source_path}"
         )
 
     return actual_format
@@ -543,7 +547,7 @@ def _run_normalizer(
                 f"{normalized_output}"
             ),
         )
-        
+
 
 # ============================================================
 # Structure / Verification
@@ -1341,7 +1345,7 @@ def process_document(
         )
     else:
         _require_retry_artifacts(paths["normalized"])
-    
+
     # --------------------------------------------------------
     # 6. Structure / Verification
     # --------------------------------------------------------
@@ -1367,8 +1371,8 @@ def process_document(
             paths["structure"],
             paths["verification"],
         )
-    
-    
+
+
     # --------------------------------------------------------
     # 7. Chunking
     # --------------------------------------------------------
