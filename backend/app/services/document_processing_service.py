@@ -170,14 +170,6 @@ def _validate_worker_response_context(
             "announcement_key"
         )
 
-    if (
-        response.document_format
-        != context["document_format"]
-    ):
-        mismatches.append(
-            "document_format"
-        )
-
     if mismatches:
         raise InternalServiceResponseError(
             "Document worker response does not match "
