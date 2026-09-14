@@ -1421,8 +1421,6 @@ PostgreSQL + pgvector Vector Search
   ↓
 Vector Top 20
 
-동시에
-
 PostgreSQL Active Chunks
   ↓
 Kiwi Tokenization

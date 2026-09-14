@@ -291,10 +291,10 @@ evaluation/source_documents/DOC_GC_001/v1/example.hwpx
 
 ```text
 Windows
-C:\Project\one-cycle
+C:\path\to\one-cycle
 
 AWS 기존 작업 경로 예
-/home/ubuntu/ddokbot/one-cycle
+/path/to/one-cycle
 ```
 
 단, 평가 원본이 `PROJECT_ROOT` 밖에 있으면 현재 구현은

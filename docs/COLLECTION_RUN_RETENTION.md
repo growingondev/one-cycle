@@ -114,12 +114,12 @@ docker compose \
   --env-file .env \
   -f infra/docker-compose.yml \
   run --rm --no-deps -T \
-  -e COLLECTION_RETENTION_LEGACY_DOCUMENT_STORED_ROOT=/home/ubuntu/ddokbot/one-cycle_development/test_documents/lh_downloads \
+  -e COLLECTION_RETENTION_LEGACY_DOCUMENT_STORED_ROOT=/path/to/legacy/documents \
   -e COLLECTION_RETENTION_LEGACY_DOCUMENT_ACCESS_ROOT=/legacy/documents \
-  -e COLLECTION_RETENTION_LEGACY_OUTPUT_STORED_ROOT=/home/ubuntu/ddokbot/one-cycle_development/outputs \
+  -e COLLECTION_RETENTION_LEGACY_OUTPUT_STORED_ROOT=/path/to/legacy/outputs \
   -e COLLECTION_RETENTION_LEGACY_OUTPUT_ACCESS_ROOT=/legacy/outputs \
-  -v /home/ubuntu/ddokbot/one-cycle_development/test_documents/lh_downloads:/legacy/documents \
-  -v /home/ubuntu/ddokbot/one-cycle_development/outputs:/legacy/outputs \
+  -v /path/to/legacy/documents:/legacy/documents \
+  -v /path/to/legacy/outputs:/legacy/outputs \
   backend \
   python - <<'PY'
 import json

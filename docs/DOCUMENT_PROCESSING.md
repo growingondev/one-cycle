@@ -1497,31 +1497,7 @@ _build_contact_information()
 
 # 31. 신청기간
 
-<<<<<<< HEAD
-이 부분은 Docker/서비스 분리 시 가장 중요합니다.
-
-| 연결 대상 | 현재 방식 | 전달 데이터 | 관련 코드 |
-|---|---|---|---|
-| Crawler → Backend | HTTP job API | 공고 + 원본 Document 정보 | `crawler_client.py`, `collection_service.py` |
-| Backend → Pipeline | Python import | `document_id` | `pipeline_gateway.py` |
-| Pipeline → 원본 파일 | 파일 | `storage_path` | `document_processor.py` |
-| Pipeline Stage 간 | 파일 + subprocess | JSON / NPY | `document_processor.py` |
-| Pipeline → DB | Python import + DB | 구조/청크/임베딩 | `pipeline_persistence.py` |
-| Pipeline → 핵심정보 저장 | Python import + DB | 7개 핵심정보 | `key_information_service.py` |
-| DB → RAG | DB/pgvector | Chunk + Embedding | `rag/db_pipeline.py` |
-
-현재 문서처리 자체를 호출하기 위한 별도 HTTP API는 없습니다.
-
-관리자 HTTP Endpoint가 존재하지만 Endpoint 내부에서는 같은 서버의 Python 함수를 import하여 호출합니다.
-
----
-
-# 12. 실제 호출 순서
-
-## 관리자 재처리 기준
-=======
 대표 처리 대상:
->>>>>>> 2c10a57 (docs: update document processing guide)
 
 ```text
 2026.09.10 ~ 2026.09.12

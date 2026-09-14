@@ -269,13 +269,13 @@ python evaluation/evaluate_metrics.py \
 AWS 프로젝트 위치:
 
 ```text
-/home/ubuntu/ddokbot/one-cycle_api
+/path/to/one-cycle
 ```
 
 기본 Host 결과 경로:
 
 ```text
-/home/ubuntu/ddokbot/one-cycle_api/runtime/outputs/
+/path/to/one-cycle/runtime/outputs/
 ```
 
 Container 경로:
@@ -400,7 +400,7 @@ source ~/ddokbot/venvs/venv/bin/activate
 ```bash
 POSTGRES_DB=one_cycle_evaluation_tmp \
 DOCUMENT_WORKER_BASE_URL=http://127.0.0.1:19003 \
-PIPELINE_OUTPUT_HOST_PATH=/home/ubuntu/ddokbot/one-cycle_api/runtime/outputs \
+PIPELINE_OUTPUT_HOST_PATH=/path/to/one-cycle/runtime/outputs \
 PYTHONPATH=. \
 python evaluation/evaluate_rag.py \
   --dataset DH \
@@ -3030,7 +3030,7 @@ ragas_status
 → evaluation/datasets/<DATASET>_FINAL_V*.xlsx
 
 실제 Pipeline Artifact
-→ /home/ubuntu/ddokbot/one-cycle_api/runtime/outputs/
+→ /path/to/one-cycle/runtime/outputs/
 
 평가 DB
 → one_cycle_evaluation_tmp
