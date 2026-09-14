@@ -1,124 +1,121 @@
-# 청킹(Chunking) 파트 문서
+# Chunking
 
-## 1. 청킹 파트 역할
+> 기준 브랜치: `main`  
+> 기준 구현: `document_worker/service.py`, `pipeline/chunking/`  
+> 이 문서는 DDOK BOT 서비스에서 구조화된 HWP/HWPX 문서가 실제로 어떻게 Chunk로 변환되는지 설명한다.
 
-청킹 단계는 앞 단계에서 생성된 **구조화 HWP/HWPX JSON**을 입력으로 받아,
-이후 임베딩과 검색에 사용할 수 있는 작은 단위의 청크로 변환하는
-단계이다.
+---
 
-단순히 일정 글자 수로 문서를 자르는 방식이 아니라 문서의
+## 1. 개요
 
--   section 계층
--   문단 구조
--   표 구조
--   표의 단위 정보
--   정규화된 값
--   공고 ID
--   원본 위치 정보
+Chunking은 Structure 단계에서 생성된 구조화 JSON을 **검색과 임베딩에 사용할 수 있는 의미 단위의 Chunk**로 변환하는 단계다.
 
-를 최대한 유지하는 **Structure-Aware Chunking 방식**을 사용한다.
+DDOK BOT은 공공기관 공고문처럼 제목 계층과 표가 중요한 문서를 처리하기 때문에 단순히 일정 글자 수나 토큰 수만큼 자르는 방식 대신 **Structure-Aware Chunking**을 사용한다.
 
-현재 기본 전략명은 `hierarchical-structure-aware`이고, 기본 설정은
-target 500 / max 800 / min 80 / overlap 80 토큰이다.
+현재 전략명은 다음과 같다.
 
-------------------------------------------------------------------------
-
-## 2. 전체 파이프라인에서의 위치
-
-``` text
-HWP / HWPX
-    ↓
-Parsing
-    ↓
-Normalization / Structure Analysis
-    ↓
-03_structured JSON
-    ↓
-[Chunking] ← 현재 파트
-    ↓
-04_chunks/{hwp|hwpx}/chunks.json
-    ↓
-Embedding
-    ↓
-Vector DB / Retrieval
+```text
+hierarchical-structure-aware
 ```
 
-`run_chunking.py`는 기본 실행 시
+핵심 원칙은 다음과 같다.
 
-``` text
-outputs/announcement_*/03_structured/{hwp,hwpx}/
+- 문서의 Section 계층을 유지한다.
+- Paragraph와 Table을 서로 다른 방식으로 처리한다.
+- Table의 Header-Value 관계를 유지한다.
+- 구조화 단계에서 생성된 병합 값과 정규화 정보를 활용한다.
+- 금액·면적 등의 단위가 다른 필드에 잘못 적용되지 않도록 검사한다.
+- Chunk마다 원본 문서의 위치 정보를 유지한다.
+- 표시, 검색, 임베딩 목적에 맞게 `content`, `search_text`, `embedding_text`를 각각 생성한다.
+
+---
+
+## 2. 실제 서비스에서의 위치
+
+현재 서비스에서 Chunking은 **Document Worker의 문서 처리 Pipeline 안에서 실행된다.**
+
+```text
+Backend
+  ↓
+Document Worker
+  ↓
+Parser
+  ↓
+Normalizer
+  ↓
+Structure
+  ↓
+Chunking
+  ↓
+Embedding Service
+  ↓
+Persistence
 ```
 
-에서 최종 구조화 JSON을 자동 탐색하고 결과를
+Document Worker의 `document_worker/service.py`는 Structure 단계가 끝난 뒤 `_run_chunking()`을 호출한다.
 
-``` text
-outputs/announcement_*/04_chunks/{hwp,hwpx}/chunks.json
+실제 호출 관계는 다음과 같다.
+
+```text
+document_worker/service.py
+  ↓
+_run_chunking()
+  ↓
+pipeline/chunking/run_chunking.py
+  ↓
+StructureAwareChunker
+  ↓
+chunks.json
 ```
 
-으로 저장한다. 단일 파일 실행과 폴더 일괄 실행도 지원한다.
+Document Worker는 `run_chunking.py`를 subprocess로 실행하면서 다음 값을 전달한다.
 
-따라서 현재 청킹은 네트워크 API로 호출되는 서비스가 아니라 **같은
-프로젝트 내부 Python 코드 + 파일 입출력 방식으로 동작하는 파이프라인
-단계**이다.
+```text
+--input
+  Structure 최종 JSON
 
-------------------------------------------------------------------------
+--output
+  chunks.json
 
-## 3. 청킹 전체 실행 흐름
-
-실제 실행 흐름은 다음과 같다.
-
-``` text
-run_chunking.py
-        ↓
-CLI 인자 분석
-        ↓
-ChunkingConfig 생성
-        ↓
-StructureAwareChunker 생성
-        ↓
-입력 구조화 JSON 탐색
-        ↓
-chunk_one_file()
-        ↓
-StructureAwareChunker.chunk_file()
-        ↓
-JSON 로딩
-        ↓
-chunk_document()
-        ↓
-StructuredJsonValidator
-        ↓
-intro 처리
-        ↓
-section / children 재귀 순회
-        ↓
-content type 확인
-        ├─ paragraph → ParagraphChunker
-        │
-        └─ table → TableChunker
-        ↓
-content 생성
-search_text 생성
-embedding_text 생성
-        ↓
-Chunk 객체 생성
-        ↓
-청크 결과 검증
-        ↓
-chunks.json 저장
-        ↓
-Embedding 단계
+--announcement-id
+  현재 공고 ID
 ```
 
-`chunk_one_file()`에서도 이 흐름을 직접 설명하고 있으며, 내부에서 입력
-검증 → intro → section 재귀 순회 → 문단/표 청킹 → 검색·임베딩 텍스트
-생성 → 결과 검증 및 저장 순서로 동작한다.
+따라서 `pipeline/chunking/run_chunking.py`는 현재 서비스의 **실제 Chunking 실행 진입점**이다.
 
-------------------------------------------------------------------------
+---
 
-## 4. 주요 파일 구조
+## 3. 서비스 입력과 출력
 
-``` text
+### 입력
+
+Document Worker가 Chunking에 전달하는 Structure 최종 결과:
+
+```text
+03_structured/{hwp|hwpx}/
+└── step4-1_value_normalized.json
+```
+
+### 출력
+
+```text
+04_chunks/{hwp|hwpx}/
+└── chunks.json
+```
+
+Document Worker는 Chunking subprocess가 정상 종료되었는지 확인한 뒤 `chunks.json`이 실제로 생성되었는지도 검사한다.
+
+파일이 생성되지 않았거나 실행에 실패하면 Document Worker 단계에서 다음 오류로 처리한다.
+
+```text
+DOCUMENT_CHUNKING_FAILED
+```
+
+---
+
+## 4. 주요 코드 구조
+
+```text
 pipeline/chunking/
 ├── __init__.py
 ├── config.py
@@ -133,697 +130,907 @@ pipeline/chunking/
 └── run_chunking.py
 ```
 
-각 파일은 기능별로 분리되어 있으며 `StructureAwareChunker`가 이들을
-조합하여 전체 청킹 과정을 제어한다. `__init__.py`에서는 외부에서 주로
-사용할 `StructureAwareChunker`와 `ChunkingConfig`를 패키지 인터페이스로
-노출한다.
+| 파일 | 역할 |
+|---|---|
+| `run_chunking.py` | 서비스에서 실제 호출되는 Chunking 실행 진입점 |
+| `chunker.py` | 전체 Chunking 흐름을 조율하는 Orchestrator |
+| `config.py` | Chunk 크기와 전략 등 설정 관리 |
+| `models.py` | Chunk 및 Source Metadata 모델 |
+| `validator.py` | Structure JSON 입력 검증 |
+| `section_walker.py` | Section / Children 계층 순회 |
+| `paragraph_chunker.py` | Paragraph 그룹화 및 긴 문단 분할 |
+| `table_chunker.py` | 구조화 Table을 Record 단위 Chunk로 변환 |
+| `text_builder.py` | 표시·검색·임베딩용 텍스트 생성 |
+| `tokenizer.py` | Token 수 계산 및 Overlap 처리 |
 
-------------------------------------------------------------------------
+전체 동작의 중심 클래스는 다음이다.
 
-## 5. 파일별 역할
-
-### `run_chunking.py`
-
-#### 역할
-
-청킹 파이프라인의 **실행 진입점**이다.
-
-사용자가 직접 실행하거나 상위 `run_pipeline.py`에서 호출할 수 있다.
-
-주요 역할:
-
--   CLI 인자 처리
--   ChunkingConfig 생성
--   구조화 JSON 탐색
--   단일 파일 청킹
--   폴더 일괄 청킹
--   전체 outputs 자동 청킹
--   결과 검증
--   chunks.json 저장
--   에러 기록
-
-기본 실행 시 `announcement_*` 폴더들을 탐색하고 HWP/HWPX 각각의 구조화
-결과를 찾아 대응하는 `04_chunks` 경로를 생성한다.
-
-#### 주요 함수
-
-`main()`
-
-청킹 프로그램의 최상위 실행 함수이다.
-
-``` text
-build_parser()
-    ↓
-build_config()
-    ↓
-StructureAwareChunker()
-    ↓
-실행 모드 판단
-    ├─ 기본 outputs 전체 처리
-    ├─ 단일 JSON
-    └─ JSON 폴더 일괄처리
+```text
+StructureAwareChunker
 ```
 
-실제 `main()`은 입력 인자가 없으면 프로젝트의 표준 outputs를 전체
-처리하고, 파일이면 `chunk_one_file()`, 디렉터리면 `chunk_directory()`를
-실행한다.
+---
 
-#### 다른 파트와의 중요한 연결
+## 5. 전체 Chunking 흐름
 
-``` python
-from backend.app.services.error_log_service import record_error
-```
-
-청킹 실패를 Backend 공통 ErrorLog에 기록하기 위해 **Backend 코드를
-Python import 방식으로 직접 호출하고 있다.**
-
-------------------------------------------------------------------------
-
-## 6. `chunker.py`
-
-### 역할
-
-청킹 파트의 **핵심 Orchestrator**이다.
-
-문단이나 표를 직접 모두 처리하는 것이 아니라 여러 모듈을 조합하여 전체
-청킹 흐름을 제어한다.
-
-초기화할 때 다음 객체들을 생성한다.
-
-``` text
+```text
+step4-1_value_normalized.json
+  ↓
+run_chunking.py
+  ↓
+StructureAwareChunker
+  ↓
 StructuredJsonValidator
-ParagraphChunker
-TableChunker
-TokenCounter
+  ↓
+Intro 처리
+  ↓
+Sections 재귀 순회
+  ↓
+Contents 원본 순서 유지
+  ↓
+┌────────────────────┬────────────────────┐
+│ Paragraph          │ Table              │
+│                    │                    │
+│ ParagraphChunker   │ TableChunker       │
+└─────────┬──────────┴──────────┬─────────┘
+          │                     │
+          └──────────┬──────────┘
+                     ↓
+                 Chunk 생성
+                     ↓
+      content / search_text / embedding_text
+                     ↓
+            Metadata / Source 정보
+                     ↓
+             Quality Gate / Report
+                     ↓
+                 chunks.json
 ```
 
-즉 `StructureAwareChunker`가 청킹 전체의 중심 객체이다.
+---
 
-### `chunk_file()`
+## 6. 입력 검증
 
-입력 JSON 파일을 읽고 Python dict로 변환한 뒤 `chunk_document()`를
-호출한다.
+Chunking을 시작하기 전에 `StructuredJsonValidator`가 Structure JSON의 기본 계약을 확인한다.
 
-``` text
-JSON file
- ↓
-json.load()
- ↓
-chunk_document()
+대표적으로 다음 정보를 검증한다.
+
+```text
+document
+├── filename
+└── format
+
+intro
+
+sections
+├── section_id
+├── level
+├── title
+├── contents
+└── children
 ```
 
-### `chunk_document()`
+또한 다음과 같은 구조 문제도 확인한다.
 
-청킹의 핵심 함수다.
+- 중복 `section_id`
+- 잘못된 Section 구조
+- Paragraph 내용
+- Table 구조
+- 지원하지 않는 Content Type
 
-처리 순서:
+지원하지 않는 Content Type은 전체 Chunking을 바로 중단하기보다 Warning으로 기록하고 건너뛸 수 있다.
 
-``` text
-StructuredJsonValidator.validate()
-        ↓
-입력 구조 검증
-        ↓
-document_id 생성
-announcement_id 설정
-        ↓
-_process_intro()
-        ↓
-_process_sections()
-        ↓
-Chunk 리스트 생성
-        ↓
-report 생성
-```
+---
 
-출력에는
+## 7. Section 계층 유지
 
--   document 정보
--   chunking 설정
--   chunks
--   report
+`section_walker.py`는 중첩된 Section을 재귀적으로 순회한다.
 
-가 포함된다.
+예를 들어 문서 구조가 다음과 같다면,
 
-------------------------------------------------------------------------
-
-## 7. 문서 계층 처리
-
-### `section_walker.py`
-
-중첩된 section 구조를 재귀적으로 순회한다.
-
-예를 들어 구조화 JSON이
-
-``` text
+```text
 공급정보
- ├─ 공급대상
- └─ 공급금액
-     └─ 납부일정
+├── 공급대상
+└── 임대조건
+    └── 임대보증금
 ```
 
-처럼 되어 있으면 각 section의 경로를 유지한다.
+`임대보증금` 아래에서 생성되는 Chunk에는 다음과 같은 Section 경로가 유지된다.
 
-``` text
-["공급정보"]
-["공급정보", "공급대상"]
-["공급정보", "공급금액"]
-["공급정보", "공급금액", "납부일정"]
+```text
+공급정보 > 임대조건 > 임대보증금
 ```
 
-형태의 `section_path`를 생성한다.
+내부적으로는 다음과 같은 형태다.
 
-`walk_sections()`는 현재 section을 반환한 후 children을 재귀적으로 다시
-순회한다.
-
-이 정보는 이후 검색·임베딩 텍스트에 포함된다.
-
-------------------------------------------------------------------------
-
-## 8. 문단 청킹
-
-### `paragraph_chunker.py`
-
-일반 본문 문단을 토큰 기준으로 나눈다.
-
-처리 흐름은 다음과 같다.
-
-``` text
-paragraph 목록
-      ↓
-각 문단 토큰 확인
-      ↓
-max_tokens 이하
-      ↓
-그대로 사용
-
-max_tokens 초과
-      ↓
-문장 기준 분리
-      ↓
-그래도 너무 길면 단어 기준 분리
-      ↓
-그래도 너무 길면 문자 단위 분리
+```text
+section_path = [
+  "공급정보",
+  "임대조건",
+  "임대보증금"
+]
 ```
 
-그 다음 여러 작은 문단을 다시 묶어서 `target_tokens`에 근접하도록
-구성한다.
+이 정보는 이후 `content`, `search_text`, `embedding_text` 생성에 사용된다.
 
-### 너무 긴 문단 처리
+따라서 본문 내용이 비슷하더라도 **문서의 어느 항목에 속한 정보인지 함께 검색·임베딩할 수 있다.**
 
-먼저 한국어 문장 경계를 기준으로 나눈다.
+---
 
-그 후에도 최대 토큰을 초과하는 경우:
+## 8. Paragraph Chunking
 
-``` text
-문장
- ↓
-단어
- ↓
-문자
+일반 문단은 `ParagraphChunker`가 처리한다.
+
+연속된 Paragraph는 원본 순서를 유지하면서 하나의 Chunk로 묶는다.
+
+기본 설정:
+
+```text
+target_tokens = 500
+max_tokens    = 800
+min_tokens    = 80
 ```
 
-순서로 더 작은 단위까지 분리한다.
+개념적으로:
 
-### Overlap
-
-문단이 여러 청크로 분리되면 이전 청크의 끝부분을 다음 청크에 일부
-포함한다.
-
-기본값:
-
-``` text
-overlap_tokens = 80
+```text
+Paragraph 1
+Paragraph 2
+Paragraph 3
+      ↓
+Token 기준 그룹화
+      ↓
+Paragraph Group Chunk
 ```
+
+Chunk가 `target_tokens`에 도달하면 하나의 그룹으로 확정하고, `max_tokens`를 넘지 않도록 제어한다.
+
+---
+
+## 9. 긴 Paragraph 처리
+
+Paragraph 하나가 `max_tokens`보다 긴 경우 하나의 Chunk로 유지하지 않는다.
+
+현재 분할 순서는 다음과 같다.
+
+```text
+긴 Paragraph
+  ↓
+문장 단위 분리
+  ↓
+그래도 너무 긴 문장
+  ↓
+단어 단위 분리
+  ↓
+그래도 너무 긴 단어
+  ↓
+문자 단위 분리
+```
+
+문장 경계는 일반 문장부호뿐 아니라 공공문서에서 자주 사용하는 목록 표현도 고려한다.
 
 예:
 
-``` text
-Chunk 1
-AAAAAAAA BBBBBBBB CCCCCCCC
-
-Chunk 2
-           CCCCCCCC DDDDDDDD EEEEEEEE
-           └ overlap
+```text
+■
+※
+●
+◆
+1.
+가.
 ```
 
-이를 통해 청크 경계에서 문맥이 완전히 끊기는 것을 줄인다. 실제
-코드에서는 `tail_by_tokens()`로 이전 청크 뒤쪽을 가져온다.
+이를 통해 최대한 자연스러운 문장 경계를 유지하면서 길이 제한을 맞춘다.
 
-------------------------------------------------------------------------
+---
 
-## 9. 표 청킹
+## 10. Paragraph Overlap
 
-### `table_chunker.py`
+긴 Paragraph가 여러 Chunk로 나뉠 때 문맥이 완전히 끊어지는 것을 줄이기 위해 Overlap을 적용한다.
 
-LH 공고문의 중요한 정보는 표에 많이 존재하기 때문에 표는 일반 문단과
-별도로 처리한다.
+기본 설정:
 
-먼저 구조화 결과를 보고 표를 세 가지 방식으로 분기한다.
+```text
+use_paragraph_overlap = True
+overlap_tokens = 80
+```
 
-``` text
+개념:
+
+```text
+Chunk 1
+A B C D
+
+Chunk 2
+    C D E F
+    └── 이전 Chunk의 일부
+```
+
+Table은 기본적으로 Overlap을 사용하지 않는다.
+
+```text
+use_table_overlap = False
+```
+
+---
+
+## 11. 작은 마지막 Paragraph Chunk 병합
+
+Paragraph 그룹의 마지막 Chunk가 너무 작을 경우 이전 Chunk와 합칠 수 있다.
+
+조건:
+
+```text
+마지막 Chunk < min_tokens
+
+AND
+
+이전 Chunk + 마지막 Chunk <= max_tokens
+```
+
+조건을 만족하면 이전 Chunk에 병합하여 지나치게 작은 Chunk가 생성되는 것을 줄인다.
+
+---
+
+## 12. Table Chunking
+
+공고문의 공급정보, 임대조건, 신청자격 등 핵심 정보는 Table에 많이 포함되어 있다.
+
+따라서 Table은 Paragraph와 동일한 방식으로 자르지 않고 `TableChunker`에서 별도로 처리한다.
+
+현재 분기 구조:
+
+```text
 structured + key_value
         ↓
 Key-Value 방식
 
 structured + row_records
         ↓
-행 레코드 방식
+Row Record 방식
 
 그 외
         ↓
 Fallback 방식
 ```
 
-### Key-Value 표
+즉 Structure 단계에서 이미 만들어진 Table 구조를 최대한 활용한다.
+
+---
+
+## 13. Key-Value Table
+
+`layout == "key_value"`인 구조화 Table은 Key와 Value 관계를 유지한다.
 
 예:
 
-``` text
+```text
 단지명: A단지
-위치: 서울특별시
+소재지: 서울특별시
 총 세대수: 500
 ```
 
-작은 표라면 하나의 청크로 유지하고, 크면 레코드 단위로 분리한다.
+작은 Key-Value Table은 전체를 하나의 Chunk로 유지한다.
 
-`small_key_value_table_tokens` 기본값은 400이다.
+기본 기준:
 
-### Row Record 표
+```text
+small_key_value_table_tokens = 400
+```
+
+400 Token을 넘는 등 Table이 커지면 Record 단위로 나누어 처리한다.
+
+---
+
+## 14. Row Record Table
+
+`layout == "row_records"`인 Table은 각 Record를 의미 단위로 처리한다.
+
+예를 들어 Structure 결과가 다음 의미를 가진다면,
+
+```text
+주택형 | 공급세대수 | 임대보증금 | 월임대료
+26A   | 58         | ...        | ...
+29B   | 74         | ...        | ...
+```
+
+Chunking은 각 Record의 `header_path`와 `value`를 사용하여 다음과 같은 표현을 만든다.
+
+```text
+주택형: 26A
+공급세대수: 58
+임대보증금: ...
+월임대료: ...
+```
+
+따라서 Table을 단순 문자열로 자르는 것이 아니라 **Header와 Value의 관계를 유지한 검색 가능한 표현으로 변환**한다.
+
+---
+
+## 15. 병합 셀 정보
+
+Row Record에는 Structure 단계에서 생성된 `merged_values`가 존재할 수 있다.
+
+Chunking은 이를 다시 병합 계산하지 않고 전달받은 구조를 사용한다.
+
+```text
+merged_values
+  ↓
+header / label + value
+  ↓
+Chunk 본문 및 검색 표현
+```
+
+즉 병합 셀 해석의 주 책임은 Structure 단계에 있고, Chunking은 그 결과를 유지하여 검색 가능한 형태로 변환한다.
+
+---
+
+## 16. Table Fallback
+
+정상적인 `structured_table` 정보를 사용할 수 없는 경우 raw `cells` 기반 Fallback 처리를 한다.
+
+단일 행·열 형태는 셀 내용을 하나의 Chunk로 유지할 수 있다.
+
+여러 행이 있는 경우 Row별로 정렬하여 다음과 같은 형태로 만든다.
+
+```text
+값1 | 값2 | 값3
+```
+
+Fallback은 구조화된 `key_value` 또는 `row_records`보다 의미 정보가 적기 때문에 정상적인 Structured Table 결과를 우선 사용한다.
+
+---
+
+## 17. Table 단위 처리
+
+공고문의 Table에는 다음과 같은 단위가 자주 등장한다.
+
+```text
+원
+천원
+만원
+억원
+㎡
+m²
+m2
+%
+```
+
+Chunking은 주변에 단위가 존재한다는 이유만으로 모든 숫자에 같은 단위를 붙이지 않는다.
+
+Header의 의미를 확인하여 대표적으로 다음 Semantic Type을 구분한다.
+
+```text
+money
+area
+count
+duration
+identifier
+unknown
+```
 
 예:
 
-``` text
-주택형 | 세대수 | 분양가
-59A   | 100   | 500,000
-84A   | 200   | 700,000
+```text
+임대보증금   → money
+주거전용면적 → area
+모집호수     → count
+거주기간     → duration
+주택형       → identifier
 ```
 
-각 행을 하나의 의미 있는 record로 취급한다.
+---
 
-따라서
+## 18. 단위 적용 우선순위
 
-``` text
-주택형: 59A
-세대수: 100
-분양가: 500,000
+단위는 대략 다음 순서로 판단한다.
+
+```text
+1. Value 자체에 명시된 단위
+2. Normalization 결과에 있는 단위
+3. Header에 명시된 단위
+4. Table 전체 또는 직전 단위 선언 Paragraph
 ```
 
-형태처럼 검색 가능한 텍스트 표현으로 변환할 수 있다.
+단, Table 전체나 이전 Paragraph에서 상속되는 단위는 약한 근거로 취급한다.
 
-### 표 단위 보존
+Header의 의미와 단위 종류가 맞을 때만 적용한다.
 
-표에서는 `원`, `천원`, `만원`, `㎡`, `%` 등의 단위가 중요하기 때문에
-별도의 단위 해석 로직이 존재한다.
+예를 들어 Table 주변에 `(㎡)`가 있더라도:
 
-예를 들어
+```text
+모집호수: 58
+```
 
-``` text
+을 다음처럼 만들지 않는다.
+
+```text
+모집호수: 58㎡
+```
+
+Count, Duration, Identifier 성격의 Field에는 금액·면적 단위를 적용하지 않는다.
+
+---
+
+## 19. 직전 Paragraph의 단위 상속
+
+Table 바로 앞 Paragraph 전체가 단위 선언인 경우 해당 단위를 Table 처리에 전달할 수 있다.
+
+예:
+
+```text
 [단위: 천원]
-
-계약금 | 50,000
 ```
 
-이라면 검색용 표현에서는
+`StructureAwareChunker`는 Table을 처리하기 전에 직전 Paragraph가 단위만 선언하는 문장인지 확인한다.
 
-``` text
-계약금: 50,000천원
+확인된 단위는 `inherited_unit`으로 `TableChunker`에 전달된다.
+
+단, 실제 Value에 적용할 때는 Header 의미와의 호환성을 다시 확인한다.
+
+---
+
+## 20. Entity 유지
+
+Structure / Normalization 단계에서 Value에 Entity 정보가 존재하면 Chunk에도 유지한다.
+
+예:
+
+```text
+numeric_value
+normalized_value
+won_value
+unit
 ```
 
-처럼 단위를 보존하려고 한다.
+필요한 경우 Chunking 단계에서 신뢰 가능한 단위 정보를 이용해 Entity를 보완할 수도 있다.
 
-특히 단순히 주변 단위를 무조건 적용하지 않고 `세대수`, `면적`, `가격`,
-`기간` 등의 필드 의미를 분석하여 잘못된 단위가 들어가는 것을 방지한다.
+이를 통해 검색 과정에서 원문 표현뿐 아니라 정규화된 숫자와 단위 정보도 활용할 수 있다.
 
-------------------------------------------------------------------------
+---
 
-## 10. 텍스트 생성
+## 21. Chunk의 세 가지 텍스트
 
-### `text_builder.py`
+하나의 Chunk에는 목적이 다른 세 가지 텍스트가 존재한다.
 
-하나의 청크에서 목적에 따라 서로 다른 텍스트를 만든다.
-
-#### `content`
-
-사용자에게 근거로 보여주기 좋은 본문 표현이다.
-
-``` text
-[공급정보 > 공급금액]
-
-계약금: 50,000천원
-잔금: 150,000천원
+```text
+content
+search_text
+embedding_text
 ```
 
-section path를 본문 앞에 포함할 수 있다.
+### `content`
 
-#### `search_text`
+LLM Context와 Evidence로 사용하기 적합한 본문 표현이다.
 
-검색 Recall을 높이기 위한 텍스트이다.
+Section 경로를 포함할 수 있다.
 
-여기에
+예:
 
--   section path
--   normalized title
--   search title
--   body search text
--   domain
+```text
+[임대조건 > 임대보증금]
 
-등을 조합한다.
+주택형: 26A
+임대보증금: ...
+월임대료: ...
+```
 
-#### `embedding_text`
+### `search_text`
 
-실제 임베딩 단계에 전달할 텍스트이다.
+Keyword Search 등 검색 Recall을 높이기 위한 표현이다.
 
-기본적으로
+다음 정보를 조합한다.
 
-``` text
-section 경로
+```text
+section_path
+normalized_title
+search_title
+body_search_text
+domain.category
+domain.topic
+정규화된 검색 정보
+```
+
+중복되는 문자열은 제거하여 조합한다.
+
+### `embedding_text`
+
+Dense Embedding 모델에 전달할 텍스트다.
+
+기본 구조:
+
+```text
+Section 경로
 +
 본문
 ```
 
-형식이다.
+예:
 
-즉 하나의 Chunk가 단순 문자열 하나가 아니라 **검색/표시/임베딩 목적에
-맞는 여러 텍스트 표현을 가진다.**
-
-------------------------------------------------------------------------
-
-## 11. Tokenizer
-
-### `tokenizer.py`
-
-청크 길이를 판단하는 역할을 한다.
-
-공통 인터페이스는 다음 두 기능이다.
-
-``` text
-count(text)
-tail_by_tokens(text, token_count)
+```text
+임대조건 > 임대보증금
+주택형: 26A
+임대보증금: ...
+월임대료: ...
 ```
 
-현재 tokenizer를 지정하지 않으면 `RegexTokenCounter`를 사용한다.
+즉 Chunking 단계에서 **표시용, 검색용, 임베딩용 텍스트를 목적에 따라 분리**한다.
 
-이는 한국어 음절, 영문 단어, 숫자, 문장부호 등을 기준으로 토큰 수를 근사
-계산한다. 정확한 임베딩 모델 tokenizer가 확정되기 전에도 청킹 테스트를
-할 수 있도록 만든 방식이다.
+---
 
-Tokenizer 경로를 지정하면 Hugging Face `AutoTokenizer`를 사용할 수도
-있다.
+## 22. Chunk Metadata
 
-------------------------------------------------------------------------
+생성되는 Chunk에는 본문뿐 아니라 Retrieval과 원본 추적에 필요한 Metadata가 포함된다.
 
-## 12. 입력 검증
+대표 구조:
 
-### `validator.py`
-
-청킹 시작 전에 구조화 JSON의 형식이 예상 계약을 만족하는지 검사한다.
-
-예를 들어 다음을 확인한다.
-
-``` text
-document 존재 여부
-document.filename
-document.format
-intro가 list인지
-sections가 list인지
-section_id 존재 여부
-section level
-section title
-contents
-children
-paragraph.text
-table.cells
-structured_table
+```text
+Chunk
+├── chunk_id
+├── chunk_order
+├── chunk_type
+│
+├── document_id
+├── announcement_id
+├── source_filename
+├── source_format
+│
+├── section_id
+├── section_level
+├── section_path
+├── title
+├── normalized_title
+├── search_title
+│
+├── content
+├── search_text
+├── embedding_text
+│
+├── domain
+├── source
+├── entities
+│
+├── token_count
+├── char_count
+└── chunking
 ```
 
-필수 구조가 잘못되면 error가 발생하고 청킹을 중단한다.
+---
 
-반면 `structured_table`이 없는 것처럼 처리가 가능하지만 품질에 영향을 줄
-수 있는 경우에는 Warning으로 남긴다.
+## 23. Source Metadata
 
-------------------------------------------------------------------------
+`source`에는 Chunk가 원본 문서의 어디에서 만들어졌는지 추적할 수 있는 정보가 들어간다.
 
-## 13. Chunk 데이터 구조
+대표 정보:
 
-### `models.py`
-
-최종적으로 각각의 청크는 `Chunk` dataclass로 표현된다.
-
-주요 정보:
-
-``` text
-chunk_id
-chunk_order
-chunk_type
-
-document_id
-announcement_id
-source_filename
-source_format
-
-section_id
-section_level
-section_path
-title
-normalized_title
-search_title
-
-content
-search_text
-embedding_text
-
-domain
-source
-entities
-
-token_count
-char_count
-chunking
-```
-
-특히 `announcement_id`가 청크 자체에 저장되므로 이후 Retrieval에서
-**선택한 공고에 대한 데이터만 검색하는 필터의 기반 정보**로 사용할 수
-있다.
-
-------------------------------------------------------------------------
-
-## 14. Source 추적 정보
-
-`ChunkSource`에는 청크가 원본 문서의 어디에서 왔는지를 저장한다.
-
-문단이라면:
-
-``` text
+```text
+content_type
 paragraph_indexes
-origin_paths
-```
-
-표라면:
-
-``` text
 table_index
 record_index
 row_index
 row_kind
+origin_paths
 object_path
 ```
 
-등을 저장한다.
+따라서 Retrieval 결과에서 특정 Chunk가 선택되었을 때 원본의 Section, Paragraph 또는 Table Record 위치를 추적할 수 있다.
 
-따라서 검색 결과가 나왔을 때 원본의 어느 문단/표에서 만들어진 청크인지
-추적할 수 있다.
+---
 
-------------------------------------------------------------------------
+## 24. Chunk Type
 
-## 15. 입력과 출력
+현재 대표 Chunk Type은 다음과 같다.
 
-### 입력
-
-``` text
-03_structured/{hwp|hwpx}/
-    step4-1_value_normalized.json
+```text
+intro
+paragraph_group
+paragraph_split
+table_record
+table_fallback
 ```
 
-우선 사용한다.
+### `intro`
 
-없으면 이전 구조와의 호환을 위해
+문서 Intro 영역에서 생성된 Chunk.
 
-``` text
-step3-3_structured_tables.json
+### `paragraph_group`
+
+여러 연속 Paragraph를 묶어 생성한 Chunk.
+
+### `paragraph_split`
+
+하나의 긴 Paragraph가 여러 부분으로 나뉜 경우.
+
+### `table_record`
+
+정상적으로 구조화된 Table Record에서 생성된 Chunk.
+
+### `table_fallback`
+
+Structured Table을 사용하지 못하고 Fallback 방식으로 생성한 Chunk.
+
+보다 세부적인 처리 방법은 `chunking.strategy`에 저장된다.
+
+예:
+
+```text
+paragraph
+paragraph_group
+key_value_group
+key_value_record
+row_record
+table_fallback_whole
+table_fallback_row
 ```
 
-을 사용할 수 있다.
+---
 
-### 출력
+## 25. Chunk ID와 순서
 
-``` text
-04_chunks/{hwp|hwpx}/chunks.json
+Chunk ID는 Document ID, Section, 원본 위치를 기반으로 생성된다.
+
+Paragraph 예:
+
+```text
+{document_id}_{section_id}_para_0001
 ```
 
-------------------------------------------------------------------------
+Table 예:
 
-## 16. 다른 파트와의 연결
-
-현재 청킹 코드에서 확인되는 연결은 다음과 같다.
-
-  ---------------------------------------------------------------------------------------
-  호출하는 쪽               호출받는 쪽               방식              목적
-  ------------------------- ------------------------- ----------------- -----------------
-  구조화 단계               Chunking                  파일 I/O          구조화 JSON 전달
-
-  `run_chunking.py`         `StructureAwareChunker`   Python import     청킹 실행
-
-  `StructureAwareChunker`   Validator                 Python import     입력 검증
-
-  `StructureAwareChunker`   ParagraphChunker          Python import     문단 처리
-
-  `StructureAwareChunker`   TableChunker              Python import     표 처리
-
-  `StructureAwareChunker`   Tokenizer                 Python import     토큰 계산
-
-  Chunking                  Embedding                 파일 I/O          `chunks.json`
-                                                                        전달
-
-  `run_chunking.py`         Backend ErrorLog Service  **Python import** 청킹 오류 저장
-  ---------------------------------------------------------------------------------------
-
-여기에서 중요한 것은 **청킹 → 임베딩은 현재 API 통신이 아니라 파일을
-매개로 연결**되고 있다는 점이다.
-
-그리고 청킹 자체에서 직접 확인되는 Backend 의존성은
-
-``` python
-from backend.app.services.error_log_service import record_error
+```text
+{document_id}_{section_id}_tbl_0003_rec_0001
 ```
 
-이다.
+하나의 내용이 여러 Part로 나뉜 경우:
 
-------------------------------------------------------------------------
+```text
+_p01
+_p02
+```
 
-## 17. 현재 MVP에서의 청킹 아키텍처
+등의 정보가 추가될 수 있다.
 
-``` text
-03_structured JSON
-        │
-        │ File I/O
-        ▼
+중복 ID가 발생하면 추가 Suffix를 붙여 고유성을 유지한다.
+
+`chunk_order`는 생성 순서대로 1부터 증가한다.
+
+---
+
+## 26. Token 계산
+
+기본 Token Counter는 다음이다.
+
+```text
+RegexTokenCounter
+```
+
+한국어 음절, 영문 단어, 숫자, 문장부호 등을 이용하여 Token 수를 근사한다.
+
+따라서 기본 설정:
+
+```text
+500 / 800 / 80
+```
+
+은 BGE-M3의 실제 Tokenizer 기준 Token 수와 반드시 동일한 값은 아니다.
+
+필요한 경우 `tokenizer_name_or_path`를 지정해 Hugging Face Tokenizer 기반 Counter를 사용할 수 있다.
+
+---
+
+## 27. Section 경로를 고려한 Token Budget
+
+`embedding_text`에는 본문뿐 아니라 Section 경로도 들어간다.
+
+따라서 Chunker는 Section Heading이 차지하는 Token을 고려해 실제 Body가 사용할 수 있는 최대 크기를 계산한다.
+
+개념적으로:
+
+```text
+max body tokens
+=
+max_tokens
+-
+section heading reserve
+```
+
+이를 통해 Section 경로가 추가된 최종 `embedding_text`도 최대 길이를 넘지 않도록 제어한다.
+
+---
+
+## 28. Quality Gate
+
+Chunk 생성이 끝나면 Report를 생성하여 품질 상태를 확인한다.
+
+주요 검사 항목:
+
+```text
+max token 초과
+빈 embedding_text
+중복 chunk_id
+중복 content
+source reference 누락
+단위 오염 의심
+```
+
+Report의 대표 구조:
+
+```text
+report
+├── total_chunks
+├── chunk_types
+├── token_stats
+├── quality_gate
+├── warnings
+└── source_value_normalization_warnings
+```
+
+`quality_gate.pass`는 주요 품질 위반이 없는지를 나타낸다.
+
+---
+
+## 29. 현재 설정
+
+`pipeline/chunking/config.py`의 기본값:
+
+| 설정 | 기본값 | 의미 |
+|---|---:|---|
+| `strategy` | `hierarchical-structure-aware` | Chunking 전략 |
+| `schema_version` | `chunk-v1` | Chunk Schema |
+| `target_tokens` | 500 | 일반적인 목표 Chunk 크기 |
+| `max_tokens` | 800 | 최대 Chunk 크기 |
+| `min_tokens` | 80 | 작은 마지막 Chunk 병합 기준 |
+| `overlap_tokens` | 80 | Paragraph 분할 시 Overlap |
+| `small_key_value_table_tokens` | 400 | 작은 Key-Value Table 통합 기준 |
+| `include_section_path_in_content` | `True` | Content에 Section 경로 포함 |
+| `include_section_path_in_search_text` | `True` | Search Text에 Section 경로 포함 |
+| `include_domain_in_search_text` | `True` | Search Text에 Domain 포함 |
+| `use_paragraph_overlap` | `True` | Paragraph Overlap 사용 |
+| `use_table_overlap` | `False` | Table Overlap 기본 미사용 |
+
+현재 Chunking 결과에는 구현 버전도 기록된다.
+
+```text
+implementation_version
+=
+generalized-unit-semantic-v5
+```
+
+---
+
+## 30. `run_chunking.py`의 두 가지 역할
+
+`run_chunking.py`에는 서비스 실행 외에도 독립 실행을 위한 기능이 존재한다.
+
+### 실제 서비스에서 사용하는 방식
+
+Document Worker가 명시적으로 다음 인자를 전달한다.
+
+```text
+--input
+--output
+--announcement-id
+```
+
+즉 하나의 문서에 대해 Structure 결과를 Chunking한다.
+
+### 독립 실행 기능
+
+개발·검증 시 인자를 생략하면 프로젝트의 다음 경로를 자동 탐색할 수 있다.
+
+```text
+outputs/announcement_*/03_structured/{hwp|hwpx}/
+```
+
+입력 우선순위:
+
+```text
+1. step4-1_value_normalized.json
+2. step3-3_structured_tables.json
+```
+
+이 자동 탐색 기능은 `run_chunking.py`에 존재하지만, **현재 서비스의 Document Worker 호출 방식은 명시적 `--input / --output / --announcement-id` 방식**이다.
+
+---
+
+## 31. 왜 Structure-Aware Chunking을 사용하는가
+
+공공기관 공고문은 일반 자연어 문서와 달리 다음 특징이 강하다.
+
+```text
+제목 / 소제목 계층
+긴 조건 설명
+다수의 표
+주택형별 수치
+대상자별 조건
+금액 / 면적 / 기간 단위
+```
+
+단순 길이 기준으로만 자르면 다음과 같은 문제가 발생할 수 있다.
+
+```text
+제목과 본문 분리
+Table Header와 Value 분리
+서로 다른 Row의 값 혼합
+단위 정보 손실
+원본 위치 추적 어려움
+```
+
+현재 Chunking은 앞 단계에서 이미 분석한 문서 구조를 활용하여 이러한 정보 손실을 줄이는 것을 목표로 한다.
+
+Semantic Chunking처럼 Embedding 유사도를 이용해 새로운 경계를 찾는 방식이 아니라, **문서에 존재하는 명시적인 구조를 우선적으로 이용해 Chunk 경계를 결정하는 방식**이다.
+
+---
+
+## 32. 서비스 기준 최종 흐름
+
+```text
+Document Worker
+      ↓
+Structure
+      ↓
+step4-1_value_normalized.json
+      ↓
+_run_chunking()
+      ↓
 run_chunking.py
-        │
-        │ Python import
-        ▼
+      ↓
 StructureAwareChunker
-        │
-        ├──── Validator
-        │
-        ├──── SectionWalker
-        │
-        ├──── ParagraphChunker
-        │
-        ├──── TableChunker
-        │
-        ├──── TokenCounter
-        │
-        └──── TextBuilder
-        │
-        ▼
-Chunk[]
-        │
-        ▼
-chunks.json
-        │
-        │ File I/O
-        ▼
-Embedding
-
-예외 발생
-    │
-    │ Python import
-    ▼
-Backend ErrorLog Service
+      ↓
+┌─────────────────────────────┐
+│ Section 계층 유지           │
+│ Paragraph Chunking          │
+│ Table Record Chunking       │
+│ Header-Value 유지           │
+│ 단위 / Entity 처리          │
+│ Source Metadata 유지        │
+└──────────────┬──────────────┘
+               ↓
+       content
+       search_text
+       embedding_text
+               ↓
+          chunks.json
+               ↓
+        Document Worker
+               ↓
+       Embedding Service
 ```
 
-------------------------------------------------------------------------
+---
 
-## 18. Docker 분리 시 확인해야 할 부분
+## 33. 핵심 정리
 
-현재 청킹 내부 모듈끼리의 `import`는 문제가 아니다.
+현재 DDOK BOT의 Chunking은 다음과 같이 정리할 수 있다.
 
-예를 들어
+```text
+방식
+= Structure-Aware Chunking
 
-``` python
-from .paragraph_chunker import ParagraphChunker
+실제 서비스 실행 주체
+= Document Worker
+
+실제 실행 진입점
+= pipeline/chunking/run_chunking.py
+
+핵심 구현
+= StructureAwareChunker
+
+입력
+= step4-1_value_normalized.json
+
+출력
+= chunks.json
+
+Paragraph
+= Token 기준 그룹화 + 긴 문단 분리 + Overlap
+
+Table
+= Key-Value / Row Record / Fallback
+
+검색·임베딩용 출력
+= content / search_text / embedding_text
 ```
 
-처럼 **하나의 청킹 서비스 내부에서 사용하는 import**는 Docker로 나눈다고
-해서 API로 바꿀 필요가 없다.
-
-반면 다음은 서비스 경계를 넘을 가능성이 있기 때문에 확인이 필요하다.
-
-``` python
-from backend.app.services.error_log_service import record_error
-```
-
-현재는 Chunking 코드와 Backend 코드가 같은 Python 환경과 프로젝트 파일
-시스템에 있기 때문에 직접 import할 수 있다.
-
-하지만 향후
-
-``` text
-backend container
-chunking/rag container
-```
-
-로 완전히 분리한다면 RAG 컨테이너에서 Backend 내부 Python 모듈을 직접
-import하는 구조는 서비스 독립성이 떨어진다.
-
-따라서 향후 확인 대상이다.
-
-``` text
-[현재]
-
-Chunking
-    ↓ Python import
-Backend ErrorLog
-
-[Docker 분리 검토]
-
-Chunking
-    ↓ HTTP API 또는 별도 로깅 구조
-Backend
-```
-
-단, 현재 단계에서는 수정하지 않고 **AS-IS 의존성으로 기록한다.**
-
-------------------------------------------------------------------------
-
-## 19. 이 파트를 처음 보는 팀원이 반드시 알아야 할 것
-
-청킹은 단순 문자열 분할 기능이 아니다.
-
-이 프로젝트에서는 LH 공고문의 구조를 보존하기 위해
-
-``` text
-section 계층
-+
-paragraph 의미 단위
-+
-table record
-+
-단위 정보
-+
-정규화 값
-+
-공고 ID
-```
-
-를 최대한 보존하면서 검색과 임베딩에 적합한 데이터로 변환한다.
-
-따라서 핵심 역할을 한 문장으로 정리하면 다음과 같다.
-
-> **구조화된 공고문 JSON을 문서 구조와 표의 의미를 최대한 유지한 채
-> 검색·임베딩 가능한 Chunk 데이터로 변환하는 단계이다.**
-
-청킹 결과인 `chunks.json`이 다음 임베딩 단계의 입력이 되므로, 이
-단계에서 생성되는 `announcement_id`, `embedding_text`, `search_text`,
-`section_path`, `source`, `entities` 등의 메타데이터가 이후 RAG 검색
-품질과 공고별 검색 분리에 직접 연결된다.
+Chunking의 핵심 목적은 **구조화 단계에서 확보한 문서 구조와 표의 의미 관계를 최대한 유지하면서, 이후 Embedding과 Retrieval이 사용할 수 있는 검색 단위로 변환하는 것**이다.

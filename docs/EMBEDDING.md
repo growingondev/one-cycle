@@ -1,794 +1,1126 @@
-# AI/RAG 코드리뷰 - Embedding
-
-## 1. Embedding 개요
-
-### 1.1 역할
-
-Embedding 단계는 Chunking에서 생성된 `chunks.json`을 입력받아 각 Chunk의
-`embedding_text`를 **BGE-M3 모델을 이용해 Dense Vector로 변환하고 파일로
-저장하는 단계**이다.
-
-전체 흐름은 다음과 같다.
-
-    04_chunks/chunks.json
-            ↓
-    Chunk 데이터 로드
-            ↓
-    입력 데이터 검증
-            ↓
-    BGE-M3 모델 로드
-            ↓
-    embedding_text → Dense Vector
-            ↓
-    L2 Normalize
-            ↓
-    Vector 검증
-            ↓
-    05_embeddings/
-     ├─ embeddings.npy
-     ├─ metadata.json
-     └─ embedding_report.json
-
-현재 Embedding 코드에서 직접 확인되는 범위는 **임베딩 결과 파일
-생성까지**이다.
-
-현재 제공된 Embedding 코드에는 PostgreSQL, pgvector, SQLAlchemy를 이용해
-결과를 DB에 직접 저장하는 처리가 없다.
+# Embedding
 
-### 1.2 주요 파일
+> 기준 브랜치: `main`  
+> 기준 구현: `document_worker/service.py`, `services/embedding/`, `pipeline/embedding/`  
+> 이 문서는 DDOK BOT 서비스에서 Chunk가 실제로 어떻게 Dense Vector로 변환되는지 설명한다.
 
-    pipeline/embedding/
-    ├─ config.py
-    ├─ models.py
-    ├─ input_loader.py
-    ├─ validator.py
-    ├─ model_loader.py
-    ├─ embedding_generator.py
-    ├─ output_writer.py
-    └─ run_embeddings.py
+---
 
-각 파일의 역할은 다음과 같다.
-
-  파일 역할                  
-  -------------------------- -----------------------------------
-  `config.py`                모델 및 Embedding 실행 설정
-  `models.py`                Embedding 데이터 객체 정의
-  `input_loader.py`          `chunks.json` 탐색 및 로드
-  `validator.py`             입력 Chunk 및 생성 Vector 검증
-  `model_loader.py`          BGE-M3 모델 및 실행 환경 로드
-  `embedding_generator.py`   Dense Vector 생성 및 L2 Normalize
-  `output_writer.py`         임베딩 결과 파일 저장
-  `run_embeddings.py`        전체 Embedding 실행 Entrypoint
-
-------------------------------------------------------------------------
-
-# 2. 입력 데이터
-
-## 2.1 입력 파일
+## 1. 개요
 
-Embedding이 직접 읽는 파일은 Chunking에서 생성된 `chunks.json`이다.
+Embedding은 Chunking 결과의 `embedding_text`를 벡터로 변환하여 이후 Vector Search에서 사용할 수 있도록 만드는 단계다.
 
-기본 구조는 다음과 같다.
+현재 DDOK BOT은 다음 Embedding 모델을 사용한다.
 
-    outputs/
-    └─ announcement_*/
-       └─ 04_chunks/
-          ├─ hwp/
-          │  └─ chunks.json
-          └─ hwpx/
-             └─ chunks.json
+```text
+BAAI/bge-m3
+```
 
-따라서 Chunking과 Embedding의 현재 연결 방식은 **파일 I/O**이다.
+현재 서비스에서 사용하는 Embedding은 다음과 같다.
 
-    Chunking
-       ↓
-    chunks.json 저장
-       ↓
-    File I/O
-       ↓
-    Embedding
+```text
+Dense Vector
+1024 dimensions
+L2 Normalize
+float32
+```
 
-HWP와 HWPX가 모두 존재하면 각각의 `chunks.json`을 별도 입력으로 처리할
-수 있다.
+Embedding 단계의 핵심 목적은 다음 두 가지다.
 
-## 2.2 입력 파일 탐색
+```text
+문서 Chunk
+→ Dense Vector 생성
 
-`run_embeddings.py`에서 `--inputs`를 직접 지정할 수 있고, 생략하면
-`outputs` 아래를 자동 탐색한다.
+사용자 Query
+→ Dense Vector 생성
+```
 
-    resolve_input_paths()
-            ↓
-    --inputs 지정?
-       ├─ YES → 지정한 chunks.json 사용
-       └─ NO
-           ↓
-       discover_chunk_files()
-           ↓
-    outputs/announcement_*/04_chunks/{hwp,hwpx}/chunks.json
+문서와 Query가 동일한 Embedding 공간에 있어야 이후 PostgreSQL + pgvector에서 의미 기반 유사도 검색이 가능하다.
 
-중복된 입력 경로는 한 번만 사용하며, 최종 입력 파일이 없으면
-`ChunkLoadError`가 발생한다.
+---
 
-## 2.3 실제 임베딩 대상
+## 2. 실제 서비스에서의 위치
 
-`chunks.json` 전체를 모델에 입력하는 것은 아니다.
+문서 처리 기준 실제 서비스 흐름은 다음과 같다.
 
-현재 모델에 전달되는 필드는:
+```text
+Document Worker
+  ↓
+Chunking
+  ↓
+chunks.json
+  ↓
+Document Worker
+  ↓
+EmbeddingClient
+  ↓ HTTP
+POST /v1/embeddings
+  ↓
+Embedding Service
+  ↓
+BAAI/bge-m3
+  ↓
+1024차원 Dense Vector
+  ↓
+Document Worker
+  ↓
+Embedding Artifact 저장
+  ↓
+Persistence
+```
 
-    TEXT_FIELD="embedding_text"
+중요한 점은 다음과 같다.
 
-이다.
+```text
+Document Worker는 BGE-M3를 직접 실행하지 않는다.
+```
 
-즉:
+실제 모델 실행 책임은 `services/embedding`에 있다.
 
-    Chunk
-     ├─ chunk_id
-     ├─ content
-     ├─ search_text
-     ├─ embedding_text  ← BGE-M3 입력
-     └─ ...
+---
 
-형태이다.
+## 3. 실제 서비스 진입점
 
-------------------------------------------------------------------------
+Embedding Service의 실제 실행 진입점은 다음 파일이다.
 
-# 3. 입력 로드 및 데이터 구조
+```text
+services/embedding/main.py
+```
 
-## 3.1 `input_loader.py`
+FastAPI Application이 시작되면 lifespan에서:
 
-`chunks.json`을 읽어 Embedding에서 사용할 Python 객체로 변환한다.
+```text
+EmbeddingService.load_model()
+```
 
-    chunks.json
-        ↓
-    _read_json()
-        ↓
-    chunks[]
-        ↓
-    chunk_id / embedding_text 추출
-        ↓
-    metadata 구성
-        ↓
-    EmbeddingItem[]
-        ↓
-    LoadedChunkDocument
+을 호출한다.
 
-`_read_json()`에서는 다음을 확인한다.
+즉 서비스 시작 시 BGE-M3를 한 번 로드하고, 이후 `/v1/embeddings` 요청에서 해당 모델을 재사용한다.
 
--   파일 존재 여부
--   실제 파일 여부
--   정상 JSON 여부
--   JSON 최상위 값이 객체인지 여부
+서비스 종료 시:
 
-`load_chunk_document()`에서는 각 Chunk의 `chunk_id`와 `embedding_text`를
-읽고 나머지 정보를 Metadata로 구성한다.
-
--   `-limit`이 지정된 경우 앞쪽 N개의 Chunk만 처리한다.
-
-## 3.2 데이터 모델
-
-`models.py`에서는 크게 두 객체를 사용한다.
-
-### `EmbeddingItem`
-
-하나의 Embedding 대상 Chunk이다.
-
-    EmbeddingItem
-    ├─ chunk_id
-    ├─ embedding_text
-    └─ metadata
-
-### `LoadedChunkDocument`
-
-하나의 `chunks.json`을 읽은 결과이다.
-
-    LoadedChunkDocument
-    ├─ source_path
-    ├─ document
-    ├─ chunking
-    └─ items[]
-
-추가로 다음 값을 제공한다.
-
-    chunk_count
-    document_id
-    announcement_id
-
-## 3.3 Metadata
-
-기존 Chunk 정보는 `_copy_metadata()`를 통해 Metadata로 유지된다.
-
-주요 정보는 다음과 같다.
-
-    vector_index
-
-    chunk_id
-    document_id
-    announcement_id
-
-    chunk_order
-    chunk_type
-
-    section_id
-    section_level
-    section_path
-
-    title
-    normalized_title
-    search_title
-
-    content
-    search_text
-
-    domain
-    source
-
-    token_count
-    char_count
-
-    source_filename
-    source_format
-    source_chunk_file
-
-`announcement_id`는 우선:
-
-    chunk.announcement_id
-
-를 사용하고, 없으면:
-
-    document.announcement_id
+```text
+EmbeddingService.unload_model()
+```
+
+을 호출한다.
+
+---
+
+## 4. 주요 코드 구조
+
+### Service Layer
+
+```text
+services/embedding/
+├── __init__.py
+├── config.py
+├── schemas.py
+├── service.py
+├── client.py
+└── main.py
+```
+
+| 파일 | 역할 |
+|---|---|
+| `main.py` | Embedding FastAPI 서비스 실행 진입점 |
+| `config.py` | 모델 경로, CUDA, Service URL 등 환경설정 |
+| `schemas.py` | API Request / Response Schema |
+| `service.py` | BGE-M3 Load 및 Embedding 생성 |
+| `client.py` | Document Worker와 RAG가 사용하는 HTTP Client |
+
+### 공통 Embedding Core
+
+```text
+pipeline/embedding/
+├── config.py
+├── models.py
+├── input_loader.py
+├── validator.py
+├── model_loader.py
+├── embedding_generator.py
+├── output_writer.py
+└── run_embeddings.py
+```
+
+현재 실제 서비스에서는 이 디렉터리 전체를 직접 실행하는 것이 아니라 필요한 Core 모듈만 재사용한다.
+
+대표적으로:
+
+```text
+services/embedding/service.py
+  ↓
+pipeline.embedding.config
+pipeline.embedding.model_loader
+pipeline.embedding.embedding_generator
+pipeline.embedding.models
+```
 
 를 사용한다.
 
-현재 코드에서 확인되는 흐름은:
+---
 
-    chunks.json
-       ↓
-    announcement_id
-       ↓
-    EmbeddingItem.metadata
-       ↓
-    metadata.json
+## 5. 실제 서비스에서 `run_embeddings.py`는 사용하지 않는다
 
-까지이다.
+`pipeline/embedding/run_embeddings.py`는 저장소에 존재하지만 현재 실제 서비스의 Embedding 실행 진입점은 아니다.
 
-------------------------------------------------------------------------
+현재 서비스 경로:
 
-# 4. 입력 데이터 검증
+```text
+Document Worker
+  ↓
+EmbeddingClient
+  ↓
+POST /v1/embeddings
+  ↓
+services/embedding/main.py
+```
 
-## 4.1 `validator.py`
+따라서 서비스 문서 처리에서:
 
-모델 실행 전에 Chunk 데이터를 검증한다.
+```text
+pipeline/embedding/run_embeddings.py
+```
 
-오류로 검사하는 주요 항목은:
+가 실행되는 것은 아니다.
 
--   Embedding 대상 Chunk 존재 여부
--   `chunk_id` 존재 여부
--   동일 파일 내부 `chunk_id` 중복 여부
--   `embedding_text` 존재 여부
--   `metadata.vector_index`와 실제 순서 일치 여부
--   Metadata와 `EmbeddingItem`의 `chunk_id` 일치 여부
+이 파일은 파일 기반 독립 실행, 개발 또는 검증 용도로 존재한다.
 
-다음은 Warning으로 처리한다.
+즉 다음처럼 구분한다.
 
--   `announcement_id` 없음
--   `document_id` 없음
--   `content` 없음
--   `search_text` 없음
--   `section_path`가 list가 아님
+```text
+실제 서비스
+= services/embedding/main.py
 
-## 4.2 여러 입력 파일 검증
+독립 실행 / 개발 / 검증
+= pipeline/embedding/run_embeddings.py
+```
 
-`validate_multiple_documents()`는 여러 `chunks.json`을 함께 검증한다.
+---
 
-같은 파일 안에서 동일한 `chunk_id`가 중복되면 오류지만, 서로 다른 입력
-파일 간 동일한 `chunk_id`는 허용한다.
+## 6. Document Worker에서의 Embedding 시작
 
-따라서 HWP/HWPX 결과가 각각 존재하더라도 별도 파일로 처리할 수 있다.
+Chunking이 끝나면 Document Worker는 생성된 `chunks.json`을 읽는다.
 
-------------------------------------------------------------------------
+현재 사용 함수:
 
-# 5. BGE-M3 모델 설정 및 로드
+```text
+pipeline.embedding.input_loader.load_chunk_document()
+```
 
-## 5.1 기본 설정
+로드 후 각 Chunk에서 다음 두 값을 사용한다.
 
-`config.py`의 주요 기본값은 다음과 같다.
+```text
+id   = chunk_id
+text = embedding_text
+```
 
-  설정 기본값    
-  -------------- ------------------
-  Model          `BAAI/bge-m3`
-  Text Field     `embedding_text`
-  Batch Size     `8`
-  Max Length     `8192`
-  FP16           `True`
-  CUDA 필수      `True`
-  GPU Index      `0`
-  L2 Normalize   `True`
+개념적으로:
 
-환경변수는 다음과 같다.
+```text
+chunks.json
+  ↓
+load_chunk_document()
+  ↓
+[
+  {
+    "id": "chunk-001",
+    "text": "임베딩할 embedding_text"
+  },
+  ...
+]
+```
 
-  환경변수 역할              
-  -------------------------- ----------------
-  `EMBEDDING_MODEL_NAME`     모델 이름
-  `EMBEDDING_MODEL_PATH`     모델 로드 경로
-  `EMBEDDING_USE_FP16`       FP16 사용 여부
-  `EMBEDDING_REQUIRE_CUDA`   CUDA 필수 여부
-  `EMBEDDING_DEVICE_INDEX`   GPU 번호
+이 Request를 `EmbeddingClient.embed_items()`로 전달한다.
 
-## 5.2 `model_loader.py`
+---
 
-모델 로드 흐름은 다음과 같다.
+## 7. 왜 `embedding_text`를 사용하는가
 
-    load_bge_m3_model()
-            ↓
-    get_runtime_info()
-            ↓
-    CUDA 상태 확인
-            ↓
-    Device 결정
-            ↓
-    FlagEmbedding import
-            ↓
-    BGEM3FlagModel 생성
-            ↓
-    LoadedEmbeddingModel
+Chunk에는 다음 세 가지 주요 텍스트가 존재한다.
 
-사용 모델 객체는 `FlagEmbedding`의:
+```text
+content
+search_text
+embedding_text
+```
 
-    BGEM3FlagModel
+Embedding 단계에서 실제 모델 입력으로 사용하는 것은:
+
+```text
+embedding_text
+```
 
 이다.
 
-CUDA 사용 시 Device는:
-
-    cuda:<device_index>
-
-형태로 설정되며 GPU 이름과 총 메모리 정보도 확인한다.
-
-기본적으로 CUDA가 필요하지만 실행 시:
-
-    --allow-cpu
-
-를 사용하면 CUDA 필수 조건을 해제할 수 있다.
-
-## 5.3 모델 재사용
-
-여러 입력 파일을 처리할 때 BGE-M3를 파일마다 다시 로드하지 않는다.
-
-    전체 입력 Load / Validation
-            ↓
-    BGE-M3 Load 1회
-            ↓
-    Document 1
-            ↓
-    Document 2
-            ↓
-    Document 3
-            ↓
-    ...
-
-------------------------------------------------------------------------
-
-# 6. Dense Embedding 생성
-
-## 6.1 `embedding_generator.py`
-
-실제 Vector 생성의 핵심 함수는:
-
-    generate_embeddings()
-
-이다.
-
-입력은:
-
-    LoadedEmbeddingModel
-    EmbeddingItem[]
-    batch_size
-    max_length
-    normalize_embeddings
-
-이며 결과는:
-
-    GeneratedEmbeddings
-    ├─ vectors
-    ├─ elapsed_seconds
-    └─ normalized
-
-형태이다.
-
-## 6.2 BGE-M3 Encode
-
-각 `EmbeddingItem`의 `embedding_text`를 추출하여 BGE-M3에 전달한다.
-
-    EmbeddingItem[]
-           ↓
-    embedding_text[]
-           ↓
-    BGE-M3 encode()
-
-현재 Encode 설정은:
-
-    return_dense=Truereturn_sparse=Falsereturn_colbert_vecs=False
-
-이다.
-
-따라서 현재 생성하는 것은 **Dense Vector만**이다.
-
-`dense_vecs`는 `numpy.float32` 배열로 변환되며 최종 형태는:
-
-    (Chunk 수, Embedding 차원)
-
-이다.
-
-## 6.3 L2 Normalize
-
-기본적으로 생성된 Dense Vector에 L2 Normalize를 적용한다.
-
-    Vector
-      ↓
-    L2 Norm
-      ↓
-    Vector / Norm
-      ↓
-    Normalized Vector
-
-기본값은 `True`이며:
-
-    --no-normalize
-
-옵션으로 비활성화할 수 있다.
-
-## 6.4 Vector 검증
-
-생성 후 다음 항목을 검사한다.
-
--   결과가 `numpy.ndarray`인지
--   2차원 배열인지
--   Chunk 수와 Vector 수가 같은지
--   Embedding 차원이 0보다 큰지
--   NaN 존재 여부
--   Infinity 존재 여부
--   Zero Vector 존재 여부
-
-따라서 검증은:
-
-    입력 Chunk 검증
-           ↓
-    Embedding 생성
-           ↓
-    생성 Vector 검증
-
-두 단계로 이루어진다.
-
-------------------------------------------------------------------------
-
-# 7. 출력 데이터
-
-## 7.1 출력 경로
-
-`output_writer.py`는 입력 경로의:
-
-    04_chunks
-
-를:
-
-    05_embeddings
-
-로 변경하여 출력 위치를 결정한다.
+`embedding_text`는 Chunking 단계에서 Section 경로와 본문을 결합하여 만든 Dense Embedding용 표현이다.
 
 예:
 
-    입력
+```text
+임대조건 > 임대보증금
+주택형: 26A
+임대보증금: ...
+월임대료: ...
+```
 
-    outputs/announcement_001/
-    └─ 04_chunks/
-       └─ hwp/
-          └─ chunks.json
+따라서 단순 본문만 임베딩하는 것이 아니라 문서 내 위치 정보도 함께 반영한다.
 
-    출력
+---
 
-    outputs/announcement_001/
-    └─ 05_embeddings/
-       └─ hwp/
-          ├─ embeddings.npy
-          ├─ metadata.json
-          └─ embedding_report.json
+## 8. Embedding API
 
-## 7.2 `embeddings.npy`
+실제 Embedding 생성 Endpoint:
 
-BGE-M3가 생성한 Dense Vector 배열을 NumPy `.npy` 형식으로 저장한다.
+```http
+POST /v1/embeddings
+```
 
-    Vector Index 0 → Chunk 0
-    Vector Index 1 → Chunk 1
-    Vector Index 2 → Chunk 2
-    ...
+Request 예:
 
-Vector는 `float32`로 저장된다.
+```json
+{
+  "items": [
+    {
+      "id": "chunk-001",
+      "text": "임대조건 > 임대보증금 ..."
+    }
+  ]
+}
+```
 
-## 7.3 `metadata.json`
+Response 구조:
 
-Vector 순서와 원본 Chunk 정보를 연결하기 위한 Metadata 파일이다.
+```json
+{
+  "model": "BAAI/bge-m3",
+  "dimension": 1024,
+  "normalized": true,
+  "items": [
+    {
+      "id": "chunk-001",
+      "embedding": [...]
+    }
+  ]
+}
+```
 
-주요 구조는:
+`embedding` 배열은 실제로 1024차원이다.
 
-    schema_version
-    생성 시간
+---
 
-    model
-    ├─ name
-    ├─ dimension
-    ├─ normalized
-    ├─ dtype
-    ├─ device
-    ├─ device_name
-    └─ use_fp16
+## 9. API 입력 검증
 
-    source
-    ├─ chunk_file
-    ├─ document_id
-    ├─ announcement_id
-    └─ chunk_count
+`services/embedding/schemas.py`에서 Request를 검증한다.
 
-    items[]
-    └─ 각 Chunk metadata
-
-각 Item에는 `vector_index`와 `chunk_id`가 포함되어 Vector와 Chunk를
-연결한다.
-
-## 7.4 `embedding_report.json`
-
-실행 결과 및 환경 정보를 저장한다.
-
-주요 정보:
-
-    status
-
-    document_id
-    announcement_id
-
-    model_name
-
-    device
-    device_name
-    torch_version
-    cuda_version
-    use_fp16
-    gpu_memory_gb
-
-    chunk_count
-    embedding_count
-    embedding_dimension
-    embedding_dtype
-    normalized
-
-    batch_size
-    max_length
-
-    nan_count
-    infinity_count
-    zero_vector_count
-
-    norm_statistics
-
-    elapsed_seconds
-    average_seconds_per_chunk
-
-## 7.5 안전한 파일 저장
+### `items`
 
-출력 파일은 바로 최종 파일에 덮어쓰지 않고 임시 파일을 이용한다.
+최소 한 개 이상이어야 한다.
 
-    임시 파일 생성
-        ↓
-    데이터 저장
-        ↓
-    flush / fsync
-        ↓
-    최종 경로로 replace
-
-NumPy와 JSON 출력 모두 이러한 방식으로 저장한다.
-
-------------------------------------------------------------------------
-
-# 8. 전체 실행 구조
-
-## 8.1 `run_embeddings.py`
-
-Embedding 전체 실행 Entrypoint이다.
-
-    CLI 입력
-       ↓
-    Argument 검증
-       ↓
-    입력 파일 탐색
-       ↓
-    chunks.json Load
-       ↓
-    입력 Validation
-       ↓
-    BGE-M3 Load
-       ↓
-    Dense Embedding
-       ↓
-    Vector Validation
-       ↓
-    Output 저장
-       ↓
-    CUDA Cache 정리
+```text
+items.length >= 1
+```
 
-## 8.2 주요 함수 호출 순서
+### `id`
 
-    main()
-     │
-     ├─ parse_args()
-     ├─ validate_arguments()
-     ├─ resolve_input_paths()
-     │   └─ discover_chunk_files()
-     │
-     ├─ load_multiple_chunk_documents()
-     │   └─ load_chunk_document()
-     │       ├─ _read_json()
-     │       └─ _copy_metadata()
-     │
-     ├─ validate_multiple_documents()
-     ├─ load_bge_m3_model()
-     │   └─ get_runtime_info()
-     │
-     └─ Document별 반복
-         ├─ generate_embeddings()
-         │   ├─ model.encode()
-         │   ├─ _extract_dense_vectors()
-         │   ├─ _normalize_l2()
-         │   └─ validate_embeddings()
-         │
-         ├─ write_embedding_outputs()
-         │   ├─ resolve_output_directory()
-         │   ├─ build_metadata_payload()
-         │   ├─ build_report_payload()
-         │   ├─ _write_numpy_atomic()
-         │   └─ _write_json_atomic()
-         │
-         └─ clear_cuda_cache()
+다음 조건을 만족해야 한다.
 
-## 8.3 실행 옵션
+```text
+빈 값 금지
+공백만 있는 값 금지
+한 Request 내부 중복 금지
+```
 
-주요 실행 옵션은 다음과 같다.
+### `text`
 
-    --inputs
-    → 특정 chunks.json 직접 지정
+다음 조건을 만족해야 한다.
 
-    --limit
-    → 각 파일의 앞쪽 N개 Chunk만 처리
+```text
+빈 값 금지
+공백만 있는 값 금지
+```
 
-    --allow-cpu
-    → CUDA 필수 조건 해제
+Validation 실패 시:
 
-    --no-normalize
-    → L2 Normalize 비활성화
+```text
+HTTP 422
+EMBEDDING_INVALID_REQUEST
+```
 
--   `-inputs`가 없으면 `outputs`를 자동 탐색한다.
+를 반환한다.
 
-------------------------------------------------------------------------
+---
 
-# 9. 다른 코드와의 연결
+## 10. Embedding Service의 모델 로드
 
-## 9.1 Chunking → Embedding
+실제 모델 로드는 다음 함수가 담당한다.
 
-현재 연결은 파일 I/O다.
+```text
+pipeline/embedding/model_loader.py
+load_bge_m3_model()
+```
 
-    Chunking
-       ↓
-    04_chunks/.../chunks.json
-       ↓
-    Embedding
+내부에서는:
 
-## 9.2 Embedding 내부 연결
+```text
+FlagEmbedding.BGEM3FlagModel
+```
 
-  ------------------------------------------------------------------------
-  호출 대상 방식                                          
-  --------------------------- --------------------------- ----------------
-  `run_embeddings.py`         `input_loader.py`           Python import
+을 사용한다.
 
-  `input_loader.py`           `models.py`                 Python import
+현재 기본 모델:
 
-  `run_embeddings.py`         `validator.py`              Python import
+```text
+BAAI/bge-m3
+```
 
-  `run_embeddings.py`         `model_loader.py`           Python import
+---
 
-  `model_loader.py`           `FlagEmbedding`             Python Library
+## 11. GPU / CUDA 정책
 
-  `run_embeddings.py`         `embedding_generator.py`    Python import
+현재 기본 설정:
 
-  `embedding_generator.py`    BGE-M3                      Python 함수 호출
+```text
+embedding_use_fp16 = True
+embedding_require_cuda = True
+embedding_device_index = 0
+```
 
-  `run_embeddings.py`         `output_writer.py`          Python import
-  ------------------------------------------------------------------------
+즉 서비스 환경은 기본적으로 GPU 실행을 전제로 한다.
 
-## 9.3 Backend ErrorLog 연결
+실행 시 PyTorch를 이용해:
 
-`run_embeddings.py`에는:
+```text
+CUDA 사용 가능 여부
+GPU 이름
+CUDA Version
+PyTorch Version
+GPU Memory
+```
 
-    frombackend.app.services.error_log_serviceimportrecord_error
+등을 확인한다.
 
-가 존재한다.
+`embedding_require_cuda=True`인데 CUDA를 사용할 수 없으면 CPU로 자동 전환하지 않고 Model Load 오류를 발생시킨다.
 
-따라서 현재 연결은:
+---
 
-    Embedding
-       ↓ Python import
-    Backend ErrorLog Service
+## 12. FP16 사용
+
+현재 기본 설정:
+
+```text
+USE_FP16 = True
+```
+
+GPU에서 BGE-M3를 실행할 때 FP16을 사용한다.
+
+이를 통해 일반적으로 GPU Memory 사용량을 줄이고 추론 효율을 높인다.
+
+실제 적용 여부는 CUDA 사용 가능 여부와 함께 결정된다.
+
+---
+
+## 13. Dense Vector만 사용
+
+BGE-M3는 여러 표현 방식을 지원할 수 있지만 현재 서비스에서는 Dense Vector만 사용한다.
+
+현재 `encode()` 호출:
+
+```text
+return_dense=True
+return_sparse=False
+return_colbert_vecs=False
+```
+
+따라서 현재 Retrieval의 의미 기반 검색에는 BGE-M3 Dense Vector를 사용한다.
+
+---
+
+## 14. Embedding 생성 흐름
+
+실제 `generate_embeddings()` 내부 흐름은 다음과 같다.
+
+```text
+EmbeddingItem[]
+  ↓
+embedding_text 추출
+  ↓
+빈 Text 검증
+  ↓
+BGE-M3 encode()
+  ↓
+dense_vecs 추출
+  ↓
+float32 NumPy 배열 변환
+  ↓
+L2 Normalize
+  ↓
+Vector Validation
+  ↓
+GeneratedEmbeddings
+```
+
+---
+
+## 15. 기본 Embedding 설정
+
+현재 `pipeline/embedding/config.py` 기준:
+
+```text
+MODEL_NAME = BAAI/bge-m3
+TEXT_FIELD = embedding_text
+
+BATCH_SIZE = 8
+MAX_LENGTH = 8192
+
+USE_FP16 = True
+REQUIRE_CUDA = True
+DEVICE_INDEX = 0
+
+NORMALIZE_EMBEDDINGS = True
+```
+
+---
+
+## 16. Vector Dimension
+
+현재 BGE-M3 Dense Embedding 차원은 다음과 같다.
+
+```text
+1024
+```
+
+따라서 한 Chunk는 개념적으로 다음과 같이 변환된다.
+
+```text
+embedding_text
+  ↓
+BGE-M3
+  ↓
+[0.012, -0.031, ..., 0.082]
+  ↓
+1024 dimensions
+```
+
+Document Worker와 Embedding Client 모두 이 1024차원 규격을 검증한다.
+
+---
+
+## 17. L2 Normalize
+
+현재 Embedding은 생성 후 L2 Normalize를 적용한다.
+
+```text
+NORMALIZE_EMBEDDINGS = True
+```
+
+개념:
+
+```text
+vector
+  ↓
+L2 norm 계산
+  ↓
+vector / norm
+```
+
+결과:
+
+```text
+||vector||₂ ≈ 1
+```
+
+문서 Chunk와 사용자 Query가 동일한 Normalize 정책을 사용해야 Vector 비교가 일관되게 이루어진다.
+
+---
+
+## 18. Vector Validation
+
+Embedding 생성 후 다음과 같은 기본 검증을 수행한다.
+
+```text
+Vector Shape
+NaN
+Infinity
+0 Vector
+Chunk 수와 Vector 수
+```
+
+Document Worker에서도 Embedding Service 응답을 다시 검증한다.
+
+Expected Shape:
+
+```text
+(chunk_count, 1024)
+```
+
+예:
+
+```text
+Chunk 100개
+→ vectors.shape = (100, 1024)
+```
+
+---
+
+## 19. `EmbeddingClient`
+
+Document Worker와 RAG는 공용 HTTP Client인 다음 클래스를 사용한다.
+
+```text
+services.embedding.client.EmbeddingClient
+```
+
+Client는 BGE-M3를 직접 실행하지 않는다.
+
+모든 Embedding 생성 요청은:
+
+```text
+POST /v1/embeddings
+```
+
+를 통해 전달한다.
+
+---
+
+## 20. `embed_items()`
+
+Document Worker는 여러 Chunk를 처리하기 위해:
+
+```text
+EmbeddingClient.embed_items()
+```
+
+를 사용한다.
+
+입력:
+
+```python
+[
+    {
+        "id": "chunk-001",
+        "text": "..."
+    }
+]
+```
+
+반환 개념:
+
+```python
+{
+    "chunk-001": np.ndarray(shape=(1024,))
+}
+```
+
+응답 배열의 순서에 의존하지 않고 `id`를 기준으로 결과를 매칭한다.
+
+---
+
+## 21. Client 응답 검증
+
+Client는 단순히 HTTP 200만 확인하지 않는다.
+
+현재 다음 규격을 확인한다.
+
+```text
+model == BAAI/bge-m3
+dimension == 1024
+normalized == true
+```
+
+각 Vector에 대해서도 다음을 확인한다.
+
+```text
+shape == (1024,)
+NaN 없음
+Infinity 없음
+```
+
+또한:
+
+```text
+누락 ID
+중복 ID
+요청하지 않은 ID
+```
+
+도 검증한다.
+
+이를 통해 잘못된 Embedding 응답이 다음 Pipeline 단계로 넘어가는 것을 방지한다.
+
+---
+
+## 22. Document Worker의 Vector 재정렬
+
+Embedding Service Response가 Request와 동일한 배열 순서라는 가정에 의존하지 않는다.
+
+Document Worker는 다음 기준으로 Vector를 다시 정렬한다.
+
+```text
+chunk_id
+```
+
+개념:
+
+```text
+Embedding API Response
+  ↓
+id → vector Map
+  ↓
+원래 document.items의 chunk_id 순서
+  ↓
+np.stack()
+```
+
+최종 결과:
+
+```text
+vectors.shape
+=
+(chunk_count, 1024)
+```
+
+이렇게 Chunk 순서와 Vector Index의 대응을 보장한다.
+
+---
+
+## 23. Embedding Artifact 저장
+
+Embedding Service에서 Vector를 반환받은 뒤 실제 문서 처리 서비스에서는 **Document Worker가 Artifact를 저장한다.**
+
+생성 경로:
+
+```text
+05_embeddings/{hwp|hwpx}/
+├── embeddings.npy
+├── metadata.json
+└── embedding_report.json
+```
+
+중요한 점:
+
+```text
+이 파일들이 존재한다고 해서
+run_embeddings.py가 실행된 것은 아니다.
+```
+
+현재 서비스 흐름은:
+
+```text
+Embedding Service
+  ↓
+Vector 반환
+  ↓
+Document Worker
+  ↓
+Artifact 저장
+```
 
 이다.
 
-Embedding 예외 발생 시 `record_error()`를 이용해 오류 정보를 기록한다.
+---
 
-## 9.4 DB 연결 여부
+## 24. `embeddings.npy`
 
-현재 제공된 Embedding 코드에는 다음 동작이 없다.
+실제 Dense Vector 배열을 저장한다.
 
-    PostgreSQL INSERT
-    pgvector INSERT
-    SQLAlchemy Session 생성
-    DB Repository 호출
+형태:
 
-따라서 현재 Embedding 코드에서 확인되는 최종 출력은:
+```text
+shape = (chunk_count, 1024)
+dtype = float32
+```
 
-    05_embeddings/
-    ├─ embeddings.npy
-    ├─ metadata.json
-    └─ embedding_report.json
+예:
 
-까지이다.
+```text
+100개 Chunk
+→ (100, 1024)
+```
 
-**`05_embeddings → DB`** **연결은 이 Embedding 코드만으로 확인할 수
-없다.**
+---
 
-------------------------------------------------------------------------
+## 25. `metadata.json`
 
-# 10. 전체 데이터 흐름 요약
+Vector Index와 Chunk Metadata를 연결한다.
 
-    [Chunking]
+각 Item에는 대표적으로 다음 값이 추가된다.
 
-    04_chunks/
-    └─ chunks.json
-          │
-          │ File I/O
-          ▼
-    ──────────────────────────────
-            EMBEDDING
-    ──────────────────────────────
+```text
+vector_index
+chunk_id
+```
 
-    input_loader.py
-          ↓
-    LoadedChunkDocument
-          ↓
-    EmbeddingItem[]
-          ↓
-    validator.py
-          ↓
-    model_loader.py
-          ↓
-    BGE-M3
-          ↓
-    embedding_generator.py
-          ↓
-    Dense Vector
-          ↓
-    L2 Normalize
-          ↓
-    Vector Validation
-          ↓
-    output_writer.py
+그리고 원래 Chunk의 Metadata도 함께 유지한다.
 
-    ──────────────────────────────
-              OUTPUT
-    ──────────────────────────────
+파일 상단에는 현재 모델 정보도 기록된다.
 
-    05_embeddings/
-    ├─ embeddings.npy
-    ├─ metadata.json
-    └─ embedding_report.json
+```text
+model
+├── name: BAAI/bge-m3
+├── dimension: 1024
+├── normalized: true
+├── dtype
+└── source: embedding-service
+```
 
-한 문장으로 정리하면:
+---
 
-> **Chunking 결과인** **`chunks.json`에서 각 Chunk의**
-> **`embedding_text`를 읽어 BGE-M3 Dense Vector를 생성하고, Vector·Chunk
-> Metadata·실행 정보를** **`05_embeddings`에 파일로 저장한다.**
+## 26. `embedding_report.json`
+
+Embedding 실행 결과와 품질 상태를 기록한다.
+
+대표 정보:
+
+```text
+status
+document_id
+announcement_id
+
+model_name
+embedding_source
+
+chunk_count
+embedding_count
+embedding_dimension
+embedding_dtype
+
+normalized
+
+nan_count
+infinity_count
+zero_vector_count
+
+norm_statistics
+```
+
+현재 서비스에서 `embedding_source`는:
+
+```text
+embedding-service
+```
+
+로 기록된다.
+
+---
+
+## 27. Embedding Service 오류 처리
+
+대표 오류:
+
+### Request 오류
+
+```text
+HTTP 422
+EMBEDDING_INVALID_REQUEST
+```
+
+### 모델 미로드
+
+```text
+HTTP 503
+EMBEDDING_MODEL_UNAVAILABLE
+```
+
+### Embedding 생성 실패
+
+```text
+HTTP 500
+EMBEDDING_GENERATION_FAILED
+```
+
+Document Worker에서 Embedding Service 호출 자체가 실패하면:
+
+```text
+DOCUMENT_EMBEDDING_SERVICE_FAILED
+```
+
+로 변환한다.
+
+응답 Vector 구조가 잘못된 경우:
+
+```text
+DOCUMENT_EMBEDDING_RESPONSE_INVALID
+```
+
+로 처리한다.
+
+---
+
+## 28. Query Embedding
+
+Embedding Service는 문서 Chunk뿐 아니라 RAG Query에도 사용된다.
+
+RAG에서는:
+
+```text
+EmbeddingClient.embed_query()
+```
+
+를 사용한다.
+
+실제 내부 동작:
+
+```text
+사용자 질문
+  ↓
+embed_query()
+  ↓
+embed_items([
+  {
+    "id": "query",
+    "text": query
+  }
+])
+  ↓
+POST /v1/embeddings
+  ↓
+1024D Vector
+```
+
+즉 문서 Embedding과 Query Embedding이 같은 Service와 같은 모델을 사용한다.
+
+---
+
+## 29. Document Embedding과 Query Embedding의 일관성
+
+Vector Search에서 가장 중요한 조건 중 하나는 문서와 Query가 같은 Embedding 공간에 존재하는 것이다.
+
+현재 구조:
+
+```text
+Document Chunk
+  ↓
+BAAI/bge-m3
+  ↓
+Dense 1024D
+  ↓
+L2 Normalize
+
+
+User Query
+  ↓
+BAAI/bge-m3
+  ↓
+Dense 1024D
+  ↓
+L2 Normalize
+```
+
+따라서 다음 규격이 동일하게 유지된다.
+
+```text
+Model
+Dimension
+Normalize Policy
+```
+
+---
+
+## 30. PostgreSQL + pgvector와의 관계
+
+역할은 다음과 같이 구분된다.
+
+```text
+BGE-M3
+→ Text를 Vector로 변환
+
+Embedding Service
+→ 모델 Load / Vector 생성 / Normalize / API 제공
+
+PostgreSQL + pgvector
+→ Vector 저장
+→ Vector 유사도 검색
+```
+
+즉 pgvector가 Embedding Vector를 생성하는 것은 아니다.
+
+Embedding Service에서 이미 생성된 1024차원 Vector를 PostgreSQL에서 Vector 타입으로 다루고 검색할 수 있게 해주는 역할이다.
+
+---
+
+## 31. 실제 서비스와 파일 기반 독립 실행의 차이
+
+### 실제 서비스
+
+```text
+Document Worker
+  ↓
+EmbeddingClient
+  ↓
+Embedding Service
+  ↓
+BGE-M3
+  ↓
+Vector
+  ↓
+Document Worker가 Artifact 저장
+```
+
+### 독립 실행 / 개발 / 검증
+
+```text
+run_embeddings.py
+  ↓
+chunks.json 직접 탐색
+  ↓
+BGE-M3 직접 Load
+  ↓
+Embedding 생성
+  ↓
+파일 저장
+```
+
+현재 운영 서비스 흐름을 이해할 때는 첫 번째 경로를 기준으로 봐야 한다.
+
+---
+
+## 32. 환경설정
+
+`services/embedding/config.py`의 주요 설정:
+
+```text
+embedding_model_name
+embedding_model_path
+
+embedding_use_fp16
+embedding_require_cuda
+embedding_device_index
+
+embedding_service_url
+```
+
+현재 코드의 기본값:
+
+```text
+embedding_model_name = BAAI/bge-m3
+embedding_model_path = BAAI/bge-m3
+
+embedding_use_fp16 = True
+embedding_require_cuda = True
+embedding_device_index = 0
+
+embedding_service_url = http://127.0.0.1:18001
+```
+
+실제 실행 환경에서는 `.env` 또는 Docker에서 주입한 환경변수가 적용될 수 있다.
+
+따라서 배포 환경의 실제 URL/Port는 환경변수 설정을 확인해야 한다.
+
+---
+
+## 33. Health Check
+
+Embedding Service 상태 확인 Endpoint:
+
+```http
+GET /health
+```
+
+응답 예:
+
+```json
+{
+  "status": "ok",
+  "model_loaded": true,
+  "model": "BAAI/bge-m3"
+}
+```
+
+다음 두 가지를 확인할 수 있다.
+
+```text
+Embedding Service 실행 여부
+BGE-M3 Load 여부
+```
+
+---
+
+## 34. 실제 서비스 전체 흐름
+
+```text
+Chunking
+  ↓
+chunks.json
+  ↓
+Document Worker
+  ↓
+load_chunk_document()
+  ↓
+chunk_id + embedding_text
+  ↓
+EmbeddingClient.embed_items()
+  ↓ HTTP
+POST /v1/embeddings
+  ↓
+services/embedding/main.py
+  ↓
+EmbeddingService
+  ↓
+load_bge_m3_model()
+  ↓
+generate_embeddings()
+  ↓
+BAAI/bge-m3
+  ↓
+Dense 1024D
+  ↓
+L2 Normalize
+  ↓
+EmbeddingClient
+  ↓
+ID / Dimension / Shape 검증
+  ↓
+Document Worker
+  ↓
+Chunk 순서대로 Vector 재정렬
+  ↓
+embeddings.npy
+metadata.json
+embedding_report.json
+  ↓
+Persistence
+```
+
+---
+
+## 35. 핵심 정리
+
+현재 DDOK BOT Embedding은 다음과 같이 정리할 수 있다.
+
+```text
+실제 서비스 실행 진입점
+= services/embedding/main.py
+
+실제 모델
+= BAAI/bge-m3
+
+실제 모델 실행
+= EmbeddingService
+
+문서 Embedding 요청
+= Document Worker → EmbeddingClient.embed_items()
+
+Query Embedding 요청
+= RAG → EmbeddingClient.embed_query()
+
+API
+= POST /v1/embeddings
+
+Vector
+= Dense 1024D
+
+Normalize
+= L2 Normalize
+
+GPU
+= CUDA + FP16 기본
+
+Artifact 저장
+= Document Worker
+
+run_embeddings.py
+= 현재 서비스 경로에서는 사용하지 않음
+```
+
+Embedding 단계의 핵심은 **문서 Chunk와 사용자 Query를 동일한 BGE-M3 모델과 동일한 1024차원 정규화 Vector 공간으로 변환하여 이후 pgvector 기반 유사도 검색이 가능하도록 만드는 것**이다.
