@@ -17,8 +17,8 @@
 | Docker AI 서비스 | [DOCKER_AI_SERVICES.md](DOCKER_AI_SERVICES.md) |
 | Frontend | [FRONTEND.md](FRONTEND.md) |
 | 실행 환경 | [ENVIRONMENT.md](ENVIRONMENT.md) |
-| 평가 | [EVALUATION.md](EVALUATION.md), [EVALUATION_API.md](EVALUATION_API.md) |
-| CI/CD | [CI.md](CI.md) |
+| 평가 | [EVALUATION.md](EVALUATION.md), [EVALUATION_GUIDE.md](EVALUATION_GUIDE.md) |
+| CI/CD | [CI_CD.md](CI_CD.md) |
 | 오래된 CollectionRun 정리 | [COLLECTION_RUN_RETENTION.md](COLLECTION_RUN_RETENTION.md) |
 
 ## 현재 기준 문서
@@ -35,7 +35,7 @@
 ### Document Intelligence Pipeline
 
 - [DOCUMENT_PROCESSING.md](DOCUMENT_PROCESSING.md): 형식 확인, Parsing, Normalization, Structure, Verification 전체 흐름
-- [DOCUMENT_WORKER_API_EXPLANATION.md](DOCUMENT_WORKER_API_EXPLANATION.md): Document Worker의 책임, API와 Backend 연결
+- [DOCUMENT_WORKER.md](DOCUMENT_WORKER.md): Document Worker의 책임, API와 Backend 연결
 - [CHUNKING.md](CHUNKING.md): 구조를 유지한 Chunk 생성과 Metadata
 - [EMBEDDING.md](EMBEDDING.md): BGE-M3 Embedding Service와 Document Worker 연동
 
@@ -51,14 +51,14 @@
 ### 실행 · 운영
 
 - [ENVIRONMENT.md](ENVIRONMENT.md): 로컬·AWS 환경변수와 실행 조건
-- [CI.md](CI.md): GitHub Actions 검증과 AWS 배포 흐름
+- [CI_CD.md](CI_CD.md): GitHub Actions 검증과 AWS 배포 흐름
 - [COLLECTION_RUN_RETENTION.md](COLLECTION_RUN_RETENTION.md): 활성·직전 CollectionRun 보존과 이전 Run 정리
 
 ### Evaluation
 
 - [EVALUATION.md](EVALUATION.md): 평가 목적, Dataset과 주요 평가 지표
-- [EVALUATION_API.md](EVALUATION_API.md): 평가 전용 DB·Docker 환경과 실행 절차
-- [BACKEND_DB_EVALUATION_WORKFLOW.md](BACKEND_DB_EVALUATION_WORKFLOW.md): Backend·DB 관점의 평가 데이터 등록과 발행 흐름
+- [EVALUATION_GUIDE.md](EVALUATION_GUIDE.md): 평가 전용 DB·Docker 환경과 실행 절차
+- [EVALUATION_DATA_WORKFLOW.md](EVALUATION_DATA_WORKFLOW.md): Backend·DB 관점의 평가 데이터 등록과 발행 흐름
 
 ## 개발 과정 기록
 

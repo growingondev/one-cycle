@@ -1,4 +1,4 @@
-# DDOKBOT 문서처리 파트
+# Document Processing
 
 > 이 문서는 OneCycle/DDOKBOT의 **문서처리 담당 영역**을 처음 보는 사람이 이 파일 하나만 읽고 전체 흐름을 이해할 수 있도록 정리한 문서입니다.
 >
@@ -172,7 +172,7 @@ services/
     └── client.py
 ```
 
-API 연결 자체의 상세 설명은 `DOCUMENT_WORKER_API_EXPLANATION.md`에서 별도로 관리합니다.
+API 연결 자체의 상세 설명은 `DOCUMENT_WORKER.md`에서 별도로 관리합니다.
 
 ---
 

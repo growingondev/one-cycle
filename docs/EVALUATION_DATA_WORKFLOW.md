@@ -1,4 +1,4 @@
-# Backend / DB Evaluation Workflow
+# Evaluation Data Workflow
 
 > 목적: 운영 DB에 존재하지 않는 평가 문서를 임시 평가 DB에 적재하고,
 > 운영 서비스와 동일한 문서 처리 / DB 저장 / Publish / RAG 검색 경로를

@@ -57,5 +57,5 @@
 - `backend/app/services/evaluation_service.py`
 - `backend/app/services/evaluation_pipeline_service.py`
 - `infra/docker-compose.evaluation.yml`
-- `docs/EVALUATION_API.md`
-- `docs/BACKEND_DB_EVALUATION_WORKFLOW.md`
+- `docs/EVALUATION_GUIDE.md`
+- `docs/EVALUATION_DATA_WORKFLOW.md`

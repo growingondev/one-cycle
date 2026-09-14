@@ -1,4 +1,4 @@
-# OneCycle RAG 평가 가이드
+# RAG Evaluation Guide
 
 > 이 문서는 OneCycle의 평가 데이터 구조, 평가용 DB/서비스 분리, 실제 문서 Pipeline 기반 RAG 답변 생성, Recall/RAGAS 계산, Judge 자원 관리, 재평가와 트러블슈팅 방법을 정리한 문서입니다.
 >

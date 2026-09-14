@@ -198,7 +198,7 @@ curl -fsS http://127.0.0.1:8080/health
 - Alembic Migration 적용, 컨테이너 재시작, 내부·외부 Health Check 수행
 - 사용자·관리자 Frontend는 Vercel에서 별도로 배포
 
-Embedding과 LLM 이미지는 모델 크기와 GPU 운영 비용 때문에 현재 AWS CD의 자동 재빌드 대상에서 제외되어 있습니다. 자세한 내용은 [CI](docs/CI.md)를 참고합니다.
+Embedding과 LLM 이미지는 모델 크기와 GPU 운영 비용 때문에 현재 AWS CD의 자동 재빌드 대상에서 제외되어 있습니다. 자세한 내용은 [CI](docs/CI_CD.md)를 참고합니다.
 
 ## 프로젝트 구조
 
@@ -228,7 +228,7 @@ one-cycle/
 - [Backend](docs/BACKEND.md)
 - [Database](docs/DATABASE.md)
 - [Document Processing](docs/DOCUMENT_PROCESSING.md)
-- [Document Worker API](docs/DOCUMENT_WORKER_API_EXPLANATION.md)
+- [Document Worker API](docs/DOCUMENT_WORKER.md)
 - [Chunking](docs/CHUNKING.md)
 - [Embedding](docs/EMBEDDING.md)
 - [RAG](docs/RAG.md)
